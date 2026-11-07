@@ -82,6 +82,6 @@ the line out of `~/.profile` too.
 ## Source
 
 Each [release](https://github.com/mbt28/lehu/releases) carries the Debian
-source package as one tar (`lehu_VERSION-1+trixie.source.tar`). Building it
-is described in LEHU's
+source package beside the binary package: the `.dsc` and its three
+tarballs. Building it is described in LEHU's
 [docs/building.md](https://github.com/mbt28/lehu/blob/main/docs/building.md).

@@ -4,13 +4,13 @@
 #   packaging/debian/build-source.sh SUITE [OUTDIR]
 #
 # SUITE is the Raspberry Pi OS release the package is for (trixie); it
-# goes into the version (0.1.0-1~trixie), so one repository can hold a
+# goes into the version (0.1.0-1+trixie), so one repository can hold a
 # package per release. OUTDIR gets:
 #
 #   lehu_VERSION.orig.tar.xz               the commit (git archive)
 #   lehu_VERSION.orig-cargo-vendor.tar.xz  the crates of Cargo.lock
-#   lehu_VERSION-1~SUITE.debian.tar.xz     packaging/debian/debian
-#   lehu_VERSION-1~SUITE.dsc
+#   lehu_VERSION-1+SUITE.debian.tar.xz     packaging/debian/debian
+#   lehu_VERSION-1+SUITE.dsc
 #
 # The crates come from cargo's cache or crates.io; the package then builds
 # offline (dpkg-source -x, then dpkg-buildpackage). Changes not committed
@@ -23,7 +23,7 @@ out=${2:-dist}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(git -C "$here" rev-parse --show-toplevel)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
-full="$version-1~$suite"
+full="$version-1+$suite"
 maintainer=$(sed -n 's/^Maintainer: //p' "$here/debian/control")
 # Every file and date in the tarballs is the commit's, so the same commit
 # makes the same source package.

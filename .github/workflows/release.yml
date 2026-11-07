@@ -64,6 +64,7 @@ jobs:
       # Built from the source package, as anyone rebuilding it would; the
       # tests run as part of the build.
       - name: Binary package
+        id: files
         run: |
           mkdir -p build
           dpkg-source -x dist/*.dsc build/lehu
@@ -71,17 +72,34 @@ jobs:
           apt-get build-dep -y ./
           dpkg-buildpackage -b -us -uc
           mv ../*.deb ../../dist/
-          # GitHub renames release files with a "~" in their names, which
-          # the .dsc names: the source package goes out as one tar.
           cd ../../dist
-          tar -cf "$(basename *.dsc .dsc | tr '~' '+').source.tar" *.dsc *.tar.xz
+          echo "deb=$(echo *.deb)" >> "$GITHUB_OUTPUT"
+          echo "dsc=$(echo *.dsc)" >> "$GITHUB_OUTPUT"
+          echo "debian=$(echo *.debian.tar.xz)" >> "$GITHUB_OUTPUT"
+          echo "orig=$(echo *.orig.tar.xz)" >> "$GITHUB_OUTPUT"
+          echo "vendor=$(echo *.orig-cargo-vendor.tar.xz)" >> "$GITHUB_OUTPUT"
 
+      # Each file on its own, not zipped (an artifact per file).
       - uses: actions/upload-artifact@v7
         with:
-          name: packages-${{ matrix.suite }}
-          path: |
-            dist/*.deb
-            dist/*.source.tar
+          path: dist/${{ steps.files.outputs.deb }}
+          archive: false
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/${{ steps.files.outputs.dsc }}
+          archive: false
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/${{ steps.files.outputs.debian }}
+          archive: false
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/${{ steps.files.outputs.orig }}
+          archive: false
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/${{ steps.files.outputs.vendor }}
+          archive: false
 
   publish:
     name: Publish
@@ -93,16 +111,22 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          pattern: packages-*
+          pattern: lehu_*
           merge-multiple: true
           path: dist
+
+      - name: Files
+        run: |
+          find dist -mindepth 2 -type f -exec mv -t dist {} +
+          ls -l dist
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.deb
-            dist/*.source.tar
+            dist/*.dsc
+            dist/*.tar.xz
 
       - name: Update the apt repository
         env:

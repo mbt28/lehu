@@ -4,7 +4,7 @@
 #   packaging/debian/apt-repo.sh REPO DEB...
 #
 # REPO is the repository's root (the gh-pages checkout). Each package goes
-# into the pool of the suite its version names (1~trixie), and
+# into the pool of the suite its version names (1+trixie), and
 # each suite's index is rebuilt from its pool. With LEHU_GPG_KEY set to a
 # key in the GPG keyring, the index is signed and the public key exported
 # as lehu-archive-keyring.gpg; without it the repository is unsigned, for a
@@ -18,7 +18,7 @@ repo=$(cd "$repo" && pwd)
 
 for deb in "$@"; do
 	version=$(dpkg-deb -f "$deb" Version)
-	suite=${version##*~}
+	suite=${version##*+}
 	case "$suite" in
 	trixie) ;;
 	*) echo "apt-repo: $deb names no known suite ($version)" >&2; exit 1 ;;
