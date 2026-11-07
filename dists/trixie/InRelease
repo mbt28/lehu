@@ -1,0 +1,34 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: arm64
+Codename: trixie
+Components: main
+Date: Sat, 07 Nov 2026 19:41:24 +0000
+Description: LEHU for Raspberry Pi OS (trixie)
+Label: LEHU
+Origin: LEHU
+Suite: trixie
+MD5Sum:
+ 4eabb032d2c74aeb22db4f65057db31a              179 Release
+ 9867058bcb042773e936d0bad154dd4b             1095 main/binary-arm64/Packages
+ 7631647709ae7543930897016aa9c0e1              722 main/binary-arm64/Packages.gz
+SHA1:
+ 4de71393be62aa2254a72703dfab95bc4c575b14              179 Release
+ 3ed7029077d5d6db051f4e057ec2000d0923d407             1095 main/binary-arm64/Packages
+ 39a963d3d44a331b96bfe7bc9305e1a190ac3c51              722 main/binary-arm64/Packages.gz
+SHA256:
+ 47524eb50b4fc753667f413d49eabab10b4827e6ff2db6e0fd686fd0734f7efc              179 Release
+ 1857d40096ffb5ae36e939e2adf724ae5a18a18a23d42a9525f105623ec16d04             1095 main/binary-arm64/Packages
+ 60e8c6a8ade52795525f5c5ec8ea126f51a354093e76e91ae9e36ed8858cf6b2              722 main/binary-arm64/Packages.gz
+SHA512:
+ 13429664aab4ca1362b4d77add6a9f02fbcd7e308da761f67a41e36b798939f043c056e6fb1909e6dd4b2fd492d96ad9c9645c5b1da06bc6472e3740ac3d726c              179 Release
+ c5de3d4209ad8f9bd9880a0a62508ea88605dbfbfdcb7f83b21b60aa2383c17b722fb14f9523185e319d5c49c9064f25723453e2cad75fb05196827239bed878             1095 main/binary-arm64/Packages
+ b821146e636f10363c55fb5e33f050967766474d5774c10a8494aee996edd28f7927e2ee69ed4da8785ac8ed3211f4a7896951f70f421dac5463838a08618329              722 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQRDtXls7Ytpklgpx2BdBnb+7OrFYQUCau9+5AAKCRBdBnb+7OrF
+YXeIAP9PEfCuzNRxhghuHY3CR+ZdxMhPCJ/LHoEFVYq2yLjdMgEAsS7lRcYgcFBx
+SMmo3hFpE0ctiUScYffRm2jVzyG+6w8=
+=E7e/
+-----END PGP SIGNATURE-----
