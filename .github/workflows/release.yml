@@ -29,25 +29,31 @@ jobs:
       matrix:
         suite: [trixie]
     steps:
-      - name: Raspberry Pi OS archive
+      # git first, so that the checkout is a repository (git archive).
+      - name: Git
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl gnupg
-          curl -fsSL https://archive.raspberrypi.com/debian/raspberrypi.gpg.key |
-            gpg --dearmor -o /usr/share/keyrings/raspberrypi-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.com/debian ${{ matrix.suite }} main" \
+          apt-get install -y --no-install-recommends ca-certificates git
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v4
+
+      # The archive's key as Raspberry Pi OS ships it (raspberrypi-archive-
+      # keyring): the key file on archive.raspberrypi.com is an old export
+      # with SHA-1 bindings, which Trixie's apt rejects.
+      - name: Raspberry Pi OS archive
+        run: |
+          install -m 0644 .github/raspberrypi-archive-keyring.pgp /usr/share/keyrings/
+          echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.pgp] http://archive.raspberrypi.com/debian ${{ matrix.suite }} main" \
             > /etc/apt/sources.list.d/raspi.list
           apt-get update
 
       - name: Tools
         run: |
           apt-get install -y --no-install-recommends build-essential dpkg-dev \
-            debhelper git python3 xz-utils rustup
+            debhelper python3 xz-utils rustup
           rustup set profile minimal
           rustup default stable
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - uses: actions/checkout@v4
 
       - name: Source package
         run: packaging/debian/build-source.sh ${{ matrix.suite }} dist
