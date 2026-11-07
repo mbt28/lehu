@@ -1,18 +1,18 @@
 Package: lehu
 Architecture: arm64
-Version: 0.1.0-1~trixie
+Version: 0.1.0-1+trixie
 Priority: optional
 Section: misc
 Maintainer: Mehmet Tekbas <btekbas@gmail.com>
 Installed-Size: 4663
 Depends: libasound2t64 (>= 1.0.17), libavcodec61 (>= 8:7.1.5), libavutil59 (>= 8:7.1.5), libc6 (>= 2.39), libgcc-s1 (>= 4.2), libopus0 (>= 1.1), libssl3t64 (>= 3.0.0), adduser, sudo
 Recommends: bluez, hostapd
-Filename: pool/trixie/main/l/lehu/lehu_0.1.0-1~trixie_arm64.deb
-Size: 1721696
-MD5sum: 530c540d06183d8155d6a587ed37d884
-SHA1: 15d58009518edadca42552cb5e6c06153e8c2486
-SHA256: 28fc304a1a0aedd8da37be17508c1b3cfcb26731919ed57f3ef14a7a7b2e97b2
-SHA512: 9d76a60fbdba41a2f4045e625dad9a4bf6aa0edfe2638e533034009fe70ee9b6d7d7057ab5d7d72f9a53236691f207ed34679cb918b9728f82b7193e45ec23d2
+Filename: pool/trixie/main/l/lehu/lehu_0.1.0-1+trixie_arm64.deb
+Size: 1720224
+MD5sum: 45caa60328184deee17bc3fe276437b4
+SHA1: 17d885eb2796339bdae9eb9c1f7699c75c2efe1f
+SHA256: d20fc03e57db495b936fe423551ef0c7633dbd1a725b876d2841234e209ce5fc
+SHA512: 38468ac62112fbcde3ae93c2d42f5949a2c8430b1ceeaec8cf09e29aab96544192b06587927c0f3173f28a86f02d2ef51fb70a3232ddcffed2c68cdb1b935c69
 Homepage: https://github.com/mbt28/lehu
 Description: lightweight car head unit for CarPlay and Android Auto
  LEHU turns a Raspberry Pi with a touchscreen into a car head unit: Apple
