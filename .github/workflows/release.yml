@@ -98,6 +98,7 @@ jobs:
           LEHU_GPG_PRIVATE_KEY: ${{ secrets.LEHU_GPG_PRIVATE_KEY }}
           LEHU_GPG_KEY: ${{ secrets.LEHU_GPG_KEY_ID }}
         run: |
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends apt-utils
           echo "$LEHU_GPG_PRIVATE_KEY" | gpg --batch --import
           git config user.name "github-actions[bot]"
