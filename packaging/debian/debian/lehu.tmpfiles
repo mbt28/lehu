@@ -1,0 +1,6 @@
+# LEHU's status file (/run/lehu/status.json), written by its users.
+d /run/lehu 0775 root lehu -
+# hostapd's configuration holds the network's passphrase, which LEHU hands
+# to the phones: readable by LEHU's group, by no one else. Applied at boot
+# and on install; an administrator overrides it in /etc/tmpfiles.d/lehu.conf.
+z /etc/hostapd/hostapd.conf 0640 root lehu -

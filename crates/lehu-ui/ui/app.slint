@@ -1,0 +1,2173 @@
+// LEHU built-in screens (Slint, software renderer, RGB565 overlay).
+//
+// Pure declarative UI: every behavior goes through the Bridge global --
+// properties flow app -> UI (set by the controller on change only),
+// callbacks flow UI -> app. Validation and persistence stay in Rust.
+//
+// Layout: a 56 px bar on every page (back, title, the links,
+// the clock), then fixed-height touch rows (72 px, 8 px apart, never a
+// fraction of the screen) or, at home, four tiles. Text is 16 / 20 / 28 /
+// 40 px; every other size would embed another set of glyphs. The colours
+// come from Theme, a day and a night palette with one meaning each.
+//
+// Input: touch everywhere; a Bluetooth keyboard or a rotary knob moves an
+// amber focus ring over the bar's back key, the rows and the tiles
+// (Tab/Backtab from the controller), activates (Enter) and goes back. Every
+// page but Home starts with the back key, so turn + press alone reaches
+// everything; the editor's keys and the dialogs' buttons take the ring too.
+
+import "fonts/font.ttf";
+
+// One row of the camera view's settings column; text composed in Rust.
+// `active` marks the input on screen.
+export struct CameraRow {
+    label: string,
+    value: string,
+    active: bool,
+}
+
+// One Bluetooth device in a list. `id` is the BlueZ object path: callbacks
+// carry it rather than a row index, because a row can move between a tap's
+// press and its release.
+export struct BtRow {
+    id: string,
+    name: string,
+    detail: string,
+    connected: bool,
+}
+
+// One phone the head unit knows, on the Phones screen; text composed in
+// Rust. `active` marks the phone the session runs on, `nearby` one on a
+// link now.
+export struct DeviceRow {
+    id: string,
+    name: string,
+    detail: string,
+    active: bool,
+    nearby: bool,
+}
+
+export global Bridge {
+    // app -> UI
+    in property <bool> night;                 // the night palette
+    in property <string> clock;               // "14:32"; empty while the time is not known
+    in property <bool> session-waiting;       // backgrounded session behind the UI
+    in property <string> phone-title;         // its protocol: "CarPlay"
+    in property <string> phone-detail;        // "Alex's iPhone  -  wireless"
+    in property <string> status-note;         // no session: what a phone is doing ("iPhone plugged in")
+    in property <string> phones-summary;      // "2 known"
+    in property <string> active-phone;        // the session's phone, by name; "" none
+    // Rows picked in place, driven from Rust: which one is (0 none, 2 Night,
+    // 3 Power, 4 Volume, 5 Audio buffer, 6 a phone on the Phones screen --
+    // device-pick says which; on Audio 7-10 the streams' levels -- music,
+    // navigation, alerts, calls -- and 11 Output; on Access point 12 Band,
+    // 13 Width, 14 Channel, 15 Country; 16 Frame rate) and the option shown
+    // as taken.
+    in property <int> pick;
+    in property <int> pick-choice;
+    in property <string> device-pick;         // the id of the phone picking
+    in property <string> pick-value;          // a list stepped through: the one shown
+    in property <string> night-label;         // "Day" / "Night" / "Auto"
+    in property <int> night-choice;           // 0 Day, 1 Night, 2 Auto
+    in property <string> fps-label;           // "30 fps" / "60 fps"
+    in property <int> fps-choice;             // 0 30 fps, 1 60 fps
+    in property <string> volume-label;        // "60%" / "Muted"
+    in property <int> volume-level;           // 0..100
+    in property <bool> volume-muted;
+    in property <string> buffer-label;        // the music buffer: "300 ms"
+    in property <int> buffer-level;           // its share of the deepest, 0..100
+    // Settings > Audio: each stream's level ("80%", "Off") and the output.
+    in property <string> music-label;
+    in property <string> navigation-label;
+    in property <string> alert-label;
+    in property <string> call-label;
+    in property <int> music-level;
+    in property <int> navigation-level;
+    in property <int> alert-level;
+    in property <int> call-level;
+    in property <string> output-label;
+    in property <bool> volume-bar;            // up for a moment after a change
+    // How the phone is connected right now (the bar's icons).
+    in property <bool> link-usb;
+    in property <bool> link-wifi;
+    in property <bool> link-bt;
+    // The camera (Settings > Video > Camera) and its view's settings column,
+    // driven from Rust: the page (0 the menu: Back, the inputs, Standard,
+    // Picture; 1 Picture: Back, the levels, - / +), its rows, the ring and
+    // whether the ringed row is being turned.
+    in property <bool> camera-available;
+    in property <string> camera-error;        // why the camera could not run
+    in property <string> camera-key-label;    // the key that switches to it, or "None"
+    in property <bool> camera-fastswitch;     // the phone's decoder stays while it shows
+    in property <int> camera-page;
+    in property <[CameraRow]> camera-rows;
+    in property <int> camera-row;
+    in property <bool> camera-editing;
+    in property <string> wifi-ssid;
+    in property <string> wifi-pass;
+    in property <string> bt-name;
+    // The access point's radio, from hostapd's config, and how the last
+    // change went (the bar's note).
+    in property <string> ap-status;
+    in property <bool> ap-five;               // 5 GHz: up to 80 MHz
+    in property <int> ap-band-choice: -1;     // 0 2.4 GHz, 1 5 GHz, -1 unknown
+    in property <int> ap-width-choice: -1;    // 20 / 40 / 80 MHz, -1 unknown
+    in property <string> ap-channel-label;    // "36"
+    in property <string> ap-country-label;    // "DE", "Not set"
+    // The Link speed page, refreshed once a second while it is up.
+    in property <string> link-radio;          // "5 GHz, channel 36, 80 MHz"
+    in property <string> link-phone;          // "CarPlay: Alex's iPhone", "None"
+    in property <string> link-signal;         // "-58 dBm, good"; empty: the radio does not say
+    in property <string> link-rate;           // "390 Mbit/s"; empty: the radio does not say
+    in property <string> link-receiving;      // "8.2 Mbit/s" from the phone, measured
+    in property <string> link-sending;        // "0.3 Mbit/s" to the phone, measured
+    in property <int> editing;                // field id being edited, -1 = none
+    in property <string> editor-label;        // what is being edited ("Name"...)
+    in property <string> editor-text;         // the edit buffer (owned by Rust)
+    in property <string> editor-error;        // non-empty = red validation hint
+
+    // Bluetooth devices (keyboards, remotes); all text composed in Rust.
+    in property <bool> bt-available;          // built with Bluetooth support
+    in property <string> bt-summary;          // Wireless > Bluetooth row value
+    in property <string> bt-status;           // the bar's note ("Searching...")
+    in property <bool> bt-scanning;
+    in property <bool> bt-scan-allowed: true; // false during a wireless phone session
+    in property <[BtRow]> bt-paired;
+    in property <[BtRow]> bt-found;
+    in property <BtRow> bt-current;           // the device screen's device
+
+    // The phones the head unit knows, in the order shown.
+    in property <[DeviceRow]> devices;
+
+    // What the phone plays (the Home tile, the Media page); the position
+    // once a second while the page is up.
+    in property <bool> media-available;
+    in property <string> media-title;
+    in property <string> media-artist;
+    in property <string> media-album;
+    in property <string> media-elapsed;       // "2:14"
+    in property <string> media-total;         // "3:40"; empty without a duration
+    in property <float> media-progress: -1;   // 0..1; below 0 without a duration
+    in property <bool> media-playing;
+    // The album art, decoded in Rust to its shown size (160 px on its
+    // longest side) and set once per change; shown only with art.
+    in property <image> media-art;
+    in property <bool> media-art-shown;
+    // The navigation card, while the phone guides and is not in front:
+    // over the top of the screens, or as the window over the camera.
+    in property <bool> nav-card;
+    in property <int> nav-arrow;              // NavArrow: 0 none, 1 straight ... 10 arrive
+    in property <string> nav-maneuver;        // "Turn left"
+    in property <string> nav-distance;        // "350 m"
+    in property <string> nav-road;
+    in property <string> nav-eta;             // "14:32", "12 min"
+    in property <string> nav-eta-note;        // "arrival", "to go"
+
+    // A dialog over everything: 0 none, 1 a code to type on the device
+    // (Cancel only), 2 a yes/no question.
+    in property <int> prompt-kind;
+    in property <string> prompt-title;
+    in property <string> prompt-code;
+    in property <string> prompt-hint;
+    in property <string> prompt-accept-label;
+    in property <bool> prompt-danger;         // the accept is destructive
+    in property <int> prompt-focus: -1;      // keyboard ring: 0 accept, 1 Cancel, -1 none
+    // The row, tile or key with the ring ("" none): each reports its own key
+    // when it takes the ring, so the controller can put the ring back where
+    // it was when a page is shown again, and notice when the ringed row goes
+    // away while its screen stays (a removed row never reports losing focus).
+    in-out property <string> ring-row;
+
+    // Navigation, shared so the controller can follow it (discovery runs
+    // only while a Bluetooth screen is up) and drive it (Back, Home).
+    // 0 home, 1 settings, 3 wireless, 4 bluetooth, 5 bt device,
+    // 6 audio, 8 video, 9 camera view, 10 phones, 11 media,
+    // 12 access point, 13 link speed
+    in-out property <int> screen;
+
+    // UI -> app
+    callback back();                          // the bar's back key
+    callback pick-press(int);                 // Enter or a tap on a picked row (Bridge.pick)
+    callback pick-option(int);                // a tap on one of its options
+    callback pick-step(int);                  // - / + on a level or a list being stepped
+    callback resume();
+    callback volume-step(int);                // -1 quieter, +1 louder
+    callback buffer-step(int);                // -1 / +1: 50 ms less / more
+    callback camera-select(int);              // a tap on a row
+    callback camera-adjust(int);              // -/+ on the ringed row
+    callback camera-picture();                // a tap on the picture: the column hides
+    callback camera-key();                    // learn the switch key (asks for it)
+    callback camera-fastswitch-toggle();
+    callback edit-field(int);                 // open the editor on a field
+    callback osk-key(string);                 // literal character
+    callback osk-backspace();
+    callback osk-ok();                        // validate + save (Rust closes)
+    callback osk-cancel();
+    callback bt-scan(bool);
+    callback bt-pair(string);
+    callback bt-open(string);
+    callback bt-connect(string, bool);
+    callback bt-forget(string);
+    callback device-press(string);            // Enter or a tap on a phone's row
+    callback media-key(int);                  // 0 previous, 1 play / pause, 2 next
+    callback prompt-accept();
+    callback prompt-cancel();
+}
+
+// ── on-screen keyboard ───────────────────────────────────────────────────
+// The editor's keyboard: layout, shift/symbols and the keyboard focus ring.
+// A global, because the editor itself comes and goes: Rust moves the ring
+// with the arrows of a keyboard or remote and presses the ringed key on
+// Enter/OK, so a remote with no letters can type too. Touch never shows it.
+export global Osk {
+    in-out property <bool> shift;
+    in-out property <bool> symbols;
+    // The ring: row -1 none, 0 Cancel, 1-3 the key rows, 4 the bottom row;
+    // col counts that row's keys from the left, as laid out in Editor.
+    in-out property <int> row: -1;
+    in-out property <int> col;
+
+    out property <[string]> r1: root.symbols ? ["1","2","3","4","5","6","7","8","9","0"]
+        : root.shift ? ["Q","W","E","R","T","Y","U","I","O","P"]
+                     : ["q","w","e","r","t","y","u","i","o","p"];
+    out property <[string]> r2: root.symbols ? ["!","@","#","$","%","^","&","*","(",")"]
+        : root.shift ? ["A","S","D","F","G","H","J","K","L"]
+                     : ["a","s","d","f","g","h","j","k","l"];
+    out property <[string]> r3: root.symbols ? ["-","_","+","=",";",":","'","\"","/","?"]
+        : root.shift ? ["Z","X","C","V","B","N","M"]
+                     : ["z","x","c","v","b","n","m"];
+    // Row 3 starts with Shift in letter mode; row 4 has the backtick key in
+    // symbol mode.
+    out property <int> r3-first: root.symbols ? 0 : 1;
+    out property <int> r4-extra: root.symbols ? 1 : 0;
+
+    function count(r: int) -> int {
+        if (r == 0) {
+            return 1;
+        }
+        if (r == 1) {
+            return root.r1.length;
+        }
+        if (r == 2) {
+            return root.r2.length;
+        }
+        if (r == 3) {
+            return root.r3-first + root.r3.length + 1;
+        }
+        return 5 + root.r4-extra;
+    }
+
+    // A fresh editor: letters, no ring.
+    public function reset() {
+        root.shift = false;
+        root.symbols = false;
+        root.row = -1;
+        root.col = 0;
+    }
+
+    // An arrow key. The first one only shows the ring, on the first letter.
+    public function move(dx: int, dy: int) {
+        if (root.row < 0) {
+            root.row = 1;
+            root.col = 0;
+            return;
+        }
+        if (dy != 0 && root.row + dy >= 0 && root.row + dy <= 4) {
+            // Cancel sits top right; between key rows keep the same share
+            // of the width.
+            root.col = root.row + dy == 0 ? 0
+                : root.row == 0 ? count(root.row + dy) - 1
+                : Math.min(count(root.row + dy) - 1,
+                           Math.floor((root.col + 0.5) * count(root.row + dy) / count(root.row)));
+            root.row = root.row + dy;
+        }
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col + dx));
+    }
+
+    // One rotary detent: the ring walks every key in reading order --
+    // Cancel, the key rows, the bottom row ending in OK -- and wraps around.
+    // The first one only shows the ring, on the first letter.
+    public function step(d: int) {
+        if (root.row < 0) {
+            root.row = 1;
+            root.col = 0;
+            return;
+        }
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col));
+        if (d > 0) {
+            if (root.col + 1 < count(root.row)) {
+                root.col += 1;
+            } else {
+                root.row = root.row == 4 ? 0 : root.row + 1;
+                root.col = 0;
+            }
+        } else if (d < 0) {
+            if (root.col > 0) {
+                root.col -= 1;
+            } else {
+                root.row = root.row == 0 ? 4 : root.row - 1;
+                root.col = count(root.row) - 1;
+            }
+        }
+    }
+
+    // Enter/OK on the ringed key: the same as tapping it.
+    public function activate() {
+        root.col = Math.max(0, Math.min(count(root.row) - 1, root.col));
+        if (root.row == 0) {
+            Bridge.osk-cancel();
+        } else if (root.row == 1) {
+            Bridge.osk-key(root.r1[root.col]);
+        } else if (root.row == 2) {
+            Bridge.osk-key(root.r2[root.col]);
+        } else if (root.row == 3) {
+            if (root.col < root.r3-first) {
+                root.shift = !root.shift;
+            } else if (root.col < root.r3-first + root.r3.length) {
+                Bridge.osk-key(root.r3[root.col - root.r3-first]);
+            } else {
+                Bridge.osk-backspace();
+            }
+        } else if (root.row == 4) {
+            if (root.col == 0) {
+                root.symbols = !root.symbols;
+                root.shift = false;
+            } else if (root.col < 1 + root.r4-extra) {
+                Bridge.osk-key("`");
+            } else if (root.col == 1 + root.r4-extra) {
+                Bridge.osk-key(",");
+            } else if (root.col == 2 + root.r4-extra) {
+                Bridge.osk-key(" ");
+            } else if (root.col == 3 + root.r4-extra) {
+                Bridge.osk-key(".");
+            } else {
+                Bridge.osk-ok();
+            }
+        }
+    }
+}
+
+// ── the look ─────────────────────────────────────────────────────────────
+// One meaning per colour: accent = chosen / being changed, ok = connected /
+// active, focus = the knob's ring, danger = destructive. Night is dimmer
+// throughout on black; the Night setting picks it (Auto: as the phone is
+// told, which is day).
+global Theme {
+    out property <bool> night: Bridge.night;
+    out property <color> bg: root.night ? #000000 : #0D1115;
+    out property <color> bar: root.night ? #07090B : #151B21;
+    out property <color> surface: root.night ? #11161B : #1B232B;
+    out property <color> surface2: root.night ? #1A2128 : #26303A;
+    out property <color> line: root.night ? #161C22 : #232C35;
+    out property <color> text: root.night ? #A9B3BB : #EEF2F5;
+    out property <color> dim: root.night ? #5F6D78 : #8E9FAC;
+    out property <color> accent: root.night ? #1C4F8C : #2F8BF0;
+    out property <color> accent-pressed: root.night ? #163F70 : #2570C4;
+    out property <color> accent-text: root.night ? #C9D6E2 : #FFFFFF;
+    out property <color> ok: root.night ? #2A8A55 : #3DCB7A;
+    out property <color> focus: root.night ? #B07C00 : #FFB300;
+    out property <color> danger: root.night ? #8E3034 : #E5484D;
+    out property <color> danger-text: root.night ? #D9B8B9 : #FFFFFF;
+    out property <length> gap: 8px;
+    out property <length> row-h: 72px;
+}
+
+// The icons: line drawings on a 24 unit grid (the turn arrows on 48),
+// drawn as paths -- the font has none. `stroke` is drawn as lines, `fill`
+// filled; a kind has either or both.
+global Icons {
+    public pure function stroke(kind: string) -> string {
+        if (kind == "back") { return "M15 4 L7 12 L15 20"; }
+        if (kind == "more") { return "M9 5 L16 12 L9 19"; }
+        if (kind == "volume") { return "M3 9 L7 9 L12 5 L12 19 L7 15 L3 15 Z M15.5 9 A4 4 0 0 1 15.5 15 M18 6 A8 8 0 0 1 18 18"; }
+        if (kind == "audio") { return "M5 3 L5 21 M12 3 L12 21 M19 3 L19 21 M2.5 15 L7.5 15 M9.5 8 L14.5 8 M16.5 13 L21.5 13"; }
+        if (kind == "phone") { return "M7 2 L17 2 L17 22 L7 22 Z M10.5 18.5 L13.5 18.5"; }
+        if (kind == "wireless") { return "M2 9 A14 14 0 0 1 22 9 M5 12.5 A9.5 9.5 0 0 1 19 12.5 M8 16 A5 5 0 0 1 16 16 M12 19.5 L12 20"; }
+        if (kind == "night") { return "M20 14.5 A8.5 8.5 0 1 1 9.5 4 A6.5 6.5 0 0 0 20 14.5 Z"; }
+        if (kind == "video") { return "M2 6 L15 6 L15 18 L2 18 Z M15 10 L22 6.5 L22 17.5 L15 14"; }
+        if (kind == "camera") { return "M3 8 L7 8 L9 5 L15 5 L17 8 L21 8 L21 19 L3 19 Z M9 13 A3 3 0 1 0 15 13 A3 3 0 1 0 9 13"; }
+        if (kind == "power") { return "M12 2.5 L12 11 M6.5 5.8 A8.5 8.5 0 1 0 17.5 5.8"; }
+        if (kind == "settings") { return "M3 6 L21 6 M3 12 L21 12 M3 18 L21 18 M8 4 L8 8 M16 10 L16 14 M10 16 L10 20"; }
+        if (kind == "music") { return "M9 18 L9 5 L20 3 L20 16 M9 18 A3 3 0 1 1 3 18 A3 3 0 1 1 9 18 M20 16 A3 3 0 1 1 14 16 A3 3 0 1 1 20 16"; }
+        if (kind == "navigation") { return "M12 2 L20 21 L12 17 L4 21 Z"; }
+        if (kind == "bell") { return "M6 17 L6 11 A6 6 0 0 1 18 11 L18 17 L20 19 L4 19 Z M10 21.5 L14 21.5"; }
+        if (kind == "buffer") { return "M6 3 L18 3 M6 21 L18 21 M7 3 L7 7 L17 17 L17 21 M17 3 L17 7 L7 17 L7 21"; }
+        if (kind == "speaker") { return "M6 2 L18 2 L18 22 L6 22 Z M9 15 A3 3 0 1 0 15 15 A3 3 0 1 0 9 15 M12 6.5 L12 7.5"; }
+        if (kind == "speed") { return "M3 18 A9 9 0 1 1 21 18 M12 16 L16.5 9.5"; }
+        if (kind == "tag") { return "M3 3 L11 3 L21 13 L13 21 L3 11 Z M7.5 7 L8.5 8"; }
+        if (kind == "lock") { return "M5 11 L19 11 L19 21 L5 21 Z M8.5 11 L8.5 7.5 A3.5 3.5 0 0 1 15.5 7.5 L15.5 11"; }
+        if (kind == "width") { return "M3 12 L21 12 M7 8 L3 12 L7 16 M17 8 L21 12 L17 16"; }
+        if (kind == "channel") { return "M10 3 L8 21 M16 3 L14 21 M4 9 L20 9 M3.5 15 L19.5 15"; }
+        if (kind == "globe") { return "M3 12 A9 9 0 1 0 21 12 A9 9 0 1 0 3 12 M3 12 L21 12 M12 3 A14 14 0 0 1 12 21 A14 14 0 0 1 12 3"; }
+        if (kind == "key") { return "M3 15 A4 4 0 1 0 11 15 A4 4 0 1 0 3 15 M10 12 L20 2 M17 5 L20 8 M14 8 L16.5 10.5"; }
+        if (kind == "bolt") { return "M13 2 L4 14 L11 14 L10 22 L20 9 L13 9 Z"; }
+        if (kind == "search") { return "M4 10 A6 6 0 1 0 16 10 A6 6 0 1 0 4 10 M14.5 14.5 L20 20"; }
+        if (kind == "plus") { return "M5 12 L19 12 M12 5 L12 19"; }
+        if (kind == "minus") { return "M5 12 L19 12"; }
+        if (kind == "plug") { return "M9 2 L9 7 M15 2 L15 7 M6 7 L18 7 L18 11 A6 6 0 0 1 6 11 Z M12 17 L12 22"; }
+        if (kind == "link") { return "M9 15 L15 9 M8 12 L5.5 14.5 A3.5 3.5 0 0 0 9.5 18.5 L12 16 M12 8 L14.5 5.5 A3.5 3.5 0 0 1 18.5 9.5 L16 12"; }
+        if (kind == "trash") { return "M4 6 L20 6 M9 6 L9 3 L15 3 L15 6 M6 6 L7 21 L17 21 L18 6 M10 10 L10 17 M14 10 L14 17"; }
+        if (kind == "signal") { return "M4 20 L4 16 M9 20 L9 12 M14 20 L14 8 M19 20 L19 4"; }
+        if (kind == "down") { return "M12 4 L12 20 M6 14 L12 20 L18 14"; }
+        if (kind == "up") { return "M12 20 L12 4 M6 10 L12 4 L18 10"; }
+        if (kind == "usb") { return "M12 4 L12 19 M12 15 L7 11 L7 9 M12 12 L17 9 L17 7.5"; }
+        if (kind == "bt") { return "M7 7 L17 17 L12 22 L12 2 L17 7 L7 17"; }
+        // The turn arrows, 48 units: the shaft as a line.
+        if (kind == "nav1") { return "M24 44 L24 16"; }
+        if (kind == "nav2") { return "M30 44 L30 30 L18 18"; }
+        if (kind == "nav3") { return "M32 44 L32 24 A8 8 0 0 0 24 16 L14 16"; }
+        if (kind == "nav4") { return "M32 44 L32 12 L18 26"; }
+        if (kind == "nav5") { return "M18 44 L18 30 L30 18"; }
+        if (kind == "nav6") { return "M16 44 L16 24 A8 8 0 0 1 24 16 L34 16"; }
+        if (kind == "nav7") { return "M16 44 L16 12 L30 26"; }
+        if (kind == "nav8") { return "M32 44 L32 20 A8 8 0 0 0 16 20 L16 30"; }
+        if (kind == "nav9") { return "M24 44 L24 34 A10 10 0 1 0 16.9 16.9"; }
+        if (kind == "nav10") { return "M14 44 L14 6"; }
+        return "";
+    }
+
+    public pure function fill(kind: string) -> string {
+        if (kind == "play") { return "M7 4 L20 12 L7 20 Z"; }
+        if (kind == "pause") { return "M6 4 L10 4 L10 20 L6 20 Z M14 4 L18 4 L18 20 L14 20 Z"; }
+        if (kind == "prev") { return "M4 4 L7 4 L7 20 L4 20 Z M20 4 L20 20 L8 12 Z"; }
+        if (kind == "next") { return "M4 4 L16 12 L4 20 Z M17 4 L20 4 L20 20 L17 20 Z"; }
+        if (kind == "usb") { return "M12 1 L9 5 L15 5 Z M15 5.5 L19 5.5 L19 9.5 L15 9.5 Z M9.5 20.5 A2.5 2.5 0 1 0 14.5 20.5 A2.5 2.5 0 1 0 9.5 20.5 Z"; }
+        // The turn arrows' heads.
+        if (kind == "nav1") { return "M12 18 L24 4 L36 18 Z"; }
+        if (kind == "nav2") { return "M9 9 L24.4 11.6 L11.6 24.4 Z"; }
+        if (kind == "nav3") { return "M16 5 L3 16 L16 27 Z"; }
+        if (kind == "nav4") { return "M9 35 L25 32 L12 19 Z"; }
+        if (kind == "nav5") { return "M39 9 L23.6 11.6 L36.4 24.4 Z"; }
+        if (kind == "nav6") { return "M32 5 L45 16 L32 27 Z"; }
+        if (kind == "nav7") { return "M39 35 L23 32 L36 19 Z"; }
+        if (kind == "nav8") { return "M6 28 L26 28 L16 42 Z"; }
+        if (kind == "nav9") { return "M7 7 L21 9.5 L9.5 21 Z M20.5 24 A3.5 3.5 0 1 0 27.5 24 A3.5 3.5 0 1 0 20.5 24 Z"; }
+        if (kind == "nav10") { return "M14 6 L38 13 L14 21 Z"; }
+        return "";
+    }
+}
+
+component Icon inherits Rectangle {
+    in property <string> kind;
+    in property <color> ink: Theme.dim;
+    in property <length> size: 24px;
+    in property <float> view: 24;
+    in property <length> weight: 2px;
+    width: root.size;
+    height: root.size;
+    if Icons.stroke(root.kind) != "": Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: root.view;
+        viewbox-height: root.view;
+        stroke: root.ink;
+        stroke-width: root.weight;
+        commands: Icons.stroke(root.kind);
+    }
+    if Icons.fill(root.kind) != "": Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: root.view;
+        viewbox-height: root.view;
+        fill: root.ink;
+        commands: Icons.fill(root.kind);
+    }
+}
+
+// A status dot: 2 green (in use, connected), 1 grey (nearby, paired),
+// 0 dark (not here).
+component Dot inherits Rectangle {
+    in property <int> state;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    background: root.state == 2 ? Theme.ok : root.state == 1 ? Theme.dim : Theme.surface2;
+}
+
+// What takes the ring: a row, a tile, a key. It reports its key when it
+// gets the ring (Bridge.ring-row), and Enter activates it. Rows never take
+// focus from a tap (focus-on-click false), so touch use never shows a ring.
+component Focus inherits FocusScope {
+    in property <string> key;
+    callback activated;
+    width: 100%;
+    height: 100%;
+    focus-on-click: false;
+    focus-gained => {
+        Bridge.ring-row = root.key;
+    }
+    focus-lost => {
+        if (Bridge.ring-row == root.key) {
+            Bridge.ring-row = "";
+        }
+    }
+    key-pressed(event) => {
+        if (event.text == Key.Return) {
+            root.activated();
+            return accept;
+        }
+        reject
+    }
+}
+
+// ── the bar on every page ────────────────────────────────────────────────
+// The back key: the first stop of the ring on every page but Home. Wider
+// than it looks, so a finger finds it.
+component BackKey inherits Rectangle {
+    width: 64px;
+    height: 56px;
+    fs := Focus {
+        key: "back";
+        activated => { Bridge.back(); }
+    }
+    ta := TouchArea { clicked => { Bridge.back(); } }
+    Rectangle {
+        x: 8px;
+        y: 4px;
+        width: 48px;
+        height: 48px;
+        border-radius: 10px;
+        background: ta.pressed ? Theme.surface2 : Theme.surface;
+        border-width: fs.has-focus ? 3px : 0px;
+        border-color: Theme.focus;
+        Icon {
+            x: 11px;
+            y: 11px;
+            kind: "back";
+            ink: Theme.text;
+            size: 26px;
+            weight: 2.5px;
+        }
+    }
+}
+
+// Back, the page's title (and a dim note after it: how the access point's
+// change went), the phone's links, the clock. The
+// title starts where the rows' labels do.
+component TopBar inherits Rectangle {
+    in property <string> title;
+    in property <string> note;
+    in property <bool> back: true;
+    height: 56px;
+    background: Theme.bar;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+    HorizontalLayout {
+        padding-right: 24px;
+        if root.back: BackKey { }
+        if !root.back: Rectangle { width: 24px; }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 28px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            padding-left: 16px;
+            spacing: 16px;
+            Text {
+                text: root.note;
+                color: Theme.dim;
+                font-size: 20px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if Bridge.link-usb: VerticalLayout {
+                alignment: center;
+                Icon { kind: "usb"; }
+            }
+            if Bridge.link-wifi: VerticalLayout {
+                alignment: center;
+                Icon { kind: "wireless"; }
+            }
+            if Bridge.link-bt: VerticalLayout {
+                alignment: center;
+                Icon { kind: "bt"; }
+            }
+            if Bridge.clock != "": Text {
+                text: Bridge.clock;
+                color: Theme.text;
+                font-size: 28px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// ── rows: one shape per kind ─────────────────────────────────────────────
+// A row's frame: the ring, a tap and Enter. `active`: being changed (the
+// accent edge). The icon sits 24 px in, the label at 64 px, under the bar's
+// title.
+component RowBase inherits Rectangle {
+    in property <string> ring-key;
+    in property <bool> active;
+    in property <bool> tap: true;             // a tap on the row acts
+    callback clicked;
+    height: Theme.row-h;
+    border-radius: 12px;
+    background: root.active ? Theme.surface2 : ta.pressed ? Theme.surface2 : Theme.surface;
+    border-width: fs.has-focus ? 3px : root.active ? 2px : 0px;
+    border-color: fs.has-focus ? Theme.focus : Theme.accent;
+    fs := Focus {
+        key: root.ring-key;
+        activated => { root.clicked(); }
+    }
+    ta := TouchArea {
+        enabled: root.tap;
+        clicked => { root.clicked(); }
+    }
+}
+
+// The icon's place at the left of a row: the icon, or a status dot.
+component RowIcon inherits VerticalLayout {
+    in property <string> kind;
+    in property <int> dot: -1;
+    alignment: center;
+    width: 24px;
+    if root.dot < 0: Icon { kind: root.kind; }
+    if root.dot >= 0: HorizontalLayout {
+        alignment: center;
+        Dot { state: root.dot; }
+    }
+}
+
+// The label, and a smaller line under it when there is one.
+component RowText inherits VerticalLayout {
+    in property <string> label;
+    in property <string> detail;
+    in property <color> label-color: Theme.text;
+    in property <color> detail-color: Theme.dim;
+    alignment: center;
+    horizontal-stretch: 1;
+    Text {
+        text: root.label;
+        color: root.label-color;
+        font-size: 20px;
+        overflow: elide;
+    }
+    if root.detail != "": Text {
+        text: root.detail;
+        color: root.detail-color;
+        font-size: 16px;
+        overflow: elide;
+    }
+}
+
+// Opens a page (the chevron) or acts at once: icon, label, value.
+component NavRow inherits RowBase {
+    in property <string> icon;
+    in property <int> dot: -1;                // a status dot in the icon's place
+    in property <string> label;
+    in property <string> detail;
+    in property <color> label-color: Theme.text;
+    in property <color> detail-color: Theme.dim;
+    in property <string> value;
+    in property <int> value-dot: -1;          // a status dot before the value
+    in property <bool> more: true;            // opens a page: the chevron
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 16px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; dot: root.dot; }
+        RowText {
+            label: root.label;
+            detail: root.detail;
+            label-color: root.label-color;
+            detail-color: root.detail-color;
+        }
+        if root.value-dot >= 0: VerticalLayout {
+            alignment: center;
+            Dot { state: root.value-dot; }
+        }
+        Text {
+            text: root.value;
+            color: Theme.dim;
+            font-size: 20px;
+            vertical-alignment: center;
+            max-width: 360px;
+            overflow: elide;
+        }
+        if root.more: VerticalLayout {
+            alignment: center;
+            Icon { kind: "more"; size: 20px; }
+        }
+    }
+}
+
+// A - or + inside a level row being changed, for touch: the knob and the
+// arrows step the level through Rust, so it never takes the ring.
+component StepKey inherits Rectangle {
+    in property <string> kind;
+    callback clicked;
+    width: 64px;
+    border-radius: 10px;
+    background: ta.pressed ? Theme.surface : Theme.bg;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        kind: root.kind;
+        ink: Theme.text;
+        size: 28px;
+        weight: 3px;
+    }
+}
+
+// Changed in place: a meter and the value; while it changes (Enter or a
+// tap starts it, the knob or the arrows step it -- in Rust -- and Enter or
+// a tap beside the keys ends it), large - / + around the value and the
+// meter in the accent. A list stepped through one entry at a time (Output,
+// Channel, Country) has no meter (`level` below 0) and shows the entry
+// being looked at (`edit-text`).
+component LevelRow inherits RowBase {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> value;
+    in property <string> edit-text: root.value;
+    in property <float> level: -1;
+    in property <bool> editing;
+    in property <length> value-width: 200px;
+    in property <bool> long-value;            // a name, not a number: 20 px
+    callback step(int);
+    active: root.editing;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: root.editing ? 8px : 24px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; }
+        RowText { label: root.label; }
+        if !root.editing && root.level >= 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 160px;
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.surface2;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * Math.min(1, root.level);
+                    border-radius: 3px;
+                    background: Theme.dim;
+                }
+            }
+        }
+        if !root.editing: Text {
+            text: root.value;
+            color: root.level >= 0 ? Theme.text : Theme.dim;
+            font-size: 20px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 64px;
+            max-width: 360px;
+            overflow: elide;
+        }
+        if root.editing: HorizontalLayout {
+            spacing: 8px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            StepKey { kind: "minus"; clicked => { root.step(-1); } }
+            Rectangle {
+                width: root.value-width;
+                border-radius: 10px;
+                background: Theme.bg;
+                // Literal sizes: each embeds its glyphs at build time.
+                if !root.long-value: Text {
+                    x: 8px;
+                    y: root.level >= 0 ? 2px : 0px;
+                    width: parent.width - 16px;
+                    height: root.level >= 0 ? parent.height - 16px : parent.height;
+                    text: root.edit-text;
+                    color: Theme.text;
+                    font-size: 28px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.long-value: Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.edit-text;
+                    color: Theme.text;
+                    font-size: 20px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.level >= 0: Rectangle {
+                    x: 12px;
+                    y: parent.height - 14px;
+                    width: parent.width - 24px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Theme.surface2;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * Math.min(1, root.level);
+                        border-radius: 3px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+            StepKey { kind: "plus"; clicked => { root.step(1); } }
+        }
+    }
+}
+
+// A small set of options, always visible, the taken one filled. A tap on
+// an option takes it; for the knob Enter starts choosing (the accent edge),
+// a turn moves the fill -- in Rust -- and Enter takes it.
+component SegmentRow inherits RowBase {
+    in property <string> icon;
+    in property <string> label;
+    in property <[string]> options;
+    in property <int> current;                // the one in force
+    in property <bool> choosing;
+    in property <int> choice;                 // while choosing: the one shown
+    in property <length> seg-w: 96px;
+    property <int> shown: root.choosing ? root.choice : root.current;
+    callback picked(int);
+    active: root.choosing;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 10px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; }
+        RowText { label: root.label; }
+        Rectangle {
+            width: root.options.length * root.seg-w + 8px;
+            border-radius: 10px;
+            background: Theme.bg;
+            HorizontalLayout {
+                padding: 4px;
+                for o[i] in root.options: Rectangle {
+                    width: root.seg-w;
+                    border-radius: 8px;
+                    background: i == root.shown ? Theme.accent : transparent;
+                    TouchArea { clicked => { root.picked(i); } }
+                    Text {
+                        text: o;
+                        color: i == root.shown ? Theme.accent-text : Theme.dim;
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One of a choosing row's options: the one shown as taken is filled (red
+// when it destroys something); a destructive one not taken is outlined red.
+component OptionKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> taken;
+    in property <bool> danger;
+    callback clicked;
+    border-radius: 10px;
+    background: root.taken ? (root.danger ? Theme.danger : Theme.accent) : Theme.bg;
+    border-width: root.danger && !root.taken ? 2px : 0px;
+    border-color: Theme.danger;
+    TouchArea { clicked => { root.clicked(); } }
+    Text {
+        text: root.label;
+        color: root.taken ? (root.danger ? Theme.danger-text : Theme.accent-text)
+             : root.danger ? Theme.danger : Theme.dim;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A row picked in place from options that show only while it chooses
+// (Power, a phone): Enter (or a tap) opens them on the safe one, the knob
+// or the arrows move between them -- in Rust -- and Enter takes the one
+// shown; a tap takes the one tapped.
+component ChoiceRow inherits RowBase {
+    in property <string> icon;
+    in property <int> dot: -1;
+    in property <string> label;
+    in property <string> detail;
+    in property <color> detail-color: Theme.dim;
+    in property <string> value;               // shown while not choosing
+    in property <bool> choosing;
+    in property <[string]> options;
+    in property <[bool]> danger;
+    in property <int> choice;                 // the option shown as taken
+    in property <length> option-width: 120px;
+    callback picked(int);
+    active: root.choosing;
+    tap: !root.choosing;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: root.choosing ? 12px : 24px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; dot: root.dot; }
+        RowText {
+            label: root.label;
+            detail: root.detail;
+            detail-color: root.detail-color;
+        }
+        if !root.choosing: Text {
+            text: root.value;
+            color: Theme.dim;
+            font-size: 20px;
+            vertical-alignment: center;
+        }
+        if root.choosing: HorizontalLayout {
+            spacing: 8px;
+            for option[i] in root.options: OptionKey {
+                width: root.option-width;
+                label: option;
+                taken: i == root.choice;
+                danger: root.danger[i];
+                clicked => { root.picked(i); }
+            }
+        }
+    }
+}
+
+// On / off, at once.
+component SwitchRow inherits RowBase {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> on;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; }
+        RowText { label: root.label; }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 60px;
+                height: 32px;
+                border-radius: 16px;
+                background: root.on ? Theme.accent : Theme.surface2;
+                Rectangle {
+                    x: root.on ? 32px : 4px;
+                    y: 4px;
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: root.on ? Theme.accent-text : Theme.dim;
+                }
+            }
+        }
+    }
+}
+
+// A line of a read-only page: nothing to press, so no row to aim at.
+component InfoLine inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> value;
+    height: 56px;
+    Rectangle {
+        x: 24px;
+        y: parent.height - 1px;
+        width: parent.width - 48px;
+        height: 1px;
+        background: Theme.line;
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 16px;
+        RowIcon { kind: root.icon; }
+        Text {
+            text: root.label;
+            color: Theme.dim;
+            font-size: 20px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value;
+            color: Theme.text;
+            font-size: 20px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A dim line between rows: a list's heading, or why it is empty.
+component Caption inherits Text {
+    color: Theme.dim;
+    font-size: 16px;
+    height: 32px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// ── pages ────────────────────────────────────────────────────────────────
+// A page of rows under the bar: the rows scroll, never shrink.
+component ListPage inherits Rectangle {
+    in property <string> title;
+    in property <string> note;
+    background: Theme.bg;
+    VerticalLayout {
+        TopBar { title: root.title; note: root.note; }
+        Flickable {
+            vertical-stretch: 1;
+            content-height: col.preferred-height;
+            col := VerticalLayout {
+                padding: Theme.gap;
+                spacing: Theme.gap;
+                @children
+            }
+        }
+    }
+}
+
+// A home tile: the knob walks them in reading order, Enter or a tap opens
+// what it names. The phone's own tile is the accent: going back to it is
+// what the screen is mostly for.
+component Tile inherits Rectangle {
+    in property <string> ring-key;
+    in property <string> icon;
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> hero;
+    in property <float> progress: -1;         // a thin bar under the words
+    callback clicked;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 16px;
+    background: root.hero ? (ta.pressed ? Theme.accent-pressed : Theme.accent)
+              : ta.pressed ? Theme.surface2 : Theme.surface;
+    border-width: fs.has-focus ? 3px : 0px;
+    border-color: Theme.focus;
+    fs := Focus {
+        key: root.ring-key;
+        activated => { root.clicked(); }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    VerticalLayout {
+        padding: 16px;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: start;
+            Icon {
+                kind: root.icon;
+                size: 32px;
+                ink: root.hero ? Theme.accent-text : Theme.dim;
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+        Text {
+            text: root.title;
+            color: root.hero ? Theme.accent-text : Theme.text;
+            font-size: 28px;
+            overflow: elide;
+        }
+        Text {
+            text: root.sub;
+            color: root.hero ? Theme.accent-text : Theme.dim;
+            font-size: 16px;
+            overflow: elide;
+        }
+        if root.progress >= 0: VerticalLayout {
+            padding-top: 10px;
+            Rectangle {
+                height: 4px;
+                border-radius: 2px;
+                background: Theme.surface2;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * Math.min(1, root.progress);
+                    border-radius: 2px;
+                    background: Theme.dim;
+                }
+            }
+        }
+    }
+}
+
+// A transport key on the Media page: as tall as the page leaves it, the
+// symbol drawn (the font has none).
+component BigKey inherits Rectangle {
+    in property <string> ring-key;
+    in property <string> kind;
+    callback clicked;
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    border-radius: 16px;
+    background: ta.pressed ? Theme.surface2 : Theme.surface;
+    border-width: fs.has-focus ? 3px : 0px;
+    border-color: Theme.focus;
+    fs := Focus {
+        key: root.ring-key;
+        activated => { root.clicked(); }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        kind: root.kind;
+        ink: Theme.text;
+        size: 64px;
+    }
+}
+
+// ── windows over live video ──────────────────────────────────────────────
+// The camera view's settings column: the right edge, as tall as its rows.
+// Over the camera the program shows exactly this rectangle of the overlay
+// plane, so the column covers no more of the picture than it needs.
+export global CameraPanel {
+    out property <length> row-h: 44px;
+    out property <length> buttons-h: 58px;
+    out property <length> padding: 6px;
+    out property <length> width: 180px;
+    out property <length> x: 800px - root.width;
+    out property <length> y: 0px;
+    out property <length> height: Bridge.camera-rows.length * root.row-h
+        + (Bridge.camera-page == 1 ? root.buttons-h : 0px) + 2 * root.padding;
+}
+
+// Where the volume bar sits. Over live video the program shows exactly
+// this rectangle of the overlay plane (a window composited by the display
+// engine), so the bar is a plain opaque rectangle: RGB565 has no alpha, and
+// rounded corners would show whatever screen lies beneath in the buffer.
+// In the camera view the bar sits at the foot of the settings column, so
+// the overlay window is the column (or just the bar) and never more.
+export global VolumeBar {
+    out property <bool> narrow: Bridge.screen == 9;
+    out property <length> height: root.narrow ? 48px : 64px;
+    out property <length> x: root.narrow ? CameraPanel.x : 160px;
+    out property <length> y: root.narrow ? CameraPanel.y + CameraPanel.height - root.height : 392px;
+    out property <length> width: root.narrow ? CameraPanel.width : 480px;
+}
+
+// The navigation card's place: a band across the top. Over the camera's
+// picture the program shows exactly this rectangle of the overlay plane;
+// on the screens it pushes them down by its height.
+export global NavCardBox {
+    out property <length> x: 0px;
+    out property <length> y: 0px;
+    out property <length> width: 800px;
+    out property <length> height: 88px;
+}
+
+// The next manoeuvre: its arrow (drawn; none for a manoeuvre without one),
+// the distance, the manoeuvre and the road, the arrival. The band itself
+// is opaque and square, for the same reason as the volume bar.
+component NavCardView inherits Rectangle {
+    x: NavCardBox.x;
+    y: NavCardBox.y;
+    width: NavCardBox.width;
+    height: NavCardBox.height;
+    background: Theme.bar;
+    Rectangle {
+        y: parent.height - 3px;
+        height: 3px;
+        background: Theme.ok;
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        padding-bottom: 3px;
+        spacing: 20px;
+        if Bridge.nav-arrow > 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 64px;
+                height: 64px;
+                border-radius: 12px;
+                background: Theme.ok;
+                Icon {
+                    x: 8px;
+                    y: 8px;
+                    kind: "nav" + Bridge.nav-arrow;
+                    view: 48;
+                    size: 48px;
+                    weight: 6px;
+                    ink: Theme.bg;
+                }
+            }
+        }
+        Text {
+            text: Bridge.nav-distance;
+            color: Theme.text;
+            font-size: 40px;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            Text {
+                text: Bridge.nav-maneuver;
+                color: Theme.text;
+                font-size: 20px;
+                overflow: elide;
+            }
+            Text {
+                text: Bridge.nav-road;
+                color: Theme.dim;
+                font-size: 20px;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: Bridge.nav-eta;
+                color: Theme.text;
+                font-size: 28px;
+                horizontal-alignment: right;
+            }
+            if Bridge.nav-eta-note != "": Text {
+                text: Bridge.nav-eta-note;
+                color: Theme.dim;
+                font-size: 16px;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+component VolumeBarView inherits Rectangle {
+    x: VolumeBar.x;
+    y: VolumeBar.y;
+    width: VolumeBar.width;
+    height: VolumeBar.height;
+    background: Theme.bar;
+    border-width: 2px;
+    border-color: Theme.surface2;
+
+    HorizontalLayout {
+        padding-left: VolumeBar.narrow ? 8px : 24px;
+        padding-right: VolumeBar.narrow ? 8px : 24px;
+        spacing: VolumeBar.narrow ? 8px : 16px;
+        if !VolumeBar.narrow: VerticalLayout {
+            alignment: center;
+            Icon { kind: "volume"; ink: Theme.text; }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: parent.width;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.surface2;
+                Rectangle {
+                    x: 0;
+                    width: Bridge.volume-muted ? 0 : parent.width * Bridge.volume-level / 100;
+                    height: parent.height;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+            }
+        }
+        Text {
+            text: Bridge.volume-label;
+            color: Bridge.volume-muted ? Theme.dim : Theme.text;
+            font-size: 20px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: VolumeBar.narrow ? 44px : 64px;
+        }
+    }
+}
+
+// ── screens ──────────────────────────────────────────────────────────────
+// Screen ids: see Bridge.screen.
+
+// Home: four tiles. The phone's (going back to its session) or, with none,
+// how to connect one -- wide unless something plays beside it; what plays;
+// the phones; the settings. Under the navigation card the card takes the
+// bar's place.
+component ScreenHome inherits Rectangle {
+    background: Theme.bg;
+    VerticalLayout {
+        if !Bridge.nav-card: TopBar { title: "LEHU"; back: false; }
+        VerticalLayout {
+            vertical-stretch: 1;
+            padding: Theme.gap;
+            spacing: Theme.gap;
+            HorizontalLayout {
+                spacing: Theme.gap;
+                if Bridge.session-waiting: Tile {
+                    ring-key: "resume";
+                    hero: true;
+                    icon: "play";
+                    title: Bridge.phone-title;
+                    sub: Bridge.phone-detail;
+                    clicked => { Bridge.resume(); }
+                }
+                if !Bridge.session-waiting: Tile {
+                    ring-key: "connect";
+                    icon: "plug";
+                    title: "Connect a phone";
+                    sub: Bridge.status-note != "" ? Bridge.status-note
+                        : "Plug it in, or pair with Bluetooth: " + Bridge.bt-name;
+                    clicked => { Bridge.screen = 10; }
+                }
+                if Bridge.media-available: Tile {
+                    ring-key: "media";
+                    icon: "music";
+                    title: Bridge.media-title;
+                    sub: Bridge.media-artist;
+                    progress: Bridge.media-progress;
+                    clicked => { Bridge.screen = 11; }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                Tile {
+                    ring-key: "phones";
+                    icon: "phone";
+                    title: "Phones";
+                    sub: Bridge.phones-summary;
+                    clicked => { Bridge.screen = 10; }
+                }
+                Tile {
+                    ring-key: "settings";
+                    icon: "settings";
+                    title: "Settings";
+                    sub: (Bridge.volume-muted ? "Muted" : "Volume " + Bridge.volume-label) + "  -  "
+                        + (Bridge.night-choice == 0 ? "Day" : Bridge.night-choice == 1 ? "Night" : "Night auto");
+                    clicked => { Bridge.screen = 1; }
+                }
+            }
+        }
+    }
+}
+
+// What the phone plays: the album art, when there is one, drawn 1:1 at the
+// size Rust decoded it to; the title, the artist and album, the position
+// with its bar. The transport keys take the rest of the page.
+component ScreenMedia inherits Rectangle {
+    background: Theme.bg;
+    VerticalLayout {
+        TopBar { title: "Now playing"; }
+        VerticalLayout {
+            vertical-stretch: 1;
+            padding: Theme.gap;
+            spacing: Theme.gap;
+            HorizontalLayout {
+                height: 160px;
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 24px;
+                if Bridge.media-art-shown: Image {
+                    width: 160px;
+                    height: 160px;
+                    source: Bridge.media-art;
+                    image-fit: contain;
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: Bridge.media-available ? Bridge.media-title : "Nothing playing";
+                        color: Theme.text;
+                        font-size: 28px;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: Bridge.media-album == "" ? Bridge.media-artist
+                            : Bridge.media-artist == "" ? Bridge.media-album
+                            : Bridge.media-artist + "  -  " + Bridge.media-album;
+                        color: Theme.dim;
+                        font-size: 20px;
+                        overflow: elide;
+                    }
+                    Rectangle { height: 16px; }
+                    if Bridge.media-progress >= 0: Rectangle {
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.surface2;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * Math.min(1, Bridge.media-progress);
+                            border-radius: 3px;
+                            background: Theme.text;
+                        }
+                    }
+                    HorizontalLayout {
+                        Text {
+                            text: Bridge.media-elapsed;
+                            color: Theme.dim;
+                            font-size: 16px;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: Bridge.media-total;
+                            color: Theme.dim;
+                            font-size: 16px;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: Theme.gap;
+                BigKey { ring-key: "prev"; kind: "prev"; clicked => { Bridge.media-key(0); } }
+                BigKey {
+                    ring-key: "play";
+                    kind: Bridge.media-playing ? "pause" : "play";
+                    clicked => { Bridge.media-key(1); }
+                }
+                BigKey { ring-key: "next"; kind: "next"; clicked => { Bridge.media-key(2); } }
+            }
+        }
+    }
+}
+
+component ScreenSettings inherits ListPage {
+    title: "Settings";
+    // The volume first, used on the road. Down to 0 is muted; a step up
+    // from there (or from a mute key) unmutes.
+    LevelRow {
+        ring-key: "volume";
+        icon: "volume";
+        label: "Volume";
+        value: Bridge.volume-label;
+        level: Bridge.volume-muted ? 0 : Bridge.volume-level / 100;
+        editing: Bridge.pick == 4;
+        clicked => { Bridge.pick-press(4); }
+        step(direction) => { Bridge.volume-step(direction); }
+    }
+    // A running session switches at once.
+    SegmentRow {
+        ring-key: "night";
+        icon: "night";
+        label: "Night";
+        options: ["Day", "Night", "Auto"];
+        current: Bridge.night-choice;
+        choosing: Bridge.pick == 2;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(2); }
+        picked(i) => {
+            if (Bridge.pick != 2) {
+                Bridge.pick-press(2);
+            }
+            Bridge.pick-option(i);
+        }
+    }
+    // Every protocol listens at once and a cable always wins, so there is
+    // no source to set: the phone is connected or forgotten on its screen.
+    NavRow {
+        ring-key: "phones";
+        icon: "phone";
+        label: "Phones";
+        value: Bridge.active-phone != "" ? Bridge.active-phone : Bridge.phones-summary;
+        value-dot: Bridge.active-phone != "" ? 2 : -1;
+        clicked => { Bridge.screen = 10; }
+    }
+    NavRow {
+        ring-key: "audio";
+        icon: "audio";
+        label: "Audio";
+        value: Bridge.output-label;
+        clicked => { Bridge.screen = 6; }
+    }
+    NavRow {
+        ring-key: "wireless";
+        icon: "wireless";
+        label: "Wireless";
+        value: Bridge.wifi-ssid;
+        clicked => { Bridge.screen = 3; }
+    }
+    NavRow {
+        ring-key: "video";
+        icon: "video";
+        label: "Video";
+        value: Bridge.fps-label;
+        clicked => { Bridge.screen = 8; }
+    }
+    // Each asks first, in the dialog; the app then closes down cleanly and
+    // the system's own reboot / poweroff takes over. It opens on Cancel.
+    ChoiceRow {
+        ring-key: "power";
+        icon: "power";
+        label: "Power";
+        choosing: Bridge.pick == 3;
+        options: ["Reboot", "Power off", "Cancel"];
+        danger: [true, true, false];
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(3); }
+        picked(i) => { Bridge.pick-option(i); }
+    }
+}
+
+// The sound under the volume: each stream's level, changed live in its
+// row; the music buffer; the output, stepped through the cards there are
+// and taken with Enter -- the sound moves to it at once.
+component ScreenAudio inherits ListPage {
+    title: "Audio";
+    LevelRow {
+        ring-key: "music";
+        icon: "music";
+        label: "Music";
+        value: Bridge.music-label;
+        level: Bridge.music-level / 100;
+        editing: Bridge.pick == 7;
+        clicked => { Bridge.pick-press(7); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    // The guidance voice and the assistant.
+    LevelRow {
+        ring-key: "navigation";
+        icon: "navigation";
+        label: "Navigation";
+        value: Bridge.navigation-label;
+        level: Bridge.navigation-level / 100;
+        editing: Bridge.pick == 8;
+        clicked => { Bridge.pick-press(8); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    LevelRow {
+        ring-key: "alerts";
+        icon: "bell";
+        label: "Alerts";
+        value: Bridge.alert-label;
+        level: Bridge.alert-level / 100;
+        editing: Bridge.pick == 9;
+        clicked => { Bridge.pick-press(9); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    LevelRow {
+        ring-key: "calls";
+        icon: "phone";
+        label: "Calls";
+        value: Bridge.call-label;
+        level: Bridge.call-level / 100;
+        editing: Bridge.pick == 10;
+        clicked => { Bridge.pick-press(10); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    // Music held before it plays: more rides out a wireless link's stalls
+    // and bursts, less starts sooner. It follows each step as music plays.
+    LevelRow {
+        ring-key: "buffer";
+        icon: "buffer";
+        label: "Audio buffer";
+        value: Bridge.buffer-label;
+        level: Bridge.buffer-level / 100;
+        value-width: 220px;
+        editing: Bridge.pick == 5;
+        clicked => { Bridge.pick-press(5); }
+        step(direction) => { Bridge.buffer-step(direction); }
+    }
+    LevelRow {
+        ring-key: "output";
+        icon: "speaker";
+        label: "Output";
+        value: Bridge.output-label;
+        edit-text: Bridge.pick-value;
+        value-width: 340px;
+        long-value: true;
+        editing: Bridge.pick == 11;
+        clicked => { Bridge.pick-press(11); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+}
+
+// The phone's frame rate, and the camera: its view shows it full screen
+// with the settings column over it.
+component ScreenVideo inherits ListPage {
+    title: "Video";
+    SegmentRow {
+        ring-key: "fps";
+        icon: "video";
+        label: "Frame rate";
+        options: ["30 fps", "60 fps"];
+        current: Bridge.fps-choice;
+        choosing: Bridge.pick == 16;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(16); }
+        picked(i) => {
+            if (Bridge.pick != 16) {
+                Bridge.pick-press(16);
+            }
+            Bridge.pick-option(i);
+        }
+    }
+    if Bridge.camera-available: NavRow {
+        ring-key: "camera";
+        icon: "camera";
+        label: "Camera";
+        value: Bridge.camera-error;
+        clicked => { Bridge.screen = 9; }
+    }
+    // A Bluetooth keyboard key that switches to the camera from anywhere.
+    if Bridge.camera-available: NavRow {
+        ring-key: "camera-key";
+        icon: "key";
+        label: "Camera key";
+        value: Bridge.camera-key-label;
+        clicked => { Bridge.camera-key(); }
+    }
+    // The phone's video stays ready behind the camera, when the memory holds
+    // both: the way back to it is at once.
+    if Bridge.camera-available: SwitchRow {
+        ring-key: "fast-switch";
+        icon: "bolt";
+        label: "Fast switch";
+        on: Bridge.camera-fastswitch;
+        clicked => { Bridge.camera-fastswitch-toggle(); }
+    }
+}
+
+component ScreenWireless inherits ListPage {
+    title: "Wireless";
+    NavRow {
+        ring-key: "access-point";
+        icon: "wireless";
+        label: "Access point";
+        value: Bridge.wifi-ssid;
+        clicked => { Bridge.screen = 12; }
+    }
+    NavRow {
+        ring-key: "link";
+        icon: "speed";
+        label: "Link speed";
+        clicked => { Bridge.screen = 13; }
+    }
+    NavRow {
+        ring-key: "bt-name";
+        icon: "tag";
+        label: "Bluetooth name";
+        value: Bridge.bt-name;
+        clicked => { Bridge.edit-field(2); }
+    }
+    if Bridge.bt-available: NavRow {
+        ring-key: "bluetooth";
+        icon: "bt";
+        label: "Bluetooth";
+        value: Bridge.bt-summary;
+        clicked => { Bridge.screen = 4; }
+    }
+}
+
+// The access point, as hostapd's config has it: the name and password in
+// the editor, the radio picked in place. Each change is written into the
+// config and the AP restarted, which drops a wireless phone for a moment;
+// the bar's note says how it went.
+component ScreenAccessPoint inherits ListPage {
+    title: "Access point";
+    note: Bridge.ap-status;
+    NavRow {
+        ring-key: "name";
+        icon: "tag";
+        label: "Name";
+        value: Bridge.wifi-ssid;
+        clicked => { Bridge.edit-field(0); }
+    }
+    NavRow {
+        ring-key: "password";
+        icon: "lock";
+        label: "Password";
+        value: Bridge.wifi-pass;
+        clicked => { Bridge.edit-field(1); }
+    }
+    // Wireless Android Auto wants 5 GHz; some phones refuse 2.4 GHz.
+    SegmentRow {
+        ring-key: "band";
+        icon: "wireless";
+        label: "Band";
+        options: ["2.4 GHz", "5 GHz"];
+        seg-w: 100px;
+        current: Bridge.ap-band-choice;
+        choosing: Bridge.pick == 12;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(12); }
+        picked(i) => {
+            if (Bridge.pick != 12) {
+                Bridge.pick-press(12);
+            }
+            Bridge.pick-option(i);
+        }
+    }
+    SegmentRow {
+        ring-key: "width";
+        icon: "width";
+        label: "Width";
+        options: Bridge.ap-five ? ["20 MHz", "40 MHz", "80 MHz"] : ["20 MHz", "40 MHz"];
+        current: Bridge.ap-width-choice;
+        choosing: Bridge.pick == 13;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(13); }
+        picked(i) => {
+            if (Bridge.pick != 13) {
+                Bridge.pick-press(13);
+            }
+            Bridge.pick-option(i);
+        }
+    }
+    // Only the channels the band, the width and the country allow.
+    LevelRow {
+        ring-key: "channel";
+        icon: "channel";
+        label: "Channel";
+        value: Bridge.ap-channel-label;
+        edit-text: Bridge.pick-value;
+        editing: Bridge.pick == 14;
+        clicked => { Bridge.pick-press(14); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    LevelRow {
+        ring-key: "country";
+        icon: "globe";
+        label: "Country";
+        value: Bridge.ap-country-label;
+        edit-text: Bridge.pick-value;
+        editing: Bridge.pick == 15;
+        clicked => { Bridge.pick-press(15); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+}
+
+// What the phone's Wi-Fi link does: read only, once a second while up.
+component ScreenLink inherits ListPage {
+    title: "Link speed";
+    InfoLine { icon: "wireless"; label: "Access point"; value: Bridge.link-radio; }
+    InfoLine { icon: "phone"; label: "Phone"; value: Bridge.link-phone; }
+    // Signal and the negotiated speed only when the radio's driver reports
+    // them (this board's ESP32 does not).
+    if Bridge.link-signal != "": InfoLine { icon: "signal"; label: "Signal"; value: Bridge.link-signal; }
+    if Bridge.link-rate != "": InfoLine { icon: "speed"; label: "Wi-Fi speed"; value: Bridge.link-rate; }
+    InfoLine { icon: "down"; label: "Receiving from phone"; value: Bridge.link-receiving; }
+    InfoLine { icon: "up"; label: "Sending to phone"; value: Bridge.link-sending; }
+}
+
+// Paired keyboards/remotes, and pairing new ones. Phones are not listed:
+// they pair from their own Bluetooth settings, as before.
+component ScreenBluetooth inherits ListPage {
+    title: "Bluetooth";
+    note: Bridge.bt-status;
+    NavRow {
+        ring-key: "scan";
+        icon: Bridge.bt-scanning ? "search" : "plus";
+        label: Bridge.bt-scanning ? "Stop searching" : "Add device";
+        value: !Bridge.bt-scan-allowed ? "Not during a session" : "";
+        more: false;
+        active: Bridge.bt-scanning;
+        clicked => { Bridge.bt-scan(!Bridge.bt-scanning); }
+    }
+    for d in Bridge.bt-paired: NavRow {
+        ring-key: "paired:" + d.id;
+        dot: d.connected ? 2 : 1;
+        label: d.name;
+        detail: d.detail;
+        detail-color: d.connected ? Theme.ok : Theme.dim;
+        clicked => {
+            Bridge.bt-open(d.id);
+            Bridge.screen = 5;
+        }
+    }
+    if Bridge.bt-found.length > 0: HorizontalLayout {
+        padding-left: 24px;
+        padding-top: 8px;
+        Caption { text: "Found - tap to pair"; }
+    }
+    for d in Bridge.bt-found: NavRow {
+        ring-key: "found:" + d.id;
+        icon: "bt";
+        label: d.name;
+        detail: d.detail;
+        more: false;
+        clicked => { Bridge.bt-pair(d.id); }
+    }
+}
+
+component ScreenBtDevice inherits ListPage {
+    title: Bridge.bt-current.name;
+    NavRow {
+        ring-key: "connect";
+        icon: "link";
+        label: Bridge.bt-current.connected ? "Disconnect" : "Connect";
+        detail: Bridge.bt-current.detail;
+        detail-color: Bridge.bt-current.connected ? Theme.ok : Theme.dim;
+        more: false;
+        clicked => { Bridge.bt-connect(Bridge.bt-current.id, !Bridge.bt-current.connected); }
+    }
+    NavRow {
+        ring-key: "forget";
+        icon: "trash";
+        label: "Forget";
+        label-color: Theme.danger;
+        more: false;
+        clicked => { Bridge.bt-forget(Bridge.bt-current.id); }
+    }
+}
+
+// The phones the head unit knows, the connected one first: a dot (green in
+// use, grey nearby, dark not here), the name and where it is. Each row is
+// picked in place: Connect (Stop for the connected phone), Forget (asked
+// first) or Cancel. Nothing is edited here.
+component ScreenDevices inherits ListPage {
+    title: "Phones";
+    if Bridge.devices.length == 0: VerticalLayout {
+        padding-left: 24px;
+        padding-top: 8px;
+        Text {
+            text: "No phones yet";
+            color: Theme.text;
+            font-size: 20px;
+        }
+        Text {
+            text: "Plug one in, or pair it with Bluetooth: " + Bridge.bt-name;
+            color: Theme.dim;
+            font-size: 16px;
+        }
+    }
+    for d in Bridge.devices: ChoiceRow {
+        ring-key: "device:" + d.id;
+        dot: d.active ? 2 : d.nearby ? 1 : 0;
+        label: d.name;
+        detail: d.detail;
+        detail-color: d.active ? Theme.ok : Theme.dim;
+        choosing: Bridge.pick == 6 && Bridge.device-pick == d.id;
+        options: d.active ? ["Stop", "Forget", "Cancel"] : ["Connect", "Forget", "Cancel"];
+        danger: [false, true, false];
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.device-press(d.id); }
+        picked(i) => { Bridge.pick-option(i); }
+    }
+}
+
+// ── full-screen text editor with an on-screen keyboard ──────────────────
+component OskKey inherits Rectangle {
+    in property <string> label;
+    in property <float> weight: 1;
+    in property <bool> focused; // the keyboard ring is on this key
+    callback pressed;
+    horizontal-stretch: root.weight;
+    border-radius: 8px;
+    background: ta.pressed ? Theme.surface2 : Theme.surface;
+    border-width: root.focused ? 3px : 0px;
+    border-color: Theme.focus;
+    ta := TouchArea { clicked => { root.pressed(); } }
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// One setting in the camera view's column: compact (the picture is behind
+// it). The ring is the selection; the accent fill means it is being turned
+// (or is the input on screen).
+component CameraRowView inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> ringed;
+    in property <bool> editing;
+    in property <bool> active; // the input on screen
+    callback clicked;
+    height: CameraPanel.row-h;
+    border-radius: 6px;
+    background: root.editing || root.active ? Theme.accent
+              : ta.pressed ? Theme.surface2 : Theme.bar;
+    border-width: root.ringed ? 3px : 0px;
+    border-color: Theme.focus;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        Text {
+            text: root.label;
+            color: root.editing || root.active ? Theme.accent-text : Theme.text;
+            font-size: 16px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.value;
+            color: root.editing || root.active ? Theme.accent-text : Theme.dim;
+            font-size: 16px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The camera view: the camera is on the video plane below, and of this
+// screen only the settings column shows -- a window of the overlay plane,
+// and only while the column is up (Rust hides it after a few seconds). A
+// tap on the picture hides it too; keys are handled in Rust.
+component ScreenCamera inherits Rectangle {
+    background: #000000;
+    TouchArea { clicked => { Bridge.camera-picture(); } }
+    Rectangle {
+        x: CameraPanel.x;
+        y: CameraPanel.y;
+        width: CameraPanel.width;
+        height: CameraPanel.height;
+        background: Theme.bar;
+        TouchArea { } // between the rows: nothing
+        VerticalLayout {
+            padding: CameraPanel.padding;
+            for r[i] in Bridge.camera-rows: CameraRowView {
+                label: r.label;
+                value: r.value;
+                active: r.active;
+                ringed: Bridge.camera-row == i;
+                editing: Bridge.camera-editing && Bridge.camera-row == i;
+                clicked => { Bridge.camera-select(i); }
+            }
+            // Picture: - / + change the ringed level (touch; keys turn it).
+            if Bridge.camera-page == 1: HorizontalLayout {
+                height: CameraPanel.buttons-h;
+                padding-top: 6px;
+                spacing: 4px;
+                OskKey { label: "-"; pressed => { Bridge.camera-adjust(-1); } }
+                OskKey { label: "+"; pressed => { Bridge.camera-adjust(1); } }
+            }
+        }
+    }
+}
+
+// Keys and their ring positions follow Osk (row, col) -- keep the two in step.
+component Editor inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: Theme.gap;
+        spacing: Theme.gap;
+
+        // Title: what is being edited (or the red validation error), and an
+        // explicit way out -- text entry must always be abandonable.
+        HorizontalLayout {
+            height: 48px;
+            spacing: Theme.gap;
+            padding-left: 16px;
+            Text {
+                text: Bridge.editor-error == "" ? Bridge.editor-label : Bridge.editor-error;
+                color: Bridge.editor-error == "" ? Theme.text : Theme.danger;
+                font-size: 20px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            OskKey { label: "Cancel"; width: 120px; focused: Osk.row == 0; pressed => { Bridge.osk-cancel(); } }
+        }
+
+        // The value being edited, with a plain underscore caret.
+        Rectangle {
+            height: 52px;
+            border-radius: 10px;
+            background: Theme.bar;
+            border-width: 2px;
+            border-color: Theme.accent;
+            Text {
+                x: 16px;
+                width: parent.width - 32px;
+                text: Bridge.editor-text + "_";
+                color: Theme.text;
+                font-size: 20px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            for k[i] in Osk.r1: OskKey {
+                label: k;
+                focused: Osk.row == 1 && Osk.col == i;
+                pressed => { Bridge.osk-key(k); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for k[i] in Osk.r2: OskKey {
+                label: k;
+                focused: Osk.row == 2 && Osk.col == i;
+                pressed => { Bridge.osk-key(k); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            if !Osk.symbols: OskKey {
+                label: "Shift"; weight: 1.5;
+                focused: Osk.row == 3 && Osk.col == 0;
+                pressed => { Osk.shift = !Osk.shift; }
+            }
+            for k[i] in Osk.r3: OskKey {
+                label: k;
+                focused: Osk.row == 3 && Osk.col == Osk.r3-first + i;
+                pressed => { Bridge.osk-key(k); }
+            }
+            OskKey {
+                label: "Del"; weight: 1.5;
+                focused: Osk.row == 3 && Osk.col == Osk.r3-first + Osk.r3.length;
+                pressed => { Bridge.osk-backspace(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            OskKey {
+                label: Osk.symbols ? "abc" : "?123"; weight: 1.5;
+                focused: Osk.row == 4 && Osk.col == 0;
+                pressed => { Osk.symbols = !Osk.symbols; Osk.shift = false; }
+            }
+            // The backtick is outside the compiler's default glyph set: this
+            // key embeds it, so one typed on a keyboard is drawn too.
+            if Osk.symbols: OskKey {
+                label: "`";
+                focused: Osk.row == 4 && Osk.col == 1;
+                pressed => { Bridge.osk-key("`"); }
+            }
+            OskKey {
+                label: ",";
+                focused: Osk.row == 4 && Osk.col == 1 + Osk.r4-extra;
+                pressed => { Bridge.osk-key(","); }
+            }
+            OskKey {
+                label: "Space"; weight: 3;
+                focused: Osk.row == 4 && Osk.col == 2 + Osk.r4-extra;
+                pressed => { Bridge.osk-key(" "); }
+            }
+            OskKey {
+                label: ".";
+                focused: Osk.row == 4 && Osk.col == 3 + Osk.r4-extra;
+                pressed => { Bridge.osk-key("."); }
+            }
+            OskKey {
+                label: "OK"; weight: 1.5;
+                focused: Osk.row == 4 && Osk.col == 4 + Osk.r4-extra;
+                pressed => { Bridge.osk-ok(); }
+            }
+        }
+    }
+}
+
+// ── the dialog ───────────────────────────────────────────────────────────
+// A dialog button: Cancel, or the accept -- red when it destroys something.
+component DialogKey inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> focused;
+    callback pressed;
+    horizontal-stretch: 1;
+    border-radius: 12px;
+    background: !root.primary ? (ta.pressed ? Theme.surface : Theme.surface2)
+              : root.danger ? Theme.danger : (ta.pressed ? Theme.accent-pressed : Theme.accent);
+    border-width: root.focused ? 3px : 0px;
+    border-color: Theme.focus;
+    ta := TouchArea { clicked => { root.pressed(); } }
+    Text {
+        text: root.label;
+        color: !root.primary ? Theme.text : root.danger ? Theme.danger-text : Theme.accent-text;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Like the editor, it replaces the screen, opened and closed only by Rust:
+// a card in the middle, the question, why, then Cancel and the accept. The
+// code is large: it is typed on a keyboard held away from the screen.
+component Prompt inherits Rectangle {
+    background: Theme.bg;
+    Rectangle {
+        x: 80px;
+        width: 640px;
+        height: Bridge.prompt-code != "" ? 424px : 336px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 16px;
+        background: Theme.surface;
+        VerticalLayout {
+            padding: 32px;
+            spacing: 16px;
+            Text {
+                text: Bridge.prompt-title;
+                color: Theme.text;
+                font-size: 40px;
+                overflow: elide;
+            }
+            if Bridge.prompt-code != "": Rectangle {
+                height: 96px;
+                border-radius: 12px;
+                background: Theme.bg;
+                border-width: 2px;
+                border-color: Theme.accent;
+                Text {
+                    text: Bridge.prompt-code;
+                    color: Theme.text;
+                    font-size: 40px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: Bridge.prompt-hint;
+                color: Theme.dim;
+                font-size: 20px;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                height: Theme.row-h;
+                spacing: 12px;
+                DialogKey {
+                    label: "Cancel";
+                    focused: Bridge.prompt-focus == 1;
+                    pressed => { Bridge.prompt-cancel(); }
+                }
+                if Bridge.prompt-kind == 2: DialogKey {
+                    label: Bridge.prompt-accept-label;
+                    primary: true;
+                    danger: Bridge.prompt-danger;
+                    focused: Bridge.prompt-focus == 0;
+                    pressed => { Bridge.prompt-accept(); }
+                }
+            }
+        }
+    }
+}
+
+// ── root ─────────────────────────────────────────────────────────────────
+export component AppWindow inherits Window {
+    width: 800px;
+    height: 480px;
+    background: Theme.bg;
+    default-font-family: "Open Sans";
+
+    // A dialog replaces the screen. The pairing prompt has a deadline, so it
+    // wins over the editor (whose buffer survives in Rust).
+    property <bool> modal: Bridge.prompt-kind != 0 || Bridge.editing >= 0;
+    // The navigation card pushes the screens down; over the camera view it
+    // is a window over the picture and the view stays where it is.
+    property <length> top: Bridge.nav-card && Bridge.screen != 9 ? NavCardBox.height : 0px;
+
+    if Bridge.screen == 0 && !root.modal: ScreenHome      { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 1 && !root.modal: ScreenSettings  { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 3 && !root.modal: ScreenWireless  { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 4 && !root.modal: ScreenBluetooth { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 5 && !root.modal: ScreenBtDevice  { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 6 && !root.modal: ScreenAudio     { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 8 && !root.modal: ScreenVideo     { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 9 && !root.modal: ScreenCamera    { }
+    if Bridge.screen == 10 && !root.modal: ScreenDevices  { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 11 && !root.modal: ScreenMedia    { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 12 && !root.modal: ScreenAccessPoint { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 13 && !root.modal: ScreenLink     { y: root.top; height: root.height - root.top; }
+    if Bridge.nav-card: NavCardView {}
+    if Bridge.prompt-kind != 0: Prompt {}
+    if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}
+    // Over everything, including dialogs; display only (no input).
+    if Bridge.volume-bar: VolumeBarView {}
+}

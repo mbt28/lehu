@@ -1,0 +1,5 @@
+# Cross build for the F1C200s (ARM926EJ-S, soft float). The Buildroot host
+# tools must be on PATH: `source scripts/env.sh`.
+[target.armv5te-unknown-linux-gnueabi]
+linker = "arm-buildroot-linux-gnueabi-gcc"
+rustflags = ["-C", "target-cpu=arm926ej-s"]

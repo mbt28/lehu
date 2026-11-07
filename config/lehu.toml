@@ -1,0 +1,180 @@
+# LEHU settings.
+#
+# Three layers: these defaults (compiled in, documented here), then this file
+# as the image ships it at /etc/lehu/lehu.toml, then the user's file at
+# /var/lib/lehu/settings.toml, which holds only what was changed on the head
+# unit. Every value below is the default, so a copy of this file changes
+# nothing until a line is edited. Run `lehu --check-config` after editing.
+
+[display]
+# The picture asked of the phone. Left out, the panel's own mode is used.
+# width = 800
+# height = 480
+fps = 60
+# auto: a DRM plane when LEHU can be the display's master, else headless.
+video-path = "auto"
+# The codec asked of the phones: auto, h264 or hevc. auto takes what the
+# system decodes in hardware (`lehu --decoders` shows it): CarPlay gets HEVC
+# when there is an HEVC decoder, else H.264; Android Auto is offered H.264
+# first and H.265 after it when both decode. A forced codec the hardware
+# cannot decode is refused at start with a warning and auto used instead.
+codec = "auto"
+# day, night, or auto (the phone decides by the time of day).
+night-mode = "auto"
+left-hand-drive = true
+
+[touch]
+# Empty: the first input device with absolute axes. swap-xy and invert-* fit
+# a panel mounted another way round.
+device = ""
+swap-xy = false
+invert-x = false
+invert-y = false
+
+[carplay]
+# The MFi authentication coprocessor: its bus, or "auto" to look on every
+# /dev/i2c-N (empty: none).
+mfi-i2c-bus = "auto"
+mfi-i2c-addr = 0x10
+# CarPlay Ultra, for a phone that runs it (an MFi 3.0 chip is needed; with a
+# 2.0C it stays classic). The phone then authenticates both ways (MFi 4), is
+# told of an instrument panel without a picture (no second video stream: this
+# board has one display and one decoder) and gets the vehicle state protocol,
+# with no car data behind it. A car-maker theme is optional, prepared on a PC:
+# docs/carplay-ultra.md. A session that offered Ultra and ended before the
+# phone's picture came falls back to classic CarPlay until LEHU restarts.
+# Off: classic CarPlay, unchanged.
+ultra = true
+
+[android-auto]
+# 1 = 800x480, 2 = 1280x720, 3 = 1920x1080; the protocol carries only these.
+resolution = 1
+fps = 30
+dpi = 120
+# 0 = any phone that answers AOAP; set both to pin one.
+vendor-id = 0
+product-id = 0
+# How long the phone may take to come back in accessory mode (the first time
+# it shows a consent dialog).
+accessory-timeout-ms = 5000
+# Video frames the phone may send before it hears our acknowledgement. Each
+# acknowledgement crosses the link; over Wi-Fi to a phone in power save that
+# takes tens of milliseconds, and a small window throttles the picture to a
+# crawl. 16 keeps the phone sending; the cable would do with 4.
+max-unacked = 16
+# Offer only ChaCha20-Poly1305 for the TLS session: far cheaper than AES-GCM
+# on a CPU without AES instructions, which this one is. Off only for a phone
+# that insists on AES-GCM.
+force-chacha20 = true
+
+[wifi]
+interface = "wlan0"
+# The access point belongs to the system (init and hostapd), so it stays up
+# when LEHU does not. ssid, passphrase and channel mirror its hostapd.conf;
+# changes made on the head unit are written back into that file and the AP
+# restarted with the command below.
+hostapd-conf = "/etc/hostapd.conf"
+ap-restart-command = "/etc/init.d/S44ap stop; /etc/init.d/S44ap start"
+ssid = "LEHU"
+passphrase = "lehu1234"
+channel = 6
+ap-ip = "192.168.53.1"
+
+[bluetooth]
+name = "LEHU"
+
+[audio]
+# The ALSA PCM opened directly, no plugin layer. Chosen under Settings >
+# Audio > Output from the cards there are (then "hw:CARD=<id>,DEV=<n>"),
+# applied at once.
+device = "hw:0,0"
+# 0..100. Left out, the card's current level is taken over at first start.
+# volume = 70
+# auto: the card's main playback control, or a software gain when it has
+# none; software; or the exact name of an ALSA simple-mixer control.
+volume-control = "auto"
+# The control device; empty: the card of `device`.
+volume-device = ""
+# One volume key press, in percent.
+volume-step = 5
+# Music held before it plays, when it starts and again after it runs dry,
+# 0..1500 ms. More rides out a wireless link's stalls, less starts sooner.
+# Changed live under Settings > Audio > Audio buffer.
+buffer-ms = 500
+# Voice segments held before a call's audio starts.
+call-prefill-segments = 6
+# Seconds of fade after a stream starts or ducks.
+fade = 0.3
+# Voice older than this is dropped rather than played late.
+voice-max-latency-ms = 300
+# The PCM is released after this much silence, so the DAC and the amplifier
+# power down.
+idle-hold-ms = 1500
+# Integer gain on the captured microphone; 1 = unchanged.
+mic-gain = 1
+# The microphone's PCM; empty: `device`. Choosing another output on the
+# screens sets it to the one the microphone was on, so it stays there.
+mic-device = ""
+# Each stream's level under the volume, in percent: music; navigation
+# prompts and the assistant's voice; alerts and chimes; calls. A quieter
+# guidance voice over loud music is music-level = 100, navigation-level = 70.
+# Changed live under Settings > Audio, in steps of 10.
+music-level = 100
+navigation-level = 100
+alert-level = 100
+call-level = 100
+
+[usb]
+async-calls = 32
+transfer-size = 2048
+buffer = 128
+# A control write that times out with nothing sent is retried this often.
+write-timeout-ms = 300
+write-retries = 6
+write-retry-delay-ms = 2
+
+[decode]
+low-delay = true
+fast = true
+rendering-buffer = 5
+
+[camera]
+# Empty: the first V4L2 capture device found.
+device = ""
+# The input last shown.
+input = 0
+# A keyboard key (Linux key code, 0 = none) that switches to the camera and
+# back; learned under Settings > Video > Camera key.
+key = 0
+# Keep the phone's decoder running while the camera shows, when the video
+# memory holds both; otherwise the decoder makes way as without it.
+fast-switch = false
+# One [[camera.inputs]] table per input, written by the camera view: the
+# standard (auto, pal, ntsc) and the picture levels as raw driver values; a
+# level left out is the driver's default. The user's file replaces the array
+# whole. For example:
+# [[camera.inputs]]
+# standard = "pal"
+# brightness = 40
+# contrast = 140
+
+[system]
+# error, warn, info, debug, verbose, protocol.
+log-level = "info"
+# The screens on the overlay plane while no video plays.
+ui = true
+# Real-time priority for the USB read, audio and decoder threads. Right on a
+# head unit; on a desktop it outranks the compositor.
+realtime-priority = true
+# Run when a phone session starts or ends (empty: nothing).
+on-connect-script = ""
+on-disconnect-script = ""
+# What Reboot and Power off run once LEHU has closed down. These, the clock
+# and the access point's restart need root: when LEHU is not root they run
+# under `sudo -n`, unless the command starts with sudo itself.
+reboot-command = "reboot"
+shutdown-command = "poweroff"
+# Run with the phone's time when the system clock is more than two seconds
+# off it; {unix} is the seconds since the epoch (UTC), {zone} the phone's
+# offset from UTC in minutes. Empty: the clock is left alone.
+set-clock-command = "date -u -s @{unix}"

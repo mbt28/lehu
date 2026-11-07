@@ -1,0 +1,13 @@
+[package]
+name = "lehu-usb"
+description = "USB hotplug from the kernel's uevent socket, the bus scan, and the device reset"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+libc = "0.2"
+log = "0.4"

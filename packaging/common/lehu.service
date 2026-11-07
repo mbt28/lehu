@@ -1,0 +1,24 @@
+[Unit]
+Description=LEHU head unit
+After=bluetooth.service hostapd.service systemd-user-sessions.service
+Wants=bluetooth.service
+
+[Service]
+User=lehu
+Group=lehu
+# Settings, pairings and the known phones.
+StateDirectory=lehu
+StateDirectoryMode=0750
+# The status file for other services (/run/lehu/status.json).
+RuntimeDirectory=lehu
+RuntimeDirectoryMode=0755
+# Real-time priority for the USB, audio and decoder threads.
+LimitRTPRIO=50
+ExecStart=/usr/bin/lehu
+# On stop LEHU says goodbye to the phone and saves its state.
+TimeoutStopSec=6
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

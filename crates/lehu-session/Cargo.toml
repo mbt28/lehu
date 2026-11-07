@@ -1,0 +1,13 @@
+[package]
+name = "lehu-session"
+description = "What a phone session looks like to the main loop: its phases, events, commands and sinks, the same for CarPlay and Android Auto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+lehu-input = { path = "../lehu-input" }
+lehu-video = { path = "../lehu-video" }

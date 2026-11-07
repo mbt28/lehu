@@ -1,0 +1,20 @@
+# The image's layer of LEHU's settings, for a systemd image. The defaults
+# below it are compiled in (config/lehu.toml in the source lists them all);
+# the user's file above it is /var/lib/lehu/settings.toml, written from the
+# screens. An image with other paths or commands replaces this file in a
+# bbappend.
+
+[wifi]
+# hostapd.service runs from this file; LEHU hands its network to the phones.
+interface = "wlan0"
+hostapd-conf = "/etc/hostapd.conf"
+ap-restart-command = "sudo -n /usr/bin/systemctl restart hostapd.service"
+
+[bluetooth]
+name = "LEHU"
+
+[system]
+log-level = "info"
+reboot-command = "sudo -n /usr/bin/systemctl reboot"
+shutdown-command = "sudo -n /usr/bin/systemctl poweroff"
+set-clock-command = "sudo -n /usr/bin/date -u -s @{unix}"

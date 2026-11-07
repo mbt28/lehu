@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_LEHU_PATH/package/lehu/Config.in"

@@ -1,0 +1,22 @@
+[package]
+name = "lehu-ui"
+description = "The screens: the head unit's own Slint UI, rendered in software"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+# The access point's radio rules and the link's numbers.
+lehu-wifi = { path = "../lehu-wifi" }
+log = "0.4"
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+# fontconfig is loaded at run time if the board has it, never needed to build.
+fontique = { version = "0.11.1", default-features = false, features = ["fontconfig-dlopen"] }
+# Only for the value a setting is persisted as.
+toml = "0.9"
+
+[build-dependencies]
+slint-build = "1.18.1"

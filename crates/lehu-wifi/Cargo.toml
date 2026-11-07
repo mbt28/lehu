@@ -1,0 +1,13 @@
+[package]
+name = "lehu-wifi"
+description = "The access point as the system runs it: hostapd's effective config read, rewritten and restarted through the image's helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+libc = "0.2"
+log = "0.4"

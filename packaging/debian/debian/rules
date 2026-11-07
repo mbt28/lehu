@@ -1,0 +1,57 @@
+#!/usr/bin/make -f
+# LEHU's Debian package, built offline from the crates in cargo-vendor/.
+#
+# Raspberry Pi OS Trixie's cargo is older than LEHU needs (1.96); the
+# build then takes cargo from rustup, whose toolchain the building user
+# installs (rustup default stable).
+
+export DH_VERBOSE = 1
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+export CARGO_TERM_COLOR = never
+
+CARGO = cargo --locked --offline
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	mkdir -p $(CARGO_HOME)
+	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "%s"\n' \
+		"$(CURDIR)/cargo-vendor" > $(CARGO_HOME)/config.toml
+	cargo --version
+
+override_dh_auto_build:
+	$(CARGO) build --release -p lehu
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	$(CARGO) test --workspace --exclude lehu-fuzz
+endif
+
+override_dh_auto_install:
+	install -D -m 0755 target/release/lehu debian/lehu/usr/bin/lehu
+	install -D -m 0644 packaging/debian/lehu.toml debian/lehu/etc/lehu/lehu.toml
+	install -D -m 0440 packaging/debian/lehu-sudoers debian/lehu/etc/sudoers.d/lehu
+	install -D -m 0644 packaging/common/99-lehu.rules debian/lehu/usr/lib/udev/rules.d/99-lehu.rules
+	install -D -m 0644 packaging/common/99-lehu-ncm.rules debian/lehu/usr/lib/udev/rules.d/99-lehu-ncm.rules
+	install -D -m 0644 packaging/debian/lehu-limits.conf debian/lehu/etc/security/limits.d/lehu.conf
+	install -D -m 0644 packaging/common/lehu-dbus.conf debian/lehu/usr/share/dbus-1/system.d/lehu.conf
+	install -D -m 0644 config/lehu.toml debian/lehu/usr/share/doc/lehu/lehu.toml.example
+	if command -v visudo >/dev/null; then visudo -cqf debian/lehu/etc/sudoers.d/lehu; fi
+
+# The settings example stays readable where the README points.
+override_dh_compress:
+	dh_compress -X.example
+
+# The release profile strips the binary: there is nothing for dwz, and no
+# debug symbols package.
+override_dh_dwz:
+override_dh_strip:
+
+override_dh_auto_clean:
+	rm -rf target debian/cargo-home
+
+# The crates' checksums cover their Cargo.toml.orig, which dh_clean would
+# take for a patch leftover.
+override_dh_clean:
+	dh_clean -XCargo.toml.orig

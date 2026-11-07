@@ -1,0 +1,17 @@
+[package]
+name = "lehu-image"
+description = "The album art's pictures: JPEG and PNG decoded straight to the size they show at"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Inflate only (PNG's compression), without its deflate side.
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+
+# The reference decoders the tests compare against; never in the program.
+[dev-dependencies]
+png = "0.18.1"
+zune-jpeg = { version = "0.5.15", default-features = false, features = ["std"] }

@@ -1,0 +1,41 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: LEHU
+Upstream-Contact: Mehmet Tekbas <btekbas@gmail.com>
+Source: https://github.com/mbt28/lehu
+Comment: NOTICE names the projects LEHU derives from (FastCarPlay, LIVI,
+ aasdk). The cargo-vendor component holds the Rust crates of Cargo.lock as
+ published on crates.io; crates that no Linux build compiles are left as
+ empty stubs.
+
+Files: *
+Copyright: 2026 Mehmet Tekbas
+License: GPL-3.0-or-later
+
+Files: vendor/fontique/* vendor/parley/*
+Copyright: the Linebender project contributors
+License: Apache-2.0 or MIT
+Comment: fontique 0.11.1 and parley 0.11.1, changed as NOTICE describes.
+
+Files: cargo-vendor/*
+Copyright: the authors of each crate, as named in its Cargo.toml
+License: various
+ Each crate states its license in its Cargo.toml and license files: MIT,
+ Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0 or CC0-1.0, alone or in
+ combination, all compatible with the GPL version 3.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option)
+ any later version.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 3 can be found in /usr/share/common-licenses/GPL-3.
+
+License: Apache-2.0 or MIT
+ Licensed under either of the Apache License, Version 2.0, or the MIT
+ license, at your option.
+ .
+ On Debian systems, the full text of the Apache License, Version 2.0 can be
+ found in /usr/share/common-licenses/Apache-2.0. The MIT license is in
+ vendor/fontique/LICENSE-MIT.

@@ -1,0 +1,13 @@
+[package]
+name = "lehu-bt"
+description = "Bluetooth through BlueZ: the one pairing agent, the HID devices the screens manage, the RFCOMM profiles the phones' wireless bootstraps run on"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+libc = "0.2"
+log = "0.4"

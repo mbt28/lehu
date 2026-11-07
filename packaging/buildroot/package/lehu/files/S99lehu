@@ -1,0 +1,44 @@
+#!/bin/sh
+# LEHU, the head unit, as the unprivileged user lehu. Log: /var/log/lehu.log
+# (the previous run's as lehu.log.0). `stop` asks it to say goodbye to the
+# phone and save; a run that does not end in 6 s is killed.
+
+DAEMON=/usr/bin/lehu
+PIDFILE=/run/lehu/lehu.pid
+LOG=/var/log/lehu.log
+
+case "$1" in
+start)
+	# Safe mode from the boot menu: the system without the head unit.
+	[ -f /run/f1c-safe ] && { echo "lehu: safe mode, not starting"; exit 0; }
+	# Kept down by the image's own switch (`autorun off` on the board).
+	[ -f /etc/lehu-off ] && { echo "lehu: off, not starting"; exit 0; }
+	mkdir -p /run/lehu /var/lib/lehu
+	chown lehu:lehu /run/lehu /var/lib/lehu
+	chmod 0750 /var/lib/lehu
+	# The controller is left unblocked here: LEHU cannot rfkill.
+	rfkill unblock bluetooth 2>/dev/null
+	mv -f $LOG $LOG.0 2>/dev/null
+	touch $LOG && chown lehu:lehu $LOG
+	# Real-time priority for the USB, audio and decoder threads, which an
+	# unprivileged process gets only through this limit.
+	ulimit -r 50
+	start-stop-daemon -S -b -m -p $PIDFILE -c lehu -x /bin/sh -- \
+		-c "exec $DAEMON >> $LOG 2>&1"
+	;;
+stop)
+	start-stop-daemon -K -p $PIDFILE -s TERM -q
+	i=0
+	while pidof lehu >/dev/null 2>&1 && [ $i -lt 12 ]; do sleep 0.5; i=$((i + 1)); done
+	pidof lehu >/dev/null 2>&1 && killall -9 lehu 2>/dev/null
+	rm -f $PIDFILE
+	;;
+restart)
+	$0 stop
+	$0 start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac

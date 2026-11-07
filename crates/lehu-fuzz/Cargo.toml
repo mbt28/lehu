@@ -1,0 +1,27 @@
+[package]
+name = "lehu-fuzz"
+description = "Host-only fuzz targets: random and mutated input thrown at every parser that reads bytes from a phone, a network, the kernel or a file, checked for panics, hangs and unbounded allocation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Everything is in the tests: the library is the harness (the generator,
+# the mutator and the runner), the targets are its test modules.
+[dev-dependencies]
+lehu-aa = { path = "../lehu-aa" }
+lehu-audio = { path = "../lehu-audio" }
+lehu-bt = { path = "../lehu-bt" }
+lehu-core = { path = "../lehu-core" }
+lehu-cp = { path = "../lehu-cp" }
+lehu-image = { path = "../lehu-image" }
+lehu-session = { path = "../lehu-session" }
+lehu-usb = { path = "../lehu-usb" }
+lehu-video = { path = "../lehu-video" }
+lehu-wifi = { path = "../lehu-wifi" }
+# The phone's end of the Android Auto TLS session, and its messages.
+openssl = "0.10"
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+toml = "0.9"

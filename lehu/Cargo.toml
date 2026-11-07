@@ -1,0 +1,28 @@
+[package]
+name = "lehu"
+description = "A lightweight embedded head unit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-aa = { path = "../crates/lehu-aa" }
+lehu-audio = { path = "../crates/lehu-audio" }
+lehu-bt = { path = "../crates/lehu-bt" }
+lehu-camera = { path = "../crates/lehu-camera" }
+lehu-core = { path = "../crates/lehu-core" }
+lehu-cp = { path = "../crates/lehu-cp" }
+lehu-drm = { path = "../crates/lehu-drm" }
+lehu-image = { path = "../crates/lehu-image" }
+lehu-input = { path = "../crates/lehu-input" }
+lehu-session = { path = "../crates/lehu-session" }
+lehu-ui = { path = "../crates/lehu-ui" }
+lehu-usb = { path = "../crates/lehu-usb" }
+lehu-video = { path = "../crates/lehu-video" }
+lehu-wifi = { path = "../crates/lehu-wifi" }
+serde = "1"
+toml = "0.9"
+log = "0.4"
+libc = "0.2"

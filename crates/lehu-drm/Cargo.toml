@@ -1,0 +1,16 @@
+[package]
+name = "lehu-drm"
+description = "The panel: DRM/KMS atomic planes, dma-buf import and the UI overlay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+drm = "0.14"
+# The atomic commit and the dumb-buffer ioctls are called directly: the safe
+# wrappers allocate per request, or hide the buffer's size.
+drm-ffi = "0.9"
+libc = "0.2"
+log = "0.4"

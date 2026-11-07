@@ -1,0 +1,3 @@
+# hostapd's config holds the network's passphrase, which LEHU hands to the
+# phones: readable by its group, by no one else.
+z /etc/hostapd.conf 0640 root lehu -

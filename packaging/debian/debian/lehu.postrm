@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+# The group stays unless purged; the users' settings (~/.lehu) stay.
+if [ "$1" = purge ] && getent group lehu >/dev/null; then
+	delgroup --quiet --system lehu || true
+fi
+exit 0

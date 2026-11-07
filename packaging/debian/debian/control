@@ -1,0 +1,28 @@
+Source: lehu
+Section: misc
+Priority: optional
+Maintainer: Mehmet Tekbas <btekbas@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               cargo (>= 1.96) | rustup,
+               pkgconf,
+               libavcodec-dev,
+               libavutil-dev,
+               libopus-dev,
+               libasound2-dev,
+               libssl-dev,
+               python3:any,
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/mbt28/lehu
+Vcs-Browser: https://github.com/mbt28/lehu
+Vcs-Git: https://github.com/mbt28/lehu.git
+
+Package: lehu
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, sudo
+Recommends: bluez, hostapd
+Description: lightweight car head unit for CarPlay and Android Auto
+ LEHU turns a Raspberry Pi with a touchscreen into a car head unit: Apple
+ CarPlay and Android Auto, wired and wireless, with hardware video decoding,
+ its own screens for settings, phones and media, and control by touch or by
+ a rotary knob.

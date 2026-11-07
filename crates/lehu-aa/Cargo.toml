@@ -1,0 +1,27 @@
+[package]
+name = "lehu-aa"
+description = "Android Auto: the accessory switch and the GAL session over USB (TLS, protobuf, the channels), the Bluetooth handoff and the same session over TCP for a wireless phone, driven by the main loop as a session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-bt = { path = "../lehu-bt" }
+lehu-core = { path = "../lehu-core" }
+lehu-input = { path = "../lehu-input" }
+lehu-session = { path = "../lehu-session" }
+lehu-usb = { path = "../lehu-usb" }
+lehu-video = { path = "../lehu-video" }
+lehu-wifi = { path = "../lehu-wifi" }
+libc = "0.2"
+log = "0.4"
+# The bulk pipeline and the accessory switch's control transfers, blocking,
+# no runtime.
+nusb = "0.2.8"
+# The GAL session's TLS 1.2: libssl is on the image and carries ARMv4
+# assembly for ChaCha20-Poly1305, which this CPU without AES needs.
+openssl = "0.10"
+# The message bodies, written by hand for the messages the head unit uses.
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }

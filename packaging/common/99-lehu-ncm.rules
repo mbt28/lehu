@@ -1,0 +1,4 @@
+# The iPhone's network link for wired CarPlay (cdc_ncm) up as soon as it
+# appears: LEHU runs without CAP_NET_ADMIN. Only for systems where nothing
+# else brings it up; systemd-networkd or NetworkManager do it themselves.
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="cdc_ncm", RUN+="/sbin/ip link set %k up"

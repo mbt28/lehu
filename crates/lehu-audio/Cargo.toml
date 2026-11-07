@@ -1,0 +1,17 @@
+[package]
+name = "lehu-audio"
+description = "The phone's audio: the Q15 mixer on ALSA, Opus and AAC, the volume control, the microphone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+lehu-session = { path = "../lehu-session" }
+libc = "0.2"
+log = "0.4"
+
+[build-dependencies]
+cc = "1"

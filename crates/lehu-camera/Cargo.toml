@@ -1,0 +1,17 @@
+[package]
+name = "lehu-camera"
+description = "A V4L2 capture device (the composite reversing camera on the TV decoder) on the video plane, with its inputs, standard and picture levels live"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+lehu-drm = { path = "../lehu-drm" }
+libc = "0.2"
+log = "0.4"
+
+[build-dependencies]
+cc = "1"

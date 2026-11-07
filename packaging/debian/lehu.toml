@@ -1,0 +1,19 @@
+# LEHU's settings layer for Raspberry Pi OS. The defaults are compiled in
+# (config/lehu.toml in the source lists them all); the user's settings,
+# written from the screens, are /var/lib/lehu/settings.toml.
+
+[wifi]
+# The access point LEHU hands to wireless phones. hostapd must be set up to
+# run an access point on this interface; see /usr/share/doc/lehu/README.md.
+interface = "wlan0"
+hostapd-conf = "/etc/hostapd/hostapd.conf"
+ap-restart-command = "sudo -n /usr/bin/systemctl restart hostapd"
+
+[bluetooth]
+name = "LEHU"
+
+[system]
+log-level = "info"
+reboot-command = "sudo -n /usr/bin/systemctl reboot"
+shutdown-command = "sudo -n /usr/bin/systemctl poweroff"
+set-clock-command = "sudo -n /usr/bin/date -u -s @{unix}"

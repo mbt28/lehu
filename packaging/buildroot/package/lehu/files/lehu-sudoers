@@ -1,0 +1,4 @@
+# What LEHU may do as root: reboot, power off, set the clock from the
+# phone's, and restart the access point after its network was changed from
+# the screens. Nothing else; LEHU runs as lehu.
+lehu ALL=(root) NOPASSWD: /sbin/reboot, /sbin/poweroff, /bin/date -u -s *, /etc/init.d/S44ap stop, /etc/init.d/S44ap start

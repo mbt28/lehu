@@ -1,0 +1,54 @@
+LEHU, a lightweight embedded head unit.
+Copyright (C) 2026 Mehmet Tekbas (mbt28).
+
+Licensed under the GNU General Public License, version 3 or later (LICENSE).
+
+LEHU descends from FastCarPlay, a C++ CarPlay and Android Auto receiver:
+  https://github.com/niellun/FastCarPlay  (Niellun and contributors, GPL-3.0)
+  https://github.com/mbt28/FastCarPlay    (the F1C200s port, GPL-3.0)
+Its designs for the protocols, the audio mixer, the video path and the
+screens were carried over into Rust.
+
+Session handling, device arbitration and several protocol behaviours
+follow LIVI, a Rust CarPlay and Android Auto host:
+  https://github.com/f-io/LIVI  (GPL-3.0)
+
+vendor/fontique is fontique 0.11.1 (Apache-2.0 OR MIT, the Linebender
+project) with a three-line change taken from LIVI for targets without
+64-bit atomics. vendor/parley is parley 0.11.1 (Apache-2.0 OR MIT, the
+Linebender project) with its dictionary segmenters left out to spare 3 MB
+of tables. The screens embed Open Sans Regular (Apache-2.0).
+
+crates/lehu-video/csrc/decoder.c (the ffmpeg v4l2-request decoder handing
+out dma-bufs) follows LIVI's decoder.c, itself ported from FastCarPlay's
+V4l2DrmDecoder; both GPL-3.0.
+
+crates/lehu-aa speaks the Android Auto (GAL) protocol as reverse engineered
+by aasdk (f1x.studio, GPL-3.0) and carried on by LIVI: the message ids,
+the protobuf field numbers of the messages the head unit uses, and the
+head-unit client certificate aasdk published, which phones accept, come
+from there through FastCarPlay's native backend.
+
+Now playing and route guidance take their message ids, parameter ids,
+the route guidance display component and the manoeuvre tables from LIVI:
+its iAP2 messages (crates/lehu-cp/src/media.rs) and its Android Auto
+media playback and navigation status definitions
+(crates/lehu-aa/src/status.rs), GPL-3.0.
+
+The album art over iAP2 file transfer (crates/lehu-cp/src/file.rs) takes
+the artwork's transfer id attribute, the file transfer session and its
+control codes from LIVI's iAP2 messages and file transfer receiver, and
+the Android Auto album art field from its media metadata definition,
+GPL-3.0.
+
+CarPlay Ultra (crates/lehu-cp/src/mfi4.rs with mfi4/, opack.rs,
+vehicle.rs, ui_sync.rs and ultra.rs) follows LIVI's: the MFi 4 mutual
+authentication (its message and parameter ids, the SIGMA-I key
+derivation and channels, the compressed certificate layout and the DER
+rebuilt from it, the tunneled pair-setup and the pair-verify binding),
+the OPACK codec, the vehicle state protocol and its route sharing
+accessory, the UI sync messages, the display panel carrying the plug-in,
+the start and identification parameters for mutual authentication and
+the theme, and the theme catalog query in scripts/ultra-theme.py,
+GPL-3.0. The key material and certificate tests use values computed
+with LIVI's code.

@@ -1,0 +1,40 @@
+#!/bin/sh
+set -e
+
+# The groups LEHU's user needs: lehu (sudo rule, BlueZ, hostapd's
+# configuration, real-time priority), and the display, the decoders, touch
+# and keys, sound, the MFi coprocessor, the phones' USB devices and
+# hostapd's control socket.
+groups="lehu video render input audio i2c plugdev netdev"
+
+if [ "$1" = configure ]; then
+	if ! getent group lehu >/dev/null; then
+		addgroup --system lehu >/dev/null
+	fi
+fi
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+	# The phones' USB devices already plugged in, under the new rules.
+	if command -v udevadm >/dev/null; then
+		udevadm control --reload-rules || true
+		udevadm trigger --subsystem-match=usb --action=add || true
+	fi
+	# The user who installed LEHU (sudo apt install) is the one who runs it.
+	if [ -z "$2" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] &&
+		getent passwd "$SUDO_USER" >/dev/null; then
+		for group in $groups; do
+			if getent group "$group" >/dev/null; then
+				adduser "$SUDO_USER" "$group" >/dev/null
+			fi
+		done
+		echo "LEHU: $SUDO_USER is in the group lehu from the next login."
+	fi
+	if [ -z "$2" ]; then
+		echo "LEHU starts at login on the screen's console with this line in ~/.profile:"
+		echo '  [ "$(tty)" = /dev/tty1 ] && exec systemd-cat -t lehu lehu'
+		echo "See /usr/share/doc/lehu/README.md."
+	fi
+fi
+exit 0

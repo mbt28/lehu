@@ -1,0 +1,13 @@
+[package]
+name = "lehu-input"
+description = "evdev input: the touchscreen and Bluetooth keyboards, routed to the screens or the phone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lehu-core = { path = "../lehu-core" }
+libc = "0.2"
+log = "0.4"

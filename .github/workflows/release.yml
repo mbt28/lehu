@@ -1,0 +1,114 @@
+# On a version tag: make the Debian source package, build the Raspberry
+# Pi package from it (arm64, Raspberry Pi OS Trixie), attach both to the
+# GitHub release, and publish the binary package to the apt repository on
+# GitHub Pages (the gh-pages branch).
+#
+# One-time setup:
+# 1. A signing key without a passphrase (the workflow signs unattended):
+#    gpg --batch --passphrase '' --quick-gen-key "LEHU apt repository" ed25519 sign never
+# 2. Two repository secrets: LEHU_GPG_PRIVATE_KEY, the output of
+#    gpg --armor --export-secret-keys <fingerprint>, and LEHU_GPG_KEY_ID,
+#    the fingerprint.
+# 3. GitHub Pages serving the gh-pages branch (Settings > Pages), once the
+#    first release has created it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package (${{ matrix.suite }})
+    runs-on: ubuntu-24.04-arm
+    container: debian:${{ matrix.suite }}
+    strategy:
+      matrix:
+        suite: [trixie]
+    steps:
+      - name: Raspberry Pi OS archive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg
+          curl -fsSL https://archive.raspberrypi.com/debian/raspberrypi.gpg.key |
+            gpg --dearmor -o /usr/share/keyrings/raspberrypi-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.com/debian ${{ matrix.suite }} main" \
+            > /etc/apt/sources.list.d/raspi.list
+          apt-get update
+
+      - name: Tools
+        run: |
+          apt-get install -y --no-install-recommends build-essential dpkg-dev \
+            debhelper git python3 xz-utils rustup
+          rustup set profile minimal
+          rustup default stable
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v4
+
+      - name: Source package
+        run: packaging/debian/build-source.sh ${{ matrix.suite }} dist
+
+      # Built from the source package, as anyone rebuilding it would; the
+      # tests run as part of the build.
+      - name: Binary package
+        run: |
+          dpkg-source -x dist/*.dsc build/lehu
+          cd build/lehu
+          apt-get build-dep -y ./
+          dpkg-buildpackage -b -us -uc
+          mv ../*.deb ../../dist/
+          # GitHub renames release files with a "~" in their names, which
+          # the .dsc names: the source package goes out as one tar.
+          cd ../../dist
+          tar -cf "$(basename *.dsc .dsc | tr '~' '+').source.tar" *.dsc *.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.suite }}
+          path: |
+            dist/*.deb
+            dist/*.source.tar
+
+  publish:
+    name: Publish
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: dist
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.source.tar
+
+      - name: Update the apt repository
+        env:
+          LEHU_GPG_PRIVATE_KEY: ${{ secrets.LEHU_GPG_PRIVATE_KEY }}
+          LEHU_GPG_KEY: ${{ secrets.LEHU_GPG_KEY_ID }}
+        run: |
+          sudo apt-get install -y --no-install-recommends apt-utils
+          echo "$LEHU_GPG_PRIVATE_KEY" | gpg --batch --import
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin gh-pages; then
+            git worktree add -B gh-pages repo FETCH_HEAD
+          else
+            git worktree add --orphan -b gh-pages repo
+          fi
+          packaging/debian/apt-repo.sh repo dist/*.deb
+          cd repo
+          git add -A
+          git commit -m "lehu ${GITHUB_REF_NAME}"
+          git push origin gh-pages
