@@ -169,7 +169,8 @@ export global Bridge {
     in property <bool> update-shown;
     in property <bool> update-available;
     in property <bool> update-can-cancel;     // stopping now is safe: Cancel update shows
-    in property <string> update-label;        // the Settings row: the version, "Update ready"
+    in property <string> update-label;        // the Update row: the version, "Update ready"
+    in property <string> update-attention;    // the System row: "Update ready"; empty when idle
     in property <string> update-version;      // the version running
     // 0 nothing, 1 receiving, 2 checking, 3 ready to install, 4 failed,
     // 5 installing, 6 restarting.
@@ -190,6 +191,15 @@ export global Bridge {
     in property <image> update-qr-join;
     in property <image> update-qr-page;
 
+    // Settings > System > Info. Text composed in Rust.
+    in property <string> info-kernel;
+    in property <string> info-os-label;       // "LEHU OS", or "System" on another image
+    in property <string> info-os;
+    in property <string> info-lehu;
+    in property <string> info-memory;         // "23 of 54 MB, LEHU 10 MB"
+    in property <string> info-cpu;            // "12%, LEHU 3%"
+    in property <string> info-link;           // "Cable, 4.9 Mbit/s video", "No phone"
+
     // A dialog over everything: 0 none, 1 a code to type on the device
     // (Cancel only), 2 a yes/no question, 3 a notice (OK only).
     in property <int> prompt-kind;
@@ -209,7 +219,8 @@ export global Bridge {
     // only while a Bluetooth screen is up) and drive it (Back, Home).
     // 0 home, 1 settings, 3 wireless, 4 bluetooth, 5 bt device,
     // 6 audio, 8 video, 9 camera view, 10 phones, 11 media,
-    // 12 access point, 13 link speed, 14 update, 15 update from the phone
+    // 12 access point, 13 link speed, 14 update, 15 update from the phone,
+    // 16 connection, 17 system, 18 info
     in-out property <int> screen;
 
     // UI -> app
@@ -441,6 +452,8 @@ global Icons {
         if (kind == "up") { return "M12 20 L12 4 M6 10 L12 4 L18 10"; }
         if (kind == "usb") { return "M12 4 L12 19 M12 15 L7 11 L7 9 M12 12 L17 9 L17 7.5"; }
         if (kind == "bt") { return "M7 7 L17 17 L12 22 L12 2 L17 7 L7 17"; }
+        if (kind == "system") { return "M4 4 L20 4 L20 16 L4 16 Z M9 20 L15 20 M12 16 L12 20"; }
+        if (kind == "info") { return "M3 12 A9 9 0 1 0 21 12 A9 9 0 1 0 3 12 M12 11 L12 17 M12 7.5 L12 8"; }
         if (kind == "update") { return "M12 3 L12 15 M7 10 L12 15 L17 10 M4 16 L4 21 L20 21 L20 16"; }
         // The turn arrows, 48 units: the shaft as a line.
         if (kind == "nav1") { return "M24 44 L24 16"; }
@@ -1463,35 +1476,40 @@ component ScreenMedia inherits Rectangle {
 
 component ScreenSettings inherits ListPage {
     title: "Settings";
-    // The volume first, used on the road. Down to 0 is muted; a step up
-    // from there (or from a mute key) unmutes.
-    LevelRow {
-        ring-key: "volume";
-        icon: "volume";
-        label: "Volume";
-        value: Bridge.volume-label;
-        level: Bridge.volume-muted ? 0 : Bridge.volume-level / 100;
-        editing: Bridge.pick == 4;
-        clicked => { Bridge.pick-press(4); }
-        step(direction) => { Bridge.volume-step(direction); }
+    NavRow {
+        ring-key: "connection";
+        icon: "link";
+        label: "Connection";
+        value: Bridge.active-phone != "" ? Bridge.active-phone : Bridge.phones-summary;
+        value-dot: Bridge.active-phone != "" ? 2 : -1;
+        clicked => { Bridge.screen = 16; }
     }
-    // A running session switches at once.
-    SegmentRow {
-        ring-key: "night";
-        icon: "night";
-        label: "Night";
-        options: ["Day", "Night", "Auto"];
-        current: Bridge.night-choice;
-        choosing: Bridge.pick == 2;
-        choice: Bridge.pick-choice;
-        clicked => { Bridge.pick-press(2); }
-        picked(i) => {
-            if (Bridge.pick != 2) {
-                Bridge.pick-press(2);
-            }
-            Bridge.pick-option(i);
-        }
+    NavRow {
+        ring-key: "audio";
+        icon: "audio";
+        label: "Audio";
+        value: Bridge.output-label;
+        clicked => { Bridge.screen = 6; }
     }
+    NavRow {
+        ring-key: "video";
+        icon: "video";
+        label: "Video";
+        value: Bridge.fps-label;
+        clicked => { Bridge.screen = 8; }
+    }
+    NavRow {
+        ring-key: "system";
+        icon: "system";
+        label: "System";
+        value: Bridge.update-attention;
+        clicked => { Bridge.screen = 17; }
+    }
+}
+
+// How phones reach the head unit: the phones known, and the radios.
+component ScreenConnection inherits ListPage {
+    title: "Connection";
     // Every protocol listens at once and a cable always wins, so there is
     // no source to set: the phone is connected or forgotten on its screen.
     NavRow {
@@ -1503,26 +1521,17 @@ component ScreenSettings inherits ListPage {
         clicked => { Bridge.screen = 10; }
     }
     NavRow {
-        ring-key: "audio";
-        icon: "audio";
-        label: "Audio";
-        value: Bridge.output-label;
-        clicked => { Bridge.screen = 6; }
-    }
-    NavRow {
         ring-key: "wireless";
         icon: "wireless";
         label: "Wireless";
         value: Bridge.wifi-ssid;
         clicked => { Bridge.screen = 3; }
     }
-    NavRow {
-        ring-key: "video";
-        icon: "video";
-        label: "Video";
-        value: Bridge.fps-label;
-        clicked => { Bridge.screen = 8; }
-    }
+}
+
+// The system: its updates, what it is and does, and turning it off.
+component ScreenSystem inherits ListPage {
+    title: "System";
     // LEHU OS updates, from the phone. Without the installer (another
     // system) the row only says so.
     if Bridge.update-shown: NavRow {
@@ -1536,6 +1545,12 @@ component ScreenSettings inherits ListPage {
                 Bridge.screen = 14;
             }
         }
+    }
+    NavRow {
+        ring-key: "info";
+        icon: "info";
+        label: "Info";
+        clicked => { Bridge.screen = 18; }
     }
     // Each asks first, in the dialog; the app then closes down cleanly and
     // the system's own reboot / poweroff takes over. It opens on Cancel.
@@ -1558,11 +1573,35 @@ component ScreenSettings inherits ListPage {
     }
 }
 
-// The sound under the volume: each stream's level, changed live in its
+// What the system is and does: read only, the live lines once a second
+// while it shows.
+component ScreenInfo inherits ListPage {
+    title: "Info";
+    InfoLine { icon: "system"; label: "Kernel"; value: Bridge.info-kernel; }
+    InfoLine { icon: "system"; label: Bridge.info-os-label; value: Bridge.info-os; }
+    InfoLine { icon: "tag"; label: "LEHU"; value: Bridge.info-lehu; }
+    InfoLine { icon: "buffer"; label: "Memory"; value: Bridge.info-memory; }
+    InfoLine { icon: "bolt"; label: "CPU"; value: Bridge.info-cpu; }
+    InfoLine { icon: "link"; label: "Connection"; value: Bridge.info-link; }
+}
+
+// The sound: the volume, each stream's level, changed live in its
 // row; the music buffer; the output, stepped through the cards there are
 // and taken with Enter -- the sound moves to it at once.
 component ScreenAudio inherits ListPage {
     title: "Audio";
+    // Down to 0 is muted; a step up
+    // from there (or from a mute key) unmutes.
+    LevelRow {
+        ring-key: "volume";
+        icon: "volume";
+        label: "Volume";
+        value: Bridge.volume-label;
+        level: Bridge.volume-muted ? 0 : Bridge.volume-level / 100;
+        editing: Bridge.pick == 4;
+        clicked => { Bridge.pick-press(4); }
+        step(direction) => { Bridge.volume-step(direction); }
+    }
     LevelRow {
         ring-key: "music";
         icon: "music";
@@ -1631,10 +1670,27 @@ component ScreenAudio inherits ListPage {
     }
 }
 
-// The phone's frame rate, and the camera: its view shows it full screen
+// Night, the phone's frame rate, and the camera: its view shows it full screen
 // with the settings column over it.
 component ScreenVideo inherits ListPage {
     title: "Video";
+    // A running session switches at once.
+    SegmentRow {
+        ring-key: "night";
+        icon: "night";
+        label: "Night";
+        options: ["Day", "Night", "Auto"];
+        current: Bridge.night-choice;
+        choosing: Bridge.pick == 2;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(2); }
+        picked(i) => {
+            if (Bridge.pick != 2) {
+                Bridge.pick-press(2);
+            }
+            Bridge.pick-option(i);
+        }
+    }
     SegmentRow {
         ring-key: "fps";
         icon: "video";
@@ -2406,6 +2462,9 @@ export component AppWindow inherits Window {
     if Bridge.screen == 13 && !root.modal: ScreenLink     { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 14 && !root.modal: ScreenUpdate   { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 15 && !root.modal: ScreenUpdatePhone { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 16 && !root.modal: ScreenConnection { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 17 && !root.modal: ScreenSystem   { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 18 && !root.modal: ScreenInfo     { y: root.top; height: root.height - root.top; }
     if Bridge.nav-card: NavCardView {}
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}

@@ -10,7 +10,7 @@ use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt, Update, UpdateOutcome, UpdateStage,
+    NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
 };
 use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
@@ -170,6 +170,7 @@ pub struct AppHost {
     update_gen: u32,
     /// Install was confirmed: the loop ends the phone's session first.
     update_install: bool,
+    video_bytes: u32,
 }
 
 impl AppHost {
@@ -236,6 +237,7 @@ impl AppHost {
             update_seen: None,
             update_gen: 0,
             update_install: false,
+            video_bytes: 0,
         }
     }
 
@@ -491,6 +493,11 @@ impl AppHost {
         self.backgrounded = backgrounded;
         self.usb = usb;
         self.wifi = wifi;
+    }
+
+    /// Counted by the video decoder, for the Info page.
+    pub fn set_video_bytes(&mut self, bytes: u32) {
+        self.video_bytes = bytes;
     }
 
     /// The input thread's learning switch, asked for by the screens.
@@ -955,6 +962,22 @@ impl Host for AppHost {
             updater.cancel();
         }
         self.sync_update();
+    }
+
+    fn system_names(&self) -> SystemNames {
+        SystemNames {
+            kernel: lehu_core::sysinfo::kernel(),
+            os: lehu_core::sysinfo::os_name(),
+            lehu: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
+    fn system_load(&mut self) -> lehu_core::sysinfo::Load {
+        lehu_core::sysinfo::load()
+    }
+
+    fn video_bytes(&self) -> u32 {
+        self.video_bytes
     }
 
     fn update_outcome_seen(&mut self) {

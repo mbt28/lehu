@@ -102,6 +102,9 @@ pub struct TestHost {
     pub ap_applied: Applied,
     pub outputs: Vec<AudioOutput>,
     pub link: Link,
+    pub names: crate::host::SystemNames,
+    pub load: lehu_core::sysinfo::Load,
+    pub video: u32,
 
     pub update: Update,
     pub update_gen: u32,
@@ -169,6 +172,13 @@ impl TestHost {
             ap_applied: Applied::Restarted,
             outputs: Vec::new(),
             link: Link::default(),
+            names: crate::host::SystemNames {
+                kernel: "6.18.42".into(),
+                os: "Buildroot 2026.02".into(),
+                lehu: "0.1.0".into(),
+            },
+            load: lehu_core::sysinfo::Load::default(),
+            video: 0,
             update: Update {
                 shown: true,
                 available: true,
@@ -548,6 +558,18 @@ impl Host for TestHost {
 
     fn update_cancel(&mut self) {
         self.calls.push(Call::UpdateCancel);
+    }
+
+    fn system_names(&self) -> crate::host::SystemNames {
+        self.names.clone()
+    }
+
+    fn system_load(&mut self) -> lehu_core::sysinfo::Load {
+        self.load
+    }
+
+    fn video_bytes(&self) -> u32 {
+        self.video
     }
 
     fn update_outcome_seen(&mut self) {

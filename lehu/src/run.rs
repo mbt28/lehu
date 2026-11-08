@@ -469,6 +469,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             let usb = driver.active() && driver.link() == Some(Link::Usb);
             let wifi = driver.active() && driver.link() == Some(Link::Wifi);
             host.set_session(driver.take_status(), backgrounded, usb, wifi);
+            host.set_video_bytes(driver.video_bytes());
             if host.devices_seen() != driver.registry().generation() {
                 host.set_devices(driver.registry());
             }

@@ -168,7 +168,7 @@ fn back_walks_the_chain_and_leaves_the_home_screen_for_the_session() {
         .invoke_bt_open("/dev/b".into());
     goto(&mut osd, BT_DEVICE);
     assert_eq!(screen(&osd), BT_DEVICE);
-    for expected in [BLUETOOTH, 3, SETTINGS, HOME] {
+    for expected in [BLUETOOTH, WIRELESS, CONNECTION, SETTINGS, HOME] {
         press(&mut osd, OsdKey::Back);
         assert_eq!(screen(&osd), expected);
     }
@@ -280,9 +280,9 @@ fn a_tap_reaches_a_row_even_between_two_ticks() {
 #[test]
 fn the_phone_row_opens_the_devices_screen() {
     let mut osd = osd(with_phones());
-    goto(&mut osd, SETTINGS);
-    // By the knob: Back, Volume, Night, Phones.
-    for _ in 0..4 {
+    goto(&mut osd, CONNECTION);
+    // By the knob: Back, Phones.
+    for _ in 0..2 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "phones");
@@ -290,13 +290,13 @@ fn the_phone_row_opens_the_devices_screen() {
     assert_eq!(screen(&osd), DEVICES);
     assert_eq!(ring(&osd), "back");
     press(&mut osd, OsdKey::Back);
-    assert_eq!(screen(&osd), SETTINGS);
+    assert_eq!(screen(&osd), CONNECTION);
     // Back where it was opened from, the ring on the row that opened it.
     assert_eq!(ring(&osd), "phones");
-    // By touch: the third row, from y 224.
+    // By touch: the first row, from y 64.
     advance(&mut osd, KEY_RECENT_MS);
-    osd.pointer(400, 260, true);
-    osd.pointer(400, 260, false);
+    osd.pointer(400, 100, true);
+    osd.pointer(400, 100, false);
     tick(&mut osd);
     assert_eq!(screen(&osd), DEVICES);
     assert_eq!(ring(&osd), "");
@@ -358,7 +358,7 @@ fn the_phones_tile_follows_the_session_and_its_link() {
 #[test]
 fn night_is_taken_at_once_and_a_tap_takes_the_tapped_option() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, VIDEO);
     pick_press(&mut osd, 2);
     assert_eq!(pick(&osd), (2, 2)); // Auto, the default
     press(&mut osd, OsdKey::Up); // back along the options
@@ -385,7 +385,7 @@ fn night_is_taken_at_once_and_a_tap_takes_the_tapped_option() {
 #[test]
 fn power_opens_on_cancel_and_a_double_press_never_takes_the_unit_down() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, SYSTEM);
     pick_press(&mut osd, 3);
     assert_eq!(pick(&osd), (3, 2)); // Cancel
     press(&mut osd, OsdKey::Ok); // takes Cancel: nothing asked
@@ -436,7 +436,7 @@ fn power_opens_on_cancel_and_a_double_press_never_takes_the_unit_down() {
 #[test]
 fn the_power_question_does_not_wait_behind_the_video() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, SYSTEM);
     pick_press(&mut osd, 3);
     press(&mut osd, OsdKey::Left);
     press(&mut osd, OsdKey::Ok);
@@ -456,7 +456,7 @@ fn the_power_question_does_not_wait_behind_the_video() {
 #[test]
 fn the_level_rows_turn_and_the_buffer_is_saved_once_turning_stops() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, AUDIO);
     pick_press(&mut osd, 4);
     assert_eq!(pick(&osd), (4, 0));
     press(&mut osd, OsdKey::Up);
@@ -496,7 +496,7 @@ fn the_level_rows_turn_and_the_buffer_is_saved_once_turning_stops() {
 #[test]
 fn a_pick_ends_when_left_alone_or_off_its_screen() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, VIDEO);
     pick_press(&mut osd, 2);
     advance(&mut osd, PICK_MS / 2);
     tick(&mut osd);
@@ -1136,13 +1136,13 @@ fn the_devices_screen_lists_the_phones_in_the_hosts_order_and_a_knob_reaches_eac
     assert_eq!(rows.row_data(0).map(|r| r.active), Some(true));
     assert_eq!(rows.row_data(1).map(|r| r.nearby), Some(true));
     assert_eq!(rows.row_data(2).map(|r| r.nearby), Some(false));
-    // The tile and the Settings row: how many, and the one in session.
+    // The tile and the Connection row: how many, and the one in session.
     let b = osd.ui.global::<Bridge<'_>>();
     assert_eq!(b.get_phones_summary().as_str(), "3 known");
     assert_eq!(b.get_active_phone().as_str(), "Alex's iPhone");
-    // Settings > Phones by the knob: Back, Volume, Night, Phones.
-    goto(&mut osd, SETTINGS);
-    for _ in 0..4 {
+    // Connection > Phones by the knob: Back, Phones.
+    goto(&mut osd, CONNECTION);
+    for _ in 0..2 {
         press(&mut osd, OsdKey::Next);
     }
     press(&mut osd, OsdKey::Ok);
@@ -1186,7 +1186,7 @@ fn the_devices_screen_lists_the_phones_in_the_hosts_order_and_a_knob_reaches_eac
     assert!(!osd.host().has(&Call::DeviceForget("c".into())));
     // Back from the screen: Settings.
     press(&mut osd, OsdKey::Back);
-    assert_eq!(screen(&osd), SETTINGS);
+    assert_eq!(screen(&osd), CONNECTION);
 }
 
 #[test]
@@ -1257,7 +1257,7 @@ fn forget_asks_first_and_the_connected_phone_offers_stop() {
 #[test]
 fn a_phone_is_picked_by_touch_too() {
     let mut osd = osd(with_phones());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, CONNECTION);
     goto(&mut osd, DEVICES);
     // The bar, then the phones from y 64, 144 and 224; the options of a
     // choosing row end 12 px before its right edge: 120 px each, 8 px
@@ -1308,7 +1308,7 @@ fn a_phone_is_picked_by_touch_too() {
     assert!(!osd.host().has(&Call::DeviceForget("a".into())));
     // Back, the bar's key.
     tap(&mut osd, 32, 28);
-    assert_eq!(screen(&osd), SETTINGS);
+    assert_eq!(screen(&osd), CONNECTION);
 }
 
 #[test]
@@ -1747,8 +1747,8 @@ fn with_outputs() -> TestHost {
 fn the_audio_row_opens_the_stream_levels_which_turn_live_in_tens() {
     let mut osd = osd(with_outputs());
     goto(&mut osd, SETTINGS);
-    // By the knob: Back, Volume, Night, Phones, Audio.
-    for _ in 0..5 {
+    // By the knob: Back, Connection, Audio.
+    for _ in 0..3 {
         press(&mut osd, OsdKey::Next);
     }
     press(&mut osd, OsdKey::Ok);
@@ -2118,10 +2118,14 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
     assert_eq!(screen(&osd), SETTINGS);
     // A page opened forward starts on its back key.
     assert_eq!(ring(&osd), "back");
-    // Settings: Back, Volume, Night, Phones, Audio, Wireless.
-    for _ in 0..5 {
-        press(&mut osd, OsdKey::Next);
-    }
+    // Settings: Back, Connection.
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "connection");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(screen(&osd), CONNECTION);
+    // Connection: Back, Phones, Wireless.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
     assert_eq!(ring(&osd), "wireless");
     press(&mut osd, OsdKey::Ok);
     // Wireless: Back, Access point, Link speed, Bluetooth name, Bluetooth.
@@ -2144,7 +2148,7 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
     // The bar's back key does the same.
     osd.ui.global::<Bridge<'_>>().invoke_back();
     tick(&mut osd);
-    assert_eq!((screen(&osd), ring(&osd)), (SETTINGS, "wireless".into()));
+    assert_eq!((screen(&osd), ring(&osd)), (CONNECTION, "wireless".into()));
     // Home from deep down: the tile that opened Settings.
     press(&mut osd, OsdKey::Ok);
     press(&mut osd, OsdKey::Home);
@@ -2167,15 +2171,15 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
     goto(&mut osd, 3);
     osd.ui.global::<Bridge<'_>>().invoke_back();
     tick(&mut osd);
-    assert_eq!((screen(&osd), ring(&osd)), (SETTINGS, "".into()));
+    assert_eq!((screen(&osd), ring(&osd)), (CONNECTION, "".into()));
 }
 
 #[test]
 fn a_dialog_closing_puts_the_ring_back_on_its_row() {
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
-    // Back, Volume, Night, Phones, Audio, Wireless, Video, Update, Power.
-    for _ in 0..9 {
+    goto(&mut osd, SYSTEM);
+    // Back, Update, Info, Power.
+    for _ in 0..4 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "power");
@@ -2191,7 +2195,7 @@ fn a_dialog_closing_puts_the_ring_back_on_its_row() {
 #[test]
 fn a_level_turned_fast_moves_further_a_detent() {
     let mut osd = osd(with_outputs());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, AUDIO);
     pick_press(&mut osd, 4);
     let volume = |osd: &Osd<TestHost>| osd.host().volume_level;
     assert_eq!(volume(&osd), 60);
@@ -2408,7 +2412,7 @@ fn the_update_row_shows_the_version_or_says_it_cannot() {
 fn get_from_phone_serves_the_page_and_shows_its_codes() {
     use crate::host::UpdateStage;
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, SYSTEM);
     goto(&mut osd, UPDATE);
     assert!(osd.host().has(&Call::UpdateScreens(true)));
     assert!(!osd.host().has(&Call::UpdateServe));
@@ -2439,7 +2443,7 @@ fn get_from_phone_serves_the_page_and_shows_its_codes() {
     assert_eq!(screen(&osd), UPDATE);
     assert_eq!(qr_side(val!(osd, get_update_qr_join)), 0);
     press(&mut osd, OsdKey::Back);
-    assert_eq!(screen(&osd), SETTINGS);
+    assert_eq!(screen(&osd), SYSTEM);
     assert!(osd.host().has(&Call::UpdateScreens(false)));
 }
 
@@ -2570,7 +2574,7 @@ fn cancel_update_asks_first_and_only_when_it_is_safe() {
 fn power_is_locked_while_an_update_installs() {
     use crate::host::UpdateStage;
     let mut osd = osd(TestHost::new());
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, SYSTEM);
     for stage in [UpdateStage::Installing, UpdateStage::Restarting] {
         set_update(&mut osd, |u| u.stage = stage);
         pick_press(&mut osd, 3);
@@ -2579,7 +2583,7 @@ fn power_is_locked_while_an_update_installs() {
     }
     // It did not go through: Power is back.
     set_update(&mut osd, |u| u.stage = UpdateStage::Failed);
-    goto(&mut osd, SETTINGS);
+    goto(&mut osd, SYSTEM);
     pick_press(&mut osd, 3);
     tick(&mut osd);
     assert_eq!(osd.ui.global::<Bridge<'_>>().get_pick(), 3);
@@ -2599,6 +2603,123 @@ fn the_card_gives_the_qr_codes_the_screen() {
     goto(&mut osd, UPDATE);
     tick(&mut osd);
     assert!(card(&osd));
+}
+
+#[test]
+fn the_menu_is_connection_audio_video_system() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    // Audio and Video follow each other.
+    let mut stops = Vec::new();
+    for _ in 0..5 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(stops, ["back", "connection", "audio", "video", "system"]);
+    for (screen_at, parent) in [
+        (CONNECTION, SETTINGS),
+        (WIRELESS, CONNECTION),
+        (SYSTEM, SETTINGS),
+        (UPDATE, SYSTEM),
+        (INFO, SYSTEM),
+    ] {
+        goto(&mut osd, screen_at);
+        press(&mut osd, OsdKey::Back);
+        assert_eq!(screen(&osd), parent, "from {screen_at}");
+    }
+    // Volume, Night and Power take their keys on their new pages.
+    for (at, row) in [(AUDIO, 4), (VIDEO, 2), (SYSTEM, 3)] {
+        goto(&mut osd, at);
+        pick_press(&mut osd, row);
+        tick(&mut osd);
+        assert_eq!(pick(&osd).0, row, "on {at}");
+        press(&mut osd, OsdKey::Back);
+        goto(&mut osd, SETTINGS);
+    }
+    // The System row speaks up only when an update is going on.
+    assert_eq!(prop!(osd, get_update_attention), "");
+    set_update(&mut osd, |u| {
+        u.available = true;
+        u.stage = UpdateStage::Ready;
+    });
+    assert_eq!(prop!(osd, get_update_attention), "Update ready");
+}
+
+#[test]
+fn info_says_what_the_system_is_and_does() {
+    let mut host = TestHost::new();
+    host.load = lehu_core::sysinfo::Load {
+        mem_total_kb: 54 * 1024,
+        mem_available_kb: 31 * 1024,
+        own_rss_kb: 10 * 1024,
+        cpu_total: 1000,
+        cpu_idle: 800,
+        own_ticks: 10,
+    };
+    let mut osd = osd(host);
+    goto(&mut osd, SYSTEM);
+    goto(&mut osd, INFO);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_info_kernel), "6.18.42");
+    assert_eq!(prop!(osd, get_info_lehu), "0.1.0");
+    assert_eq!(prop!(osd, get_info_os_label), "LEHU OS");
+    assert_eq!(prop!(osd, get_info_memory), "23 of 54 MB, LEHU 10 MB");
+    assert_eq!(prop!(osd, get_info_cpu), "Measuring...");
+    assert_eq!(prop!(osd, get_info_link), "No phone");
+    // Another image names itself.
+    osd.host_mut().update.version.clear();
+    advance(&mut osd, 1000);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_info_os_label), "System");
+    assert_eq!(prop!(osd, get_info_os), "Buildroot 2026.02");
+    // A second on: the CPU's share, and a cable's video.
+    {
+        let h = osd.host_mut();
+        h.load.cpu_total = 1100;
+        h.load.cpu_idle = 860;
+        h.load.own_ticks = 13;
+        h.link_usb = true;
+    }
+    advance(&mut osd, 1000);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_info_cpu), "40%, LEHU 3%");
+    assert_eq!(prop!(osd, get_info_link), "Cable, 0.0 Mbit/s video");
+    osd.host_mut().video = 625_000;
+    advance(&mut osd, 1000);
+    tick(&mut osd);
+    // (The clock under the skew runs on too: the rate is near, not exact.)
+    let rate = prop!(osd, get_info_link);
+    assert!(
+        rate.ends_with(" Mbit/s video") && rate.starts_with("Cable, "),
+        "{rate}"
+    );
+    assert!(
+        rate.starts_with("Cable, 4") || rate.starts_with("Cable, 5"),
+        "{rate}"
+    );
+    // Over Wi-Fi, the interface both ways.
+    {
+        let h = osd.host_mut();
+        h.link_usb = false;
+        h.link_wifi = true;
+        h.link.rx_bytes = 400_000;
+        h.link.tx_bytes = 50_000;
+    }
+    advance(&mut osd, 1000);
+    tick(&mut osd);
+    let rate = prop!(osd, get_info_link);
+    assert!(
+        rate.starts_with("Wi-Fi, 3") && rate.contains(" Mbit/s in, 0.") && rate.ends_with(" out"),
+        "{rate}"
+    );
+    // Off the page nothing is read, nor woken for.
+    goto(&mut osd, SYSTEM);
+    let reads = osd.host().count(&Call::Link);
+    advance(&mut osd, 5000);
+    tick(&mut osd);
+    assert_eq!(osd.host().count(&Call::Link), reads);
+    assert_eq!(osd.st.info_due(), None);
 }
 
 #[test]

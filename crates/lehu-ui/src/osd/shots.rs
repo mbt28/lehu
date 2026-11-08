@@ -212,32 +212,65 @@ fn shots() {
     let mut s = Shot::new(phone_host());
     s.goto(SETTINGS);
     s.save("07-settings");
-    // Back, Volume, Night: the knob starts choosing and turns.
-    s.keys(OsdKey::Next, 3);
+    s.goto(CONNECTION);
+    s.save("64-connection");
+    s.goto(SYSTEM);
+    s.save("65-system");
+    // Back, Night: the knob starts choosing and turns.
+    s.goto(VIDEO);
+    s.keys(OsdKey::Next, 2);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Prev);
-    s.save("08-settings-night-choosing");
+    s.save("08-video-night-choosing");
     s.key(OsdKey::Back);
-    s.key(OsdKey::Prev);
+    s.goto(AUDIO);
+    s.keys(OsdKey::Next, 1);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Next);
-    s.save("09-settings-volume-changing");
+    s.save("09-audio-volume-changing");
     s.key(OsdKey::Ok);
-    s.keys(OsdKey::Next, 7);
+    s.goto(SYSTEM);
+    s.keys(OsdKey::Next, 3);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Left);
     s.osd.st.skew += VOLUME_BAR_MS;
-    s.save("10-settings-power-choosing");
+    s.save("10-system-power-choosing");
     s.key(OsdKey::Back);
     s.forget_keys();
+
+    // ── info ──
+    let mut h = phone_host();
+    h.link_usb = true;
+    h.load = lehu_core::sysinfo::Load {
+        mem_total_kb: 54 * 1024,
+        mem_available_kb: 31 * 1024,
+        own_rss_kb: 10 * 1024,
+        cpu_total: 1000,
+        cpu_idle: 800,
+        own_ticks: 10,
+    };
+    let mut s = Shot::new(h);
+    s.goto(SYSTEM);
+    s.goto(INFO);
+    s.tick();
+    {
+        let h = s.osd.host_mut();
+        h.load.cpu_total = 1100;
+        h.load.cpu_idle = 860;
+        h.load.own_ticks = 13;
+        h.video = 625_000;
+    }
+    s.osd.st.skew += 1000;
+    s.tick();
+    s.save("66-info");
 
     // ── the pages under Settings ──
     let mut s = Shot::new(phone_host());
     s.goto(SETTINGS);
     s.goto(AUDIO);
     s.save("12-audio");
-    // Back, the four levels, the buffer, Output.
-    s.keys(OsdKey::Next, 7);
+    // Back, the volume, the four levels, the buffer, Output.
+    s.keys(OsdKey::Next, 8);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Next);
     s.save("13-audio-output-choosing");
@@ -269,9 +302,9 @@ fn shots() {
     // ── update ──
     use crate::host::{UpdateOutcome, UpdateStage};
     let mut s = Shot::new(phone_host());
-    s.goto(SETTINGS);
-    s.keys(OsdKey::Next, 8);
-    s.save("50-settings-update-row");
+    s.goto(SYSTEM);
+    s.keys(OsdKey::Next, 1);
+    s.save("50-system-update-row");
     s.forget_keys();
     s.goto(UPDATE);
     s.save("51-update");
@@ -338,15 +371,9 @@ fn shots() {
     let mut h = phone_host();
     h.update.available = false;
     let mut s = Shot::new(h);
-    s.goto(SETTINGS);
-    s.keys(OsdKey::Next, 8);
-    s.save("58-settings-update-not-available");
-    let mut h = phone_host();
-    h.update.stage = UpdateStage::Installing;
-    let mut s = Shot::new(h);
-    s.goto(SETTINGS);
-    s.keys(OsdKey::Next, 8);
-    s.save("62-settings-update-installing");
+    s.goto(SYSTEM);
+    s.keys(OsdKey::Next, 1);
+    s.save("58-system-update-not-available");
     let mut h = base_host();
     h.update.outcome = UpdateOutcome::Updated("22.0.1-20261108095815".into());
     let mut s = Shot::new(h);
@@ -412,9 +439,9 @@ fn shots() {
     // ── night ──
     let mut s = Shot::new(night_host());
     s.save("29-home-night");
-    s.goto(SETTINGS);
-    s.keys(OsdKey::Next, 3);
-    s.save("30-settings-night");
+    s.goto(VIDEO);
+    s.keys(OsdKey::Next, 2);
+    s.save("30-video-night");
     let mut s = Shot::new(night_host());
     guide(s.osd.host_mut(), NavArrow::SlightRight, "Bear right");
     s.goto(MEDIA);

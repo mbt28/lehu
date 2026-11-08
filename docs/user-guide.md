@@ -27,16 +27,12 @@ the camera.
 
 ## Settings
 
-| Setting | What it does |
+| Setting | What it holds |
 |---|---|
-| Volume | the head unit's volume |
-| Night | Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens |
-| Phones | known phones: connect, stop or forget each one |
-| Audio | levels for music, navigation, alerts and calls; the music buffer; the output device |
-| Wireless | the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
-| Video | Android Auto's frame rate, the reversing camera, its key and fast switch |
-| Update | the version running; a new version of LEHU OS, brought by the phone |
-| Power | reboot or power off |
+| Connection | **Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
+| Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
+| Video | Night (Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
+| System | **Update**: the version running, and a new version of LEHU OS brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,
 power off) ask first and open on Cancel.
@@ -85,7 +81,7 @@ it. When you come back to a page, the ring is on the row you left.
 
 ## Bluetooth keyboards and remotes
 
-Settings › Wireless › Bluetooth › **Add device** searches for 30 seconds.
+Settings › Connection › Wireless › Bluetooth › **Add device** searches for 30 seconds.
 Select a found device to pair it: a keyboard asks you to type a code on it,
 a remote pairs directly. Paired devices reconnect by themselves when they
 wake. Open a device to connect, disconnect or forget it.
@@ -104,12 +100,12 @@ allows, so the way back is instant.
 
 ## Updating LEHU OS
 
-On LEHU OS, Settings › **Update** installs new versions. The head unit has
+On LEHU OS, Settings › System › **Update** installs new versions. The head unit has
 no internet of its own, so the phone fetches the update over its mobile
 data and hands it over through the head unit's Wi-Fi. On other systems the
 row says the update is not available there.
 
-1. Settings › Update › **Get from phone** shows two QR codes.
+1. Settings › System › Update › **Get from phone** shows two QR codes.
 2. Scan the first with the phone's camera: the phone joins the head unit's
    Wi-Fi (the name and password are under the code too). Keep the phone's
    mobile data on.
@@ -134,13 +130,13 @@ row says the update is not available there.
    update takes effect at the next start.
 
 Leaving the Update page does not stop anything before **Install**: the
-transfer and the check go on, and Settings shows how far it is. **Cancel
+transfer and the check go on, and Settings › System shows how far it is. **Cancel
 update**, on the Update page and beside the QR codes, stops a transfer and
 removes what arrived.
 
 After the restart, the head unit says once whether the update went in. If
 it was cut off (the power went), it says so, and the update can be
-installed again from Settings › Update. A received update that was not
+installed again from Settings › System › Update. A received update that was not
 installed yet stays on the head unit until it is, or until another one
 comes.
 

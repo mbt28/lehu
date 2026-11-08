@@ -7,8 +7,9 @@ use slint::{ComponentHandle, SharedString};
 use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
 
 use super::{
-    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, DEVICES, HOME, Host,
-    LINK, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO, VOLUME_BAR_MS, clean, compose,
+    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEVICES,
+    HOME, Host, INFO, LINK, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO, VOLUME_BAR_MS,
+    clean, compose,
 };
 use crate::AppWindow;
 use crate::keys::key_name;
@@ -184,7 +185,7 @@ impl<H: Host> State<H> {
             // The position is shown afresh, at the new screen's pace.
             self.p_media_second = None;
             // Back from the phones goes where they were opened from.
-            if screen == DEVICES && (self.p_screen == HOME || self.p_screen == SETTINGS) {
+            if screen == DEVICES && (self.p_screen == HOME || self.p_screen == CONNECTION) {
                 self.devices_parent = self.p_screen;
             }
             // The loop runs the camera while its view is up.
@@ -222,6 +223,8 @@ impl<H: Host> State<H> {
                 self.open_access_point();
             } else if screen == LINK {
                 self.open_link();
+            } else if screen == INFO {
+                self.open_info(&bridge);
             } else if screen == UPDATE_PHONE {
                 // The page is served while the phone may come for it.
                 self.host.update_serve();
@@ -233,6 +236,7 @@ impl<H: Host> State<H> {
         self.pump_media(&bridge, screen, now);
         self.pump_access_point(&bridge);
         self.pump_link(&bridge, screen, now);
+        self.pump_info(&bridge, screen, now);
         self.pump_dialog(&bridge);
         // After the dialog: one that just opened or closed is a switch now,
         // seen while the screen under it still has its ring; and it takes

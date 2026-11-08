@@ -107,6 +107,8 @@ struct Shared {
     active: AtomicBool,
     failed: AtomicBool,
     input_count: AtomicU32,
+    /// Bytes of the units taken, wrapping: the video's bitrate.
+    input_bytes: AtomicU32,
     decoded: AtomicU32,
     dropped: AtomicU32,
 }
@@ -159,6 +161,7 @@ impl Decoder {
             active: AtomicBool::new(true),
             failed: AtomicBool::new(false),
             input_count: AtomicU32::new(0),
+            input_bytes: AtomicU32::new(0),
             decoded: AtomicU32::new(0),
             dropped: AtomicU32::new(0),
         });
@@ -235,6 +238,11 @@ impl Decoder {
             superseded: s.counts.superseded.load(Ordering::Relaxed),
             dropped: s.dropped.load(Ordering::Relaxed),
         }
+    }
+
+    /// Bytes of video taken so far, wrapping.
+    pub fn input_bytes(&self) -> u32 {
+        self.shared.input_bytes.load(Ordering::Relaxed)
     }
 
     fn shutdown(&mut self) {
@@ -349,6 +357,9 @@ impl Worker {
             self.reporter.window.depth_max = self.reporter.window.depth_max.max(depth as u32);
             self.reporter.window.input += 1;
             self.shared.input_count.fetch_add(1, Ordering::Relaxed);
+            self.shared
+                .input_bytes
+                .fetch_add(unit.len() as u32, Ordering::Relaxed);
             let gave_up = !self.handle(unit);
             if gave_up {
                 self.shared.failed.store(true, Ordering::Relaxed);

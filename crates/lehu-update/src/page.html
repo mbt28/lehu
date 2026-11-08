@@ -190,7 +190,7 @@ async function follow() {
     else show("meter", false);
     if (s.stage === "checking") say("The head unit is checking the update...");
     else if (s.stage === "ready") {
-      say("Continue on the head unit: Settings > Update > Install." +
+      say("Continue on the head unit: Settings > System > Update > Install." +
         (s.version ? " Version " + s.version + "." : ""), "ok");
       return;
     } else if (s.stage === "failed") return failed(s.message || "The update failed.");

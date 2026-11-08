@@ -16,7 +16,7 @@ use toml::Value;
 
 use super::{
     ACCESS_POINT, AUDIO, Ask, BUFFER_SAVE_MS, BUFFER_STEP_MS, Bridge, DEVICES, FAST_DETENT_MS,
-    FAST_PERCENT, Host, SETTINGS, State, VIDEO,
+    FAST_PERCENT, Host, SETTINGS, SYSTEM, State, VIDEO,
 };
 use crate::host::UpdateStage;
 use crate::keys::OsdKey;
@@ -159,9 +159,10 @@ impl<H: Host> State<H> {
     pub(super) fn pick_screen(&self) -> i32 {
         match self.pick {
             Pick::Device => DEVICES,
-            Pick::Buffer | Pick::Level(_) | Pick::Output => AUDIO,
+            Pick::Volume | Pick::Buffer | Pick::Level(_) | Pick::Output => AUDIO,
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
-            Pick::Fps => VIDEO,
+            Pick::Night | Pick::Fps => VIDEO,
+            Pick::Power => SYSTEM,
             _ => SETTINGS,
         }
     }

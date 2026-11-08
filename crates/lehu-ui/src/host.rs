@@ -297,6 +297,15 @@ pub struct Update {
     pub can_cancel: bool,
 }
 
+/// What the system is, for Settings > System > Info.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemNames {
+    pub kernel: String,
+    /// The image's own name, when LEHU OS does not give its version.
+    pub os: String,
+    pub lehu: String,
+}
+
 /// The program as the screens see it.
 pub trait Host {
     // ── settings ─────────────────────────────────────────────────────────
@@ -488,4 +497,12 @@ pub trait Host {
     fn update_cancel(&mut self);
     /// The last update's outcome was shown.
     fn update_outcome_seen(&mut self);
+
+    // ── info ─────────────────────────────────────────────────────────────
+
+    fn system_names(&self) -> SystemNames;
+    /// The memory and CPU counters, read now.
+    fn system_load(&mut self) -> lehu_core::sysinfo::Load;
+    /// Bytes of the phone's video given to the decoder running, wrapping.
+    fn video_bytes(&self) -> u32;
 }

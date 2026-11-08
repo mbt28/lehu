@@ -65,7 +65,7 @@ The user is in the groups `video`, `input`, `audio`, `i2c`, `plugdev` and `netde
 
 ## Updates (LEHU OS)
 
-Settings › Update needs what LEHU OS provides; without
+Settings › System › Update needs what LEHU OS provides; without
 `/usr/sbin/lehu-os-update` the row says the update is not available.
 
 - `/usr/sbin/lehu-os-update` with `check`, `apply` and `status`, printing

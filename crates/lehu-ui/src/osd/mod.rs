@@ -39,6 +39,7 @@ mod camera;
 mod devices;
 mod dialog;
 mod editor;
+mod info;
 mod keys;
 mod media;
 mod pick;
@@ -87,8 +88,11 @@ const ACCESS_POINT: i32 = 12;
 const LINK: i32 = 13;
 const UPDATE: i32 = 14;
 const UPDATE_PHONE: i32 = 15;
+const CONNECTION: i32 = 16;
+const SYSTEM: i32 = 17;
+const INFO: i32 = 18;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 16;
+const SCREENS: usize = 19;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -402,6 +406,9 @@ struct State<H> {
     ap_armed: bool,
     /// The Link speed page's next sample, and the counters of the last.
     link_due: u64,
+    info_due: u64,
+    info_prev: Option<info::Sample>,
+    p_info: [Last; 5],
     link_prev: Option<(u64, u64, u64)>,
     p_link: [Last; 6],
 
@@ -471,7 +478,7 @@ impl<H: Host> State<H> {
             switched: false,
             ring_memory: Default::default(),
             ring_target: None,
-            devices_parent: SETTINGS,
+            devices_parent: CONNECTION,
             pick: Pick::None,
             pick_choice: 0,
             pick_last_ms: 0,
@@ -549,6 +556,9 @@ impl<H: Host> State<H> {
             ap_pending: None,
             ap_armed: false,
             link_due: 0,
+            info_due: 0,
+            info_prev: None,
+            p_info: Default::default(),
             link_prev: None,
             p_link: Default::default(),
             update_seen: false,
@@ -590,6 +600,8 @@ impl<H: Host> State<H> {
             HOME => None,
             BT_DEVICE => Some(BLUETOOTH),
             BLUETOOTH | ACCESS_POINT | LINK => Some(WIRELESS),
+            WIRELESS => Some(CONNECTION),
+            UPDATE | INFO => Some(SYSTEM),
             UPDATE_PHONE => Some(UPDATE),
             CAMERA => Some(self.cam_return),
             DEVICES => Some(self.devices_parent),
@@ -1174,6 +1186,7 @@ impl<H: Host> Osd<H> {
             (st.nav_until > now).then_some(st.nav_until),
             st.media_due(now),
             st.link_due(),
+            st.info_due(),
             // The clock's next minute, while it shows the time.
             matches!(st.p_clock, Some(Some(_))).then_some(st.clock_due),
         ]

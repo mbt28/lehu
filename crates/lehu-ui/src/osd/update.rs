@@ -1,4 +1,4 @@
-//! Settings > Update (screen 14) and "Get from phone" (screen 15).
+//! Settings > System > Update (screen 14) and "Get from phone" (screen 15).
 //!
 //! The program has the update (see [`crate::host::Update`]); this shows it.
 //! "Get from phone" asks the program to serve the page and shows two QR
@@ -198,6 +198,14 @@ impl<H: Host> State<H> {
             }
         };
         bridge.set_update_label(clean(&mut self.scratch, label));
+        // The System row says so only when there is something going on.
+        let attention = if u.available && !matches!(stage, UpdateStage::Idle | UpdateStage::Failed)
+        {
+            label
+        } else {
+            ""
+        };
+        bridge.set_update_attention(clean(&mut self.scratch, attention));
         let version = if u.version.is_empty() {
             "Unknown"
         } else {
@@ -273,7 +281,7 @@ impl<H: Host> State<H> {
             }
             UpdateOutcome::Interrupted => {
                 hint.push_str(
-                    "It was not installed. It can be installed again from Settings > Update.",
+                    "It was not installed. It can be installed again from Settings > System > Update.",
                 );
                 (2, "The update was interrupted", "Update")
             }

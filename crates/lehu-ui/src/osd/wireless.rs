@@ -45,7 +45,7 @@ fn applied_label(applied: Applied) -> &'static str {
 }
 
 /// kbit/s as Mbit/s: one decimal under 10.
-fn mbit(out: &mut String, kbps: u64) {
+pub(super) fn mbit(out: &mut String, kbps: u64) {
     use std::fmt::Write as _;
     if kbps >= 10_000 {
         let _ = write!(out, "{}", kbps / 1000);

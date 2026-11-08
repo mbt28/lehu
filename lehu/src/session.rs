@@ -600,6 +600,11 @@ impl Driver {
         self.active.is_some() && self.phase.alive()
     }
 
+    /// Bytes of the phone's video the decoder running has taken, wrapping.
+    pub fn video_bytes(&self) -> u32 {
+        self.decoder.as_ref().map_or(0, Decoder::input_bytes)
+    }
+
     pub fn kind(&self) -> Option<Kind> {
         self.active.as_ref().map(|s| s.kind())
     }
