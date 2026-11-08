@@ -327,6 +327,7 @@ SRC_URI += " \
     crate://crates.io/prost-derive/0.14.4 \
     crate://crates.io/pulldown-cmark/0.13.5 \
     crate://crates.io/pxfm/0.1.30 \
+    crate://crates.io/qrcodegen/1.8.0 \
     crate://crates.io/quick-error/2.0.1 \
     crate://crates.io/quote/1.0.47 \
     crate://crates.io/r-efi/5.3.0 \
@@ -868,6 +869,7 @@ SRC_URI[prost-0.14.4.sha256sum] = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b
 SRC_URI[prost-derive-0.14.4.sha256sum] = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 SRC_URI[pulldown-cmark-0.13.5.sha256sum] = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 SRC_URI[pxfm-0.1.30.sha256sum] = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+SRC_URI[qrcodegen-1.8.0.sha256sum] = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 SRC_URI[quick-error-2.0.1.sha256sum] = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 SRC_URI[quote-1.0.47.sha256sum] = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 SRC_URI[r-efi-5.3.0.sha256sum] = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"

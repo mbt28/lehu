@@ -9,7 +9,7 @@ use toml::Value;
 
 use crate::host::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt,
+    NavCard, Power, Prompt, Update,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +40,10 @@ pub enum Call {
     DeviceStop(String),
     DeviceForget(String),
     MediaKey(MediaKey),
+    UpdateServe,
+    UpdateScreens(bool),
+    UpdateInstall,
+    UpdateOutcomeSeen,
 }
 
 pub struct TestHost {
@@ -97,6 +101,9 @@ pub struct TestHost {
     pub ap_applied: Applied,
     pub outputs: Vec<AudioOutput>,
     pub link: Link,
+
+    pub update: Update,
+    pub update_gen: u32,
 }
 
 impl Default for TestHost {
@@ -161,6 +168,13 @@ impl TestHost {
             ap_applied: Applied::Restarted,
             outputs: Vec::new(),
             link: Link::default(),
+            update: Update {
+                shown: true,
+                available: true,
+                version: "22.0.1-1".into(),
+                ..Update::default()
+            },
+            update_gen: 1,
         }
     }
 
@@ -509,5 +523,31 @@ impl Host for TestHost {
 
     fn nav_generation(&self) -> u32 {
         self.nav_gen
+    }
+
+    fn update(&self) -> &Update {
+        &self.update
+    }
+
+    fn update_generation(&self) -> u32 {
+        self.update_gen
+    }
+
+    fn update_serve(&mut self) {
+        self.calls.push(Call::UpdateServe);
+    }
+
+    fn update_screens(&mut self, visible: bool) {
+        self.calls.push(Call::UpdateScreens(visible));
+    }
+
+    fn update_install(&mut self) {
+        self.calls.push(Call::UpdateInstall);
+    }
+
+    fn update_outcome_seen(&mut self) {
+        self.calls.push(Call::UpdateOutcomeSeen);
+        self.update.outcome = crate::host::UpdateOutcome::None;
+        self.update_gen += 1;
     }
 }

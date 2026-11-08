@@ -1,5 +1,5 @@
 //! What the screens see of the program: the settings and their persistence,
-//! the volume, the session, the camera, Bluetooth, power.
+//! the volume, the session, the camera, Bluetooth, power, the update.
 
 use std::sync::Arc;
 
@@ -10,8 +10,9 @@ use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt,
+    NavCard, Power, Prompt, Update, UpdateOutcome, UpdateStage,
 };
+use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
 use serde::Serialize;
 use toml::{Table, Value};
@@ -160,6 +161,15 @@ pub struct AppHost {
     link: Option<LinkProbe>,
     /// The album art, decoded, until the screens take it.
     art: Option<Art>,
+    /// Settings > Update, when an update server is set; the view the
+    /// screens see, copied when the updater's generation moves, and our
+    /// own generation for them.
+    updater: Option<Updater>,
+    update: Update,
+    update_seen: Option<u32>,
+    update_gen: u32,
+    /// Install was confirmed: the loop ends the phone's session first.
+    update_install: bool,
 }
 
 impl AppHost {
@@ -170,6 +180,7 @@ impl AppHost {
         display: Option<Arc<Display>>,
         audio: Arc<Audio>,
         bt: Option<Arc<lehu_bt::Manager>>,
+        updater: Option<Updater>,
     ) -> Self {
         // A camera needs the video plane; the probe opens the device for a
         // moment, as FastCarPlay did, so the Video screen knows its rows.
@@ -217,6 +228,14 @@ impl AppHost {
             outputs: Vec::new(),
             link: None,
             art: None,
+            update: Update {
+                shown: updater.is_some(),
+                ..Update::default()
+            },
+            updater,
+            update_seen: None,
+            update_gen: 0,
+            update_install: false,
         }
     }
 
@@ -317,6 +336,67 @@ impl AppHost {
         v.scan_allowed = snap.scan_allowed;
         v.phone_connected = snap.phone_connected;
         v.prompt = bt_prompt(&snap.prompt);
+    }
+
+    /// The updater's view, copied when it changed: a few strings, a few
+    /// times a second at most while an update arrives. Before the screens
+    /// tick: the updater's wake is the only one there may be.
+    pub fn sync_update(&mut self) {
+        let Some(updater) = &self.updater else { return };
+        let generation = updater.generation();
+        if self.update_seen == Some(generation) {
+            return;
+        }
+        self.update_seen = Some(generation);
+        self.update_gen = self.update_gen.wrapping_add(1);
+        let v = updater.view();
+        let u = &mut self.update;
+        u.available = v.available;
+        u.version = v.booted_version;
+        u.stage = match v.stage {
+            lehu_update::Stage::Idle => UpdateStage::Idle,
+            lehu_update::Stage::Receiving => UpdateStage::Receiving,
+            lehu_update::Stage::Checking => UpdateStage::Checking,
+            lehu_update::Stage::Ready => UpdateStage::Ready,
+            lehu_update::Stage::Failed => UpdateStage::Failed,
+            lehu_update::Stage::Installing => UpdateStage::Installing,
+            lehu_update::Stage::Restarting => UpdateStage::Restarting,
+        };
+        u.received = v.received;
+        u.size = v.size;
+        u.new_version = v.version;
+        u.notes = v.notes;
+        u.size_kb = v.size_kb;
+        u.restart = v.mode == lehu_update::Mode::UpdateBoot;
+        u.percent = v.percent;
+        u.message = v.message;
+        u.serving = v.serving;
+        u.url = v.url;
+        u.serve_error = v.serve_error;
+        u.outcome = match v.outcome {
+            None => UpdateOutcome::None,
+            Some(lehu_update::Outcome::Updated(version)) => UpdateOutcome::Updated(version),
+            Some(lehu_update::Outcome::Failed(why)) => UpdateOutcome::Failed(why),
+            Some(lehu_update::Outcome::Interrupted) => UpdateOutcome::Interrupted,
+        };
+    }
+
+    /// Install was confirmed since the last call: the loop ends the
+    /// phone's session, then calls `start_install`.
+    pub fn take_update_install(&mut self) -> bool {
+        std::mem::take(&mut self.update_install)
+    }
+
+    /// The installer starts; false when there was nothing to install.
+    pub fn start_install(&mut self) -> bool {
+        let started = self.updater.as_ref().is_some_and(Updater::install);
+        self.sync_update();
+        started
+    }
+
+    /// An install runs, or the head unit is about to restart.
+    pub fn update_busy(&self) -> bool {
+        self.updater.as_ref().is_some_and(Updater::busy)
     }
 
     /// The registry's generation the list was copied at.
@@ -838,5 +918,41 @@ impl Host for AppHost {
 
     fn nav_generation(&self) -> u32 {
         self.nav_gen
+    }
+
+    fn update(&self) -> &Update {
+        &self.update
+    }
+
+    fn update_generation(&self) -> u32 {
+        self.update_gen
+    }
+
+    fn update_serve(&mut self) {
+        let Some(updater) = &self.updater else { return };
+        // The access point as hostapd runs it: what the phone joins, and
+        // the address the page is served on.
+        let ap = AccessPoint::read(&self.settings.wifi);
+        self.update.ssid = ap.ssid;
+        self.update.passphrase = ap.passphrase;
+        updater.serve(ap.ip.parse().ok());
+        self.sync_update();
+    }
+
+    fn update_screens(&mut self, visible: bool) {
+        if let Some(updater) = &self.updater {
+            updater.screens(visible);
+        }
+    }
+
+    fn update_install(&mut self) {
+        self.update_install = true;
+    }
+
+    fn update_outcome_seen(&mut self) {
+        if let Some(updater) = &self.updater {
+            updater.outcome_seen();
+        }
+        self.sync_update();
     }
 }

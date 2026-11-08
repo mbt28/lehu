@@ -2174,8 +2174,8 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
 fn a_dialog_closing_puts_the_ring_back_on_its_row() {
     let mut osd = osd(TestHost::new());
     goto(&mut osd, SETTINGS);
-    // Back, Volume, Night, Phones, Audio, Wireless, Video, Power.
-    for _ in 0..8 {
+    // Back, Volume, Night, Phones, Audio, Wireless, Video, Update, Power.
+    for _ in 0..9 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "power");
@@ -2364,4 +2364,181 @@ fn the_clock_is_written_only_when_its_minute_changes() {
     advance(&mut osd, 10_000);
     tick(&mut osd);
     assert_eq!(prop!(osd, get_clock), "07:05");
+}
+
+// ── Settings > Update ────────────────────────────────────────────────────
+
+/// A property as it is (`prop!` gives text).
+macro_rules! val {
+    ($osd:expr, $get:ident) => {
+        $osd.ui.global::<Bridge<'_>>().$get()
+    };
+}
+
+fn set_update(osd: &mut Osd<TestHost>, f: impl FnOnce(&mut crate::host::Update)) {
+    let host = osd.host_mut();
+    f(&mut host.update);
+    host.update_gen += 1;
+    tick(osd);
+}
+
+fn qr_side(image: slint::Image) -> u32 {
+    image.size().width
+}
+
+#[test]
+fn the_update_row_shows_the_version_or_says_it_cannot() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    assert!(val!(osd, get_update_shown));
+    assert_eq!(prop!(osd, get_update_label), "22.0.1-1");
+    set_update(&mut osd, |u| u.stage = UpdateStage::Ready);
+    assert_eq!(prop!(osd, get_update_label), "Update ready");
+    // Another system: the row is there and says so.
+    set_update(&mut osd, |u| u.available = false);
+    assert_eq!(prop!(osd, get_update_label), "Not available on this system");
+    assert!(!val!(osd, get_update_available));
+    // No update server: no row.
+    set_update(&mut osd, |u| u.shown = false);
+    assert!(!val!(osd, get_update_shown));
+}
+
+#[test]
+fn get_from_phone_serves_the_page_and_shows_its_codes() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    assert!(osd.host().has(&Call::UpdateScreens(true)));
+    assert!(!osd.host().has(&Call::UpdateServe));
+    goto(&mut osd, UPDATE_PHONE);
+    assert_eq!(osd.host().count(&Call::UpdateServe), 1);
+    // Not served yet: no codes.
+    assert_eq!(qr_side(val!(osd, get_update_qr_join)), 0);
+    set_update(&mut osd, |u| {
+        u.serving = true;
+        u.ssid = "LEHU".into();
+        u.passphrase = "lehu1234".into();
+        u.url = "http://192.168.9.1:8080/".into();
+    });
+    let side = qr_side(val!(osd, get_update_qr_join));
+    assert!((150..=update::QR_MAX).contains(&side), "{side}");
+    assert!(qr_side(val!(osd, get_update_qr_page)) > 0);
+    assert_eq!(prop!(osd, get_update_url), "http://192.168.9.1:8080/");
+    // The transfer, as it arrives.
+    set_update(&mut osd, |u| {
+        u.stage = UpdateStage::Receiving;
+        u.received = 12 << 20;
+        u.size = 37 << 20;
+    });
+    assert_eq!(prop!(osd, get_update_transfer), "12 MB of 37 MB");
+    assert!((val!(osd, get_update_progress) - 12.0 / 37.0).abs() < 1e-3);
+    // Back: the codes go, the page is told.
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), UPDATE);
+    assert_eq!(qr_side(val!(osd, get_update_qr_join)), 0);
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), SETTINGS);
+    assert!(osd.host().has(&Call::UpdateScreens(false)));
+}
+
+#[test]
+fn a_checked_update_installs_after_asking() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    goto(&mut osd, UPDATE_PHONE);
+    set_update(&mut osd, |u| {
+        u.stage = UpdateStage::Ready;
+        u.new_version = "22.0.1-2".into();
+        u.size_kb = 40;
+        u.restart = true;
+    });
+    // Checked while the phone's view shows: on to Install.
+    assert_eq!(screen(&osd), UPDATE);
+    assert_eq!(prop!(osd, get_update_size), "40 KB");
+    assert_eq!(val!(osd, get_update_stage), 3);
+    // Back, Get from phone, Install.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "install");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(prompt_kind(&osd), 2);
+    assert_eq!(prop!(osd, get_prompt_title), "Install the update?");
+    assert!(prop!(osd, get_prompt_hint).contains("4 minutes"));
+    // Asked on Cancel: one press does nothing.
+    assert_eq!(prompt_focus(&osd), 1);
+    press(&mut osd, OsdKey::Ok);
+    assert!(!osd.host().has(&Call::UpdateInstall));
+    assert_eq!(prompt_kind(&osd), 0);
+    // Again, and the accept.
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Left);
+    assert_eq!(prompt_focus(&osd), 1);
+    press(&mut osd, OsdKey::Right);
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::UpdateInstall));
+    // Installing: the progress, the rows gone.
+    set_update(&mut osd, |u| {
+        u.stage = UpdateStage::Installing;
+        u.percent = 40;
+        u.message = "Receiving the update: 11 of 27 parts".into();
+    });
+    assert_eq!(val!(osd, get_update_stage), 5);
+    assert!((val!(osd, get_update_progress) - 0.4).abs() < 1e-6);
+    assert_eq!(prop!(osd, get_update_label), "Installing");
+}
+
+#[test]
+fn on_the_knob_a_checked_update_lands_on_install() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    goto(&mut osd, UPDATE_PHONE);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "back");
+    set_update(&mut osd, |u| u.stage = UpdateStage::Ready);
+    assert_eq!(screen(&osd), UPDATE);
+    assert_eq!(ring(&osd), "install");
+    // Installing: the row goes, the ring back on the first stop.
+    set_update(&mut osd, |u| u.stage = UpdateStage::Installing);
+    tick(&mut osd);
+    assert_eq!(ring(&osd), "back");
+}
+
+#[test]
+fn the_last_update_is_said_once() {
+    use crate::host::UpdateOutcome;
+    let mut host = TestHost::new();
+    host.update.outcome = UpdateOutcome::Updated("22.0.1-2".into());
+    let mut osd = osd(host);
+    assert_eq!(prompt_kind(&osd), 3);
+    assert_eq!(prop!(osd, get_prompt_title), "Updated");
+    assert!(prop!(osd, get_prompt_hint).contains("22.0.1-2"));
+    // Behind the phone's video it waits.
+    osd.hidden();
+    tick(&mut osd);
+    assert_eq!(prompt_kind(&osd), 3);
+    // Enter closes a notice at once.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(prompt_kind(&osd), 0);
+    assert_eq!(osd.host().count(&Call::UpdateOutcomeSeen), 1);
+    tick(&mut osd);
+    assert_eq!(prompt_kind(&osd), 0);
+
+    // Interrupted: its accept opens the Update page.
+    let mut host = TestHost::new();
+    host.update.outcome = UpdateOutcome::Interrupted;
+    let mut osd = super::tests::osd(host);
+    assert_eq!(prompt_kind(&osd), 2);
+    assert_eq!(prop!(osd, get_prompt_accept_label), "Update");
+    osd.ui.global::<Bridge<'_>>().invoke_prompt_accept();
+    tick(&mut osd);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), UPDATE);
+    assert!(osd.host().has(&Call::UpdateOutcomeSeen));
 }

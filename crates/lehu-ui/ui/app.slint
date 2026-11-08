@@ -163,8 +163,34 @@ export global Bridge {
     in property <string> nav-eta;             // "14:32", "12 min"
     in property <string> nav-eta-note;        // "arrival", "to go"
 
+    // Settings > Update: LEHU OS updates, carried by the phone's browser.
+    // The row shows when an update server is set; on a system without the
+    // installer it is there but does nothing. Text composed in Rust.
+    in property <bool> update-shown;
+    in property <bool> update-available;
+    in property <string> update-label;        // the Settings row: the version, "Update ready"
+    in property <string> update-version;      // the version running
+    // 0 nothing, 1 receiving, 2 checking, 3 ready to install, 4 failed,
+    // 5 installing, 6 restarting.
+    in property <int> update-stage;
+    in property <string> update-transfer;     // "12 of 37 MB"; empty: nothing received
+    in property <float> update-progress;      // the transfer's or the install's share, 0..1
+    in property <string> update-new-version;  // the update's version
+    in property <string> update-notes;
+    in property <string> update-size;         // "37 MB"
+    in property <string> update-mode;         // "Installs in place", "Installs with a restart..."
+    in property <string> update-message;      // why it failed, or the install's step
+    // "Get from phone": the access point to join and the page to open, as
+    // QR codes drawn in Rust at their shown size, and as text.
+    in property <string> update-ssid;
+    in property <string> update-pass;
+    in property <string> update-url;
+    in property <string> update-serve-error;
+    in property <image> update-qr-join;
+    in property <image> update-qr-page;
+
     // A dialog over everything: 0 none, 1 a code to type on the device
-    // (Cancel only), 2 a yes/no question.
+    // (Cancel only), 2 a yes/no question, 3 a notice (OK only).
     in property <int> prompt-kind;
     in property <string> prompt-title;
     in property <string> prompt-code;
@@ -182,7 +208,7 @@ export global Bridge {
     // only while a Bluetooth screen is up) and drive it (Back, Home).
     // 0 home, 1 settings, 3 wireless, 4 bluetooth, 5 bt device,
     // 6 audio, 8 video, 9 camera view, 10 phones, 11 media,
-    // 12 access point, 13 link speed
+    // 12 access point, 13 link speed, 14 update, 15 update from the phone
     in-out property <int> screen;
 
     // UI -> app
@@ -210,6 +236,7 @@ export global Bridge {
     callback bt-forget(string);
     callback device-press(string);            // Enter or a tap on a phone's row
     callback media-key(int);                  // 0 previous, 1 play / pause, 2 next
+    callback update-install();                // the Install row: asks first
     callback prompt-accept();
     callback prompt-cancel();
 }
@@ -412,6 +439,7 @@ global Icons {
         if (kind == "up") { return "M12 20 L12 4 M6 10 L12 4 L18 10"; }
         if (kind == "usb") { return "M12 4 L12 19 M12 15 L7 11 L7 9 M12 12 L17 9 L17 7.5"; }
         if (kind == "bt") { return "M7 7 L17 17 L12 22 L12 2 L17 7 L7 17"; }
+        if (kind == "update") { return "M12 3 L12 15 M7 10 L12 15 L17 10 M4 16 L4 21 L20 21 L20 16"; }
         // The turn arrows, 48 units: the shaft as a line.
         if (kind == "nav1") { return "M24 44 L24 16"; }
         if (kind == "nav2") { return "M30 44 L30 30 L18 18"; }
@@ -1492,6 +1520,20 @@ component ScreenSettings inherits ListPage {
         value: Bridge.fps-label;
         clicked => { Bridge.screen = 8; }
     }
+    // LEHU OS updates, from the phone. Without the installer (another
+    // system) the row only says so.
+    if Bridge.update-shown: NavRow {
+        ring-key: "update";
+        icon: "update";
+        label: "Update";
+        value: Bridge.update-label;
+        more: Bridge.update-available;
+        clicked => {
+            if (Bridge.update-available) {
+                Bridge.screen = 14;
+            }
+        }
+    }
     // Each asks first, in the dialog; the app then closes down cleanly and
     // the system's own reboot / poweroff takes over. It opens on Cancel.
     ChoiceRow {
@@ -1844,6 +1886,165 @@ component ScreenDevices inherits ListPage {
     }
 }
 
+// A bar of how far something is, with a line about it.
+component ProgressLine inherits VerticalLayout {
+    in property <string> text;
+    in property <float> level: -1;            // below 0: no bar
+    in property <color> text-color: Theme.text;
+    spacing: 8px;
+    padding-left: 24px;
+    padding-right: 24px;
+    padding-top: 8px;
+    Text {
+        text: root.text;
+        color: root.text-color;
+        font-size: 20px;
+        wrap: word-wrap;
+    }
+    if root.level >= 0: Rectangle {
+        height: 12px;
+        border-radius: 6px;
+        background: Theme.surface2;
+        Rectangle {
+            x: 0;
+            width: parent.width * Math.max(0, Math.min(1, root.level));
+            border-radius: 6px;
+            background: Theme.accent;
+        }
+    }
+}
+
+// Settings > Update: the version running; the update brought from the
+// phone ("Get from phone"); once checked, what it is and Install, which
+// asks first; while it installs, how far it is. The head unit restarts by
+// itself at the end.
+component ScreenUpdate inherits ListPage {
+    title: "Update";
+    InfoLine { icon: "tag"; label: "Version"; value: Bridge.update-version; }
+    if Bridge.update-stage < 5: NavRow {
+        ring-key: "get";
+        icon: "phone";
+        label: "Get from phone";
+        value: Bridge.update-stage == 1 ? Bridge.update-transfer : "";
+        clicked => { Bridge.screen = 15; }
+    }
+    if Bridge.update-stage == 2: ProgressLine { text: "Checking the update..."; }
+    if Bridge.update-stage == 4: ProgressLine {
+        text: Bridge.update-message;
+        text-color: Theme.danger;
+    }
+    if Bridge.update-stage == 3: InfoLine {
+        icon: "update";
+        label: "Version " + Bridge.update-new-version;
+        value: Bridge.update-size;
+    }
+    if Bridge.update-stage == 3 && Bridge.update-notes != "": HorizontalLayout {
+        padding-left: 64px;
+        padding-right: 24px;
+        Caption { text: Bridge.update-notes; }
+    }
+    if Bridge.update-stage == 3: HorizontalLayout {
+        padding-left: 64px;
+        padding-right: 24px;
+        Caption { text: Bridge.update-mode; }
+    }
+    if Bridge.update-stage == 3: NavRow {
+        ring-key: "install";
+        icon: "update";
+        label: "Install";
+        more: false;
+        clicked => { Bridge.update-install(); }
+    }
+    if Bridge.update-stage >= 5: ProgressLine {
+        text: Bridge.update-message;
+        level: Bridge.update-stage == 5 ? Bridge.update-progress : -1;
+    }
+}
+
+// One step of getting the update: what to do, its QR code (white, drawn
+// at its shown size in Rust) and the same as text.
+component QrStep inherits VerticalLayout {
+    in property <string> step;
+    in property <image> code;
+    in property <string> line1;
+    in property <string> line2;
+    horizontal-stretch: 1;
+    alignment: start;
+    spacing: 8px;
+    Text {
+        text: root.step;
+        color: Theme.text;
+        font-size: 20px;
+        horizontal-alignment: center;
+    }
+    HorizontalLayout {
+        alignment: center;
+        Image { source: root.code; }
+    }
+    Text {
+        text: root.line1;
+        color: Theme.text;
+        font-size: 16px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+    if root.line2 != "": Text {
+        text: root.line2;
+        color: Theme.dim;
+        font-size: 16px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
+// "Get from phone": the phone joins the head unit's Wi-Fi, opens the page,
+// and its browser brings the update; the line at the foot follows it.
+component ScreenUpdatePhone inherits Rectangle {
+    background: Theme.bg;
+    VerticalLayout {
+        TopBar { title: "Get from phone"; note: "Scan with the phone's camera"; }
+        HorizontalLayout {
+            padding: 16px;
+            spacing: 16px;
+            vertical-stretch: 1;
+            QrStep {
+                step: "1  Join the Wi-Fi";
+                code: Bridge.update-qr-join;
+                line1: Bridge.update-ssid;
+                line2: Bridge.update-pass != "" ? "Password: " + Bridge.update-pass : "";
+            }
+            QrStep {
+                step: "2  Open the page";
+                code: Bridge.update-qr-page;
+                line1: Bridge.update-url;
+                line2: "Then tap Download on the phone";
+            }
+        }
+        VerticalLayout {
+            padding-bottom: 16px;
+            if Bridge.update-serve-error != "": ProgressLine {
+                text: Bridge.update-serve-error;
+                text-color: Theme.danger;
+            }
+            if Bridge.update-serve-error == "" && Bridge.update-stage == 0: ProgressLine {
+                text: Bridge.update-transfer != "" ? "Paused at " + Bridge.update-transfer : "Waiting for the phone";
+                text-color: Theme.dim;
+            }
+            if Bridge.update-serve-error == "" && Bridge.update-stage == 1: ProgressLine {
+                text: "Receiving " + Bridge.update-transfer;
+                level: Bridge.update-progress;
+            }
+            if Bridge.update-serve-error == "" && Bridge.update-stage == 2: ProgressLine {
+                text: "Checking the update...";
+            }
+            if Bridge.update-serve-error == "" && Bridge.update-stage == 4: ProgressLine {
+                text: Bridge.update-message;
+                text-color: Theme.danger;
+            }
+        }
+    }
+}
+
 // ── full-screen text editor with an on-screen keyboard ──────────────────
 component OskKey inherits Rectangle {
     in property <string> label;
@@ -2123,7 +2324,7 @@ component Prompt inherits Rectangle {
                 height: Theme.row-h;
                 spacing: 12px;
                 DialogKey {
-                    label: "Cancel";
+                    label: Bridge.prompt-kind == 3 ? "OK" : "Cancel";
                     focused: Bridge.prompt-focus == 1;
                     pressed => { Bridge.prompt-cancel(); }
                 }
@@ -2165,6 +2366,8 @@ export component AppWindow inherits Window {
     if Bridge.screen == 11 && !root.modal: ScreenMedia    { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 12 && !root.modal: ScreenAccessPoint { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 13 && !root.modal: ScreenLink     { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 14 && !root.modal: ScreenUpdate   { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 15 && !root.modal: ScreenUpdatePhone { y: root.top; height: root.height - root.top; }
     if Bridge.nav-card: NavCardView {}
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}

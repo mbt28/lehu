@@ -259,6 +259,17 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             }
         }
     };
+    // Settings > Update, when an update server is set: on LEHU OS its
+    // installer's status is read at once, on a thread of its own.
+    let updater = (!settings.update.manifest_url.is_empty()).then(|| {
+        let wake = Arc::clone(&wake);
+        let cfg = lehu_update::Config::system(
+            &state_dir,
+            &settings.update.manifest_url,
+            u16::try_from(settings.update.port).unwrap_or(8080),
+        );
+        lehu_update::Updater::new(cfg, move || wake.wake())
+    });
     let host = AppHost::new(
         settings,
         user,
@@ -266,6 +277,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         display.clone(),
         Arc::clone(&audio),
         bt.clone(),
+        updater,
     );
     let mut screens = match &display {
         Some(d) if d.has_ui() => match Osd::new(host, width, height) {
@@ -333,6 +345,9 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     // The settings' generation the program last followed.
     let mut settings_seen = 0;
     let mut mem_watch = crate::mem::Watch::new();
+    // An update installs: the phone's sessions stay off until it failed (on
+    // success the installer restarts the head unit).
+    let mut installing = false;
 
     log::info!("running");
     let mut exit = Exit::Done(ExitCode::SUCCESS);
@@ -441,6 +456,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         }
         if let Some((osd, _)) = &mut screens {
             let host = osd.host_mut();
+            host.sync_update();
             if host.take_resume() {
                 driver.resume();
             }
@@ -474,6 +490,19 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
                     lehu_ui::MediaKey::PlayPause => lehu_input::PhoneButton::PlayPause,
                     lehu_ui::MediaKey::Next => lehu_input::PhoneButton::NextTrack,
                 });
+            }
+            if host.take_update_install() {
+                log::info!("update: the phone's session ends for the install");
+                driver.hold_for_update();
+                installing = host.start_install();
+                if !installing {
+                    driver.release_after_update();
+                }
+            }
+            if installing && !host.update_busy() {
+                log::info!("update: the install did not go through; the phones may come back");
+                installing = false;
+                driver.release_after_update();
             }
             match host.take_device_action() {
                 Some(crate::host::DeviceAction::Connect(id)) => driver.connect_device(&id),

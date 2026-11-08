@@ -22,6 +22,7 @@ lehu-ui = { path = "../crates/lehu-ui" }
 lehu-usb = { path = "../crates/lehu-usb" }
 lehu-video = { path = "../crates/lehu-video" }
 lehu-wifi = { path = "../crates/lehu-wifi" }
+lehu-update = { path = "../crates/lehu-update" }
 serde = "1"
 toml = "0.9"
 log = "0.4"

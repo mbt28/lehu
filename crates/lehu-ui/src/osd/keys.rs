@@ -97,7 +97,10 @@ impl<H: Host> State<H> {
                     focus - 1
                 }),
                 OsdKey::Ok => {
-                    if focus < 0 && self.dialog_local {
+                    if kind == 3 {
+                        // A notice: OK is its only button.
+                        bridge.invoke_prompt_cancel();
+                    } else if focus < 0 && self.dialog_local {
                         bridge.set_prompt_focus(1);
                     } else if focus == 1 {
                         bridge.invoke_prompt_cancel();

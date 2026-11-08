@@ -231,6 +231,70 @@ pub struct AudioOutput {
     pub active: bool,
 }
 
+/// Where a LEHU OS update is (Settings > Update).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UpdateStage {
+    /// Nothing, or part of one waiting for the phone to send the rest.
+    #[default]
+    Idle,
+    Receiving,
+    Checking,
+    /// Checked, to install.
+    Ready,
+    Failed,
+    Installing,
+    /// The head unit restarts by itself.
+    Restarting,
+}
+
+/// How the last update went, said once after the restart.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    #[default]
+    None,
+    /// It runs now: its version.
+    Updated(String),
+    /// Why it did not go in.
+    Failed(String),
+    /// Cut off: it can be installed again.
+    Interrupted,
+}
+
+/// Settings > Update as the program has it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Update {
+    /// An update server is set: the Settings row is there.
+    pub shown: bool,
+    /// This system installs updates (its installer is there).
+    pub available: bool,
+    /// The version running; empty while not known.
+    pub version: String,
+    pub stage: UpdateStage,
+    /// Bytes of the update received, of its size.
+    pub received: u64,
+    pub size: u64,
+    /// Once checked: its version, the update server's line about it, its
+    /// size unpacked.
+    pub new_version: String,
+    pub notes: String,
+    pub size_kb: u64,
+    /// It installs through a restart into the update boot (minutes, the
+    /// power must stay on), not beside the running system.
+    pub restart: bool,
+    /// While installing.
+    pub percent: u32,
+    /// Why it failed, or the install's step.
+    pub message: String,
+    /// The page for the phone, while it is served: the access point to
+    /// join and its address; or why it cannot be.
+    pub serving: bool,
+    pub ssid: String,
+    pub passphrase: String,
+    pub url: String,
+    pub serve_error: String,
+    pub outcome: UpdateOutcome,
+}
+
 /// The program as the screens see it.
 pub trait Host {
     // ── settings ─────────────────────────────────────────────────────────
@@ -403,4 +467,21 @@ pub trait Host {
     fn nav_card(&self) -> &NavCard;
     /// Changes with every guidance update: each one keeps the card up.
     fn nav_generation(&self) -> u32;
+
+    // ── update ───────────────────────────────────────────────────────────
+
+    /// Settings > Update (see [`Update`]).
+    fn update(&self) -> &Update;
+    /// Changes whenever the above does.
+    fn update_generation(&self) -> u32;
+    /// "Get from phone" opened: serve the page on the access point.
+    fn update_serve(&mut self);
+    /// The Update pages show, or were left (or the phone's video covers
+    /// them): the page stops a while after.
+    fn update_screens(&mut self, visible: bool);
+    /// Install the checked update, once asked: the phone's session ends
+    /// first, then the installer runs and restarts the head unit.
+    fn update_install(&mut self);
+    /// The last update's outcome was shown.
+    fn update_outcome_seen(&mut self);
 }

@@ -48,6 +48,7 @@ mod rows;
 mod shots;
 #[cfg(test)]
 mod tests;
+mod update;
 mod wireless;
 
 use camera::CamRef;
@@ -84,8 +85,10 @@ const DEVICES: i32 = 10;
 const MEDIA: i32 = 11;
 const ACCESS_POINT: i32 = 12;
 const LINK: i32 = 13;
+const UPDATE: i32 = 14;
+const UPDATE_PHONE: i32 = 15;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 14;
+const SCREENS: usize = 16;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -140,6 +143,7 @@ enum Action {
     BtForget(SharedString),
     DevicePress(SharedString),
     MediaKey(i32),
+    UpdateInstall,
     PromptAccept,
     PromptCancel,
 }
@@ -400,6 +404,22 @@ struct State<H> {
     link_prev: Option<(u64, u64, u64)>,
     p_link: [Last; 6],
 
+    // ── Settings > Update ───────────────────────────────────────────────
+    update_seen: bool,
+    p_update_gen: u32,
+    p_update_stage: crate::host::UpdateStage,
+    /// The program was last told the Update pages show (or not).
+    p_update_tree: Option<bool>,
+    /// What the QR codes on show say.
+    p_qr_join: Last,
+    p_qr_page: Last,
+    /// The last update's outcome was put up (once per run).
+    update_asked: bool,
+    /// The outcome's answer opens the Update page, next pump.
+    update_goto: bool,
+    /// The outcome dialog's text.
+    update_hint: String,
+
     // ── scratch ─────────────────────────────────────────────────────────
     /// Text being composed or sanitised for a property.
     scratch: String,
@@ -530,6 +550,15 @@ impl<H: Host> State<H> {
             link_due: 0,
             link_prev: None,
             p_link: Default::default(),
+            update_seen: false,
+            p_update_gen: 0,
+            p_update_stage: crate::host::UpdateStage::Idle,
+            p_update_tree: None,
+            p_qr_join: Last::default(),
+            p_qr_page: Last::default(),
+            update_asked: false,
+            update_goto: false,
+            update_hint: String::new(),
             scratch: String::with_capacity(128),
             why: String::new(),
         }
@@ -560,6 +589,7 @@ impl<H: Host> State<H> {
             HOME => None,
             BT_DEVICE => Some(BLUETOOTH),
             BLUETOOTH | ACCESS_POINT | LINK => Some(WIRELESS),
+            UPDATE_PHONE => Some(UPDATE),
             CAMERA => Some(self.cam_return),
             DEVICES => Some(self.devices_parent),
             MEDIA | SETTINGS => Some(HOME),
@@ -688,6 +718,13 @@ impl<H: Host> State<H> {
             Action::BtForget(id) => self.host.bt_forget(id.as_str()),
             Action::DevicePress(id) => self.device_press(&bridge, id.as_str()),
             Action::MediaKey(key) => self.media_key(key),
+            // Asked first: the head unit restarts.
+            Action::UpdateInstall => {
+                if self.host.update().stage == crate::host::UpdateStage::Ready {
+                    self.system_ask = Ask::Install;
+                    self.dialog_dirty = true;
+                }
+            }
             // The dialog answers whoever asked: our own question, or Bluetooth.
             Action::PromptAccept => {
                 if self.dialog_local {
@@ -813,6 +850,7 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_bt_forget, |id| Action::BtForget(id));
     on!(on_device_press, |id| Action::DevicePress(id));
     on!(on_media_key, |key| Action::MediaKey(key));
+    on!(on_update_install, || Action::UpdateInstall);
     on!(on_prompt_accept, || Action::PromptAccept);
     on!(on_prompt_cancel, || Action::PromptCancel);
 }
@@ -924,8 +962,9 @@ impl<H: Host> Osd<H> {
             self.st.host.bt_screen_visible(false);
         }
         // Our own reboot / shut down question does not wait behind the
-        // video: the screens come back without it.
-        if self.st.system_ask != Ask::None {
+        // video: the screens come back without it. How the last update
+        // went does: it is said once.
+        if self.st.system_ask != Ask::None && self.st.system_ask != Ask::UpdateOutcome {
             self.st.answer_system(false);
         }
         // p_screen stays: the screen -- and its focused row -- are still

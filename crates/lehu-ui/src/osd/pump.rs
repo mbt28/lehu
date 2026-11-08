@@ -8,7 +8,7 @@ use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
 
 use super::{
     ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, DEVICES, HOME, Host,
-    LINK, PICK_MS, Pick, SETTINGS, State, VIDEO, VOLUME_BAR_MS, clean, compose,
+    LINK, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO, VOLUME_BAR_MS, clean, compose,
 };
 use crate::AppWindow;
 use crate::keys::key_name;
@@ -178,6 +178,7 @@ impl<H: Host> State<H> {
             self.show_pick(&bridge);
         }
 
+        self.pump_update(&bridge);
         let screen = bridge.get_screen();
         if screen != self.p_screen {
             // The position is shown afresh, at the new screen's pace.
@@ -221,6 +222,9 @@ impl<H: Host> State<H> {
                 self.open_access_point();
             } else if screen == LINK {
                 self.open_link();
+            } else if screen == UPDATE_PHONE {
+                // The page is served while the phone may come for it.
+                self.host.update_serve();
             }
         }
         self.pump_camera(&bridge, screen);

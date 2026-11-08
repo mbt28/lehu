@@ -1,7 +1,7 @@
 //! The dialog shows Bluetooth's prompt -- pairing has a deadline, so it
 //! wins -- or else our own question: a reboot or a shut down from the Power
-//! row, the camera key waiting to be learned, or a phone about to be
-//! forgotten.
+//! row, the camera key waiting to be learned, a phone about to be
+//! forgotten, an update to install; or a notice: how the last update went.
 
 use toml::Value;
 
@@ -18,9 +18,14 @@ pub(super) enum Ask {
     CameraKey,
     /// Devices > a phone > Forget: the one `device_id` names.
     ForgetDevice,
+    /// Update > Install: the head unit restarts.
+    Install,
+    /// How the last update went, once after the restart.
+    UpdateOutcome,
 }
 
-/// A dialog's text; kind 0 none, 1 a code (Cancel only), 2 yes/no.
+/// A dialog's text; kind 0 none, 1 a code (Cancel only), 2 yes/no, 3 a
+/// notice (OK only).
 #[derive(Clone, Debug, Default)]
 pub(super) struct DialogText {
     pub kind: i32,
@@ -63,6 +68,14 @@ impl<H: Host> State<H> {
             Ask::Reboot if yes => self.host.request_power(Power::Reboot),
             Ask::Shutdown if yes => self.host.request_power(Power::Shutdown),
             Ask::ForgetDevice if yes => self.host.device_forget(&self.device_id),
+            Ask::Install if yes => self.host.update_install(),
+            Ask::UpdateOutcome => {
+                // Interrupted: its accept opens the page to install again.
+                if yes && self.host.update().outcome == crate::host::UpdateOutcome::Interrupted {
+                    self.update_goto = true;
+                }
+                self.host.update_outcome_seen();
+            }
             _ => {}
         }
     }
@@ -74,10 +87,28 @@ impl<H: Host> State<H> {
         }
         self.dialog_dirty = false;
         self.dialog_local = self.bt_dialog.kind == 0 && self.system_ask != Ask::None;
+        let outcome = if self.dialog_local && self.system_ask == Ask::UpdateOutcome {
+            self.outcome_dialog()
+        } else {
+            (0, "", "")
+        };
         let bt = &self.bt_dialog;
+        let restart = self.host.update().restart;
         let (kind, title, code, hint, accept): (i32, &str, &str, &str, &str) = if self.dialog_local
         {
             match self.system_ask {
+                Ask::Install => (
+                    2,
+                    "Install the update?",
+                    "",
+                    if restart {
+                        super::update::HINT_INSTALL_BOOT
+                    } else {
+                        super::update::HINT_INSTALL
+                    },
+                    "Install",
+                ),
+                Ask::UpdateOutcome => (outcome.0, outcome.1, "", &self.update_hint, outcome.2),
                 Ask::CameraKey => (2, "Camera key", "", HINT_CAMERA_KEY, "Clear"),
                 Ask::Reboot => (2, "Reboot the head unit?", "", HINT_REBOOT, "Reboot"),
                 Ask::Shutdown => (
@@ -102,7 +133,7 @@ impl<H: Host> State<H> {
             let danger = self.dialog_local
                 && matches!(
                     self.system_ask,
-                    Ask::Reboot | Ask::Shutdown | Ask::ForgetDevice
+                    Ask::Reboot | Ask::Shutdown | Ask::ForgetDevice | Ask::Install
                 );
             bridge.set_prompt_danger(danger);
         }

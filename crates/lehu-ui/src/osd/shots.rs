@@ -223,7 +223,7 @@ fn shots() {
     s.key(OsdKey::Next);
     s.save("09-settings-volume-changing");
     s.key(OsdKey::Ok);
-    s.keys(OsdKey::Next, 6);
+    s.keys(OsdKey::Next, 7);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Left);
     s.osd.st.skew += VOLUME_BAR_MS;
@@ -265,6 +265,91 @@ fn shots() {
     s.key(OsdKey::Right);
     s.key(OsdKey::Ok);
     s.save("22-dialog-forget");
+
+    // ── update ──
+    use crate::host::{UpdateOutcome, UpdateStage};
+    let mut s = Shot::new(phone_host());
+    s.goto(SETTINGS);
+    s.keys(OsdKey::Next, 8);
+    s.save("50-settings-update-row");
+    s.forget_keys();
+    s.goto(UPDATE);
+    s.save("51-update");
+    s.goto(UPDATE_PHONE);
+    let serve = |u: &mut crate::host::Update| {
+        u.serving = true;
+        u.ssid = "LEHU".into();
+        u.passphrase = "lehu1234".into();
+        u.url = "http://192.168.9.1:8080/".into();
+    };
+    serve(&mut s.osd.host_mut().update);
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("52-update-phone");
+    {
+        let u = &mut s.osd.host_mut().update;
+        u.stage = UpdateStage::Receiving;
+        u.received = 12 << 20;
+        u.size = 37 << 20;
+    }
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("53-update-phone-receiving");
+    {
+        let u = &mut s.osd.host_mut().update;
+        u.stage = UpdateStage::Ready;
+        u.new_version = "22.0.1-20261108095815".into();
+        u.notes = "Faster start, a fix for wireless Android Auto".into();
+        u.size_kb = 37 * 1024;
+        u.restart = true;
+    }
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("54-update-ready");
+    s.bridge().invoke_update_install();
+    s.tick();
+    s.save("55-update-install-dialog");
+    s.bridge().invoke_prompt_accept();
+    {
+        let u = &mut s.osd.host_mut().update;
+        u.stage = UpdateStage::Installing;
+        u.restart = false;
+        u.percent = 40;
+        u.message = "Receiving the update: 11 of 27 parts".into();
+    }
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("56-update-installing");
+    {
+        let u = &mut s.osd.host_mut().update;
+        u.stage = UpdateStage::Failed;
+        u.message = "The update is not signed with LEHU OS's key".into();
+    }
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("57-update-failed");
+    let mut h = phone_host();
+    h.update.available = false;
+    let mut s = Shot::new(h);
+    s.goto(SETTINGS);
+    s.keys(OsdKey::Next, 8);
+    s.save("58-settings-update-not-available");
+    let mut h = base_host();
+    h.update.outcome = UpdateOutcome::Updated("22.0.1-20261108095815".into());
+    let mut s = Shot::new(h);
+    s.save("59-update-outcome");
+    let mut h = night_host();
+    h.update.outcome = UpdateOutcome::Interrupted;
+    let mut s = Shot::new(h);
+    s.save("60-update-interrupted-night");
+    s.bridge().invoke_prompt_cancel();
+    s.goto(SETTINGS);
+    s.goto(UPDATE);
+    s.goto(UPDATE_PHONE);
+    serve(&mut s.osd.host_mut().update);
+    s.osd.host_mut().update_gen += 1;
+    s.tick();
+    s.save("61-update-phone-night");
 
     // ── now playing ──
     let mut s = Shot::new(phone_host());
