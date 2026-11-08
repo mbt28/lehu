@@ -59,8 +59,28 @@ The user is in the groups `video`, `input`, `audio`, `i2c`, `plugdev` and `netde
 | Path | Use |
 |---|---|
 | `/etc/lehu/lehu.toml` | the image's default settings (optional) |
-| `/var/lib/lehu/` | settings, known phones, pairings (or `~/.lehu` for a user without access to it) |
+| `/var/lib/lehu/` | settings, known phones, pairings, the last update shown (or `~/.lehu` for a user without access to it) |
 | `/run/lehu/status.json` | the session's state, for other services to read |
+| `/var/cache/lehu-update/` | an update received from the phone (LEHU OS) |
+
+## Updates (LEHU OS)
+
+Settings › Update needs what LEHU OS provides; without
+`/usr/sbin/lehu-os-update` the row says the update is not available.
+
+- `/usr/sbin/lehu-os-update` with `check`, `apply` and `status`, printing
+  `name=value` lines (exit 1 with `message=` last), and
+  `/run/lehu-os-update/progress` readable by LEHU's user while `apply`
+  runs.
+- A sudo rule for `check` and `apply` (`status` runs as LEHU's user):
+  `lehu ALL=(root) NOPASSWD: /usr/sbin/lehu-os-update check *, /usr/sbin/lehu-os-update apply *, /usr/sbin/lehu-os-update status`.
+- `/var/cache/lehu-update`, `0770 root:lehu`, on persistent storage with
+  room for an update (tens of MB) and its unpacked copy: LEHU receives the
+  update there, never in RAM.
+- The access point (above) with an IPv4 address: the page is served on it,
+  TCP `update.port` (8080) from the phones on it.
+- `systemctl`, for `is-active lehu-os-update` (an apply LEHU did not start
+  still running).
 
 ## Starting
 

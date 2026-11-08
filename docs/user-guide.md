@@ -35,6 +35,7 @@ the camera.
 | Audio | levels for music, navigation, alerts and calls; the music buffer; the output device |
 | Wireless | the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Video | Android Auto's frame rate, the reversing camera, its key and fast switch |
+| Update | the version running; a new version of LEHU OS, brought by the phone |
 | Power | reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,
@@ -100,6 +101,42 @@ input keeps its own). A key learned under **Camera key** switches to the
 camera and back from anywhere, including from the phone's video. **Fast
 switch** keeps the phone's video ready behind the camera, where memory
 allows, so the way back is instant.
+
+## Updating LEHU OS
+
+On LEHU OS, Settings › **Update** installs new versions. The head unit has
+no internet of its own, so the phone fetches the update over its mobile
+data and hands it over through the head unit's Wi-Fi. On other systems the
+row says the update is not available there.
+
+1. Settings › Update › **Get from phone** shows two QR codes.
+2. Scan the first with the phone's camera: the phone joins the head unit's
+   Wi-Fi (the name and password are under the code too). Keep the phone's
+   mobile data on.
+3. Scan the second: the update page opens in the phone's browser. It shows
+   the new version and its size, or that the head unit is up to date.
+4. Tap **Download and send to the head unit**. The phone downloads the
+   update and sends it on; the head unit shows how much has arrived. If the
+   transfer stops, try again: it goes on from where it stopped.
+5. The head unit checks the update (its signature, and that it is made for
+   the version running), then shows its version and how it installs.
+6. When parked, select **Install** and confirm. A connected phone is
+   disconnected first.
+   - A new LEHU installs in place in about a minute, with its progress on
+     the screen, then the head unit restarts.
+   - An update of the OS restarts the head unit at once and installs while
+     the start-up screen shows its progress, which takes about 4 minutes.
+     Keep the power on.
+
+After the restart, the head unit says once whether the update went in. If
+it was cut off (the power went), it says so, and the update can be
+installed again from Settings › Update. A received update that was not
+installed yet stays on the head unit until it is, or until another one
+comes.
+
+The phone only carries the update: the head unit checks it before it
+installs anything. The page is served only from opening Get from phone
+until an install starts, or ten minutes after the Update pages were left.
 
 ## Settings file
 
