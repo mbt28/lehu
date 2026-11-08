@@ -351,6 +351,7 @@ impl AppHost {
         self.update_gen = self.update_gen.wrapping_add(1);
         let v = updater.view();
         let u = &mut self.update;
+        u.can_cancel = v.can_cancel();
         u.available = v.available;
         u.version = v.booted_version;
         u.stage = match v.stage {
@@ -947,6 +948,13 @@ impl Host for AppHost {
 
     fn update_install(&mut self) {
         self.update_install = true;
+    }
+
+    fn update_cancel(&mut self) {
+        if let Some(updater) = &self.updater {
+            updater.cancel();
+        }
+        self.sync_update();
     }
 
     fn update_outcome_seen(&mut self) {

@@ -291,6 +291,7 @@ fn shots() {
         u.stage = UpdateStage::Receiving;
         u.received = 12 << 20;
         u.size = 37 << 20;
+        u.can_cancel = true;
     }
     s.osd.host_mut().update_gen += 1;
     s.tick();
@@ -306,6 +307,11 @@ fn shots() {
     s.osd.host_mut().update_gen += 1;
     s.tick();
     s.save("54-update-ready");
+    s.bridge().invoke_update_cancel();
+    s.tick();
+    s.save("63-update-cancel-dialog");
+    s.bridge().invoke_prompt_cancel();
+    s.tick();
     s.bridge().invoke_update_install();
     s.tick();
     s.save("55-update-install-dialog");
@@ -313,6 +319,7 @@ fn shots() {
     {
         let u = &mut s.osd.host_mut().update;
         u.stage = UpdateStage::Installing;
+        u.can_cancel = false;
         u.restart = false;
         u.percent = 40;
         u.message = "Receiving the update: 11 of 27 parts".into();

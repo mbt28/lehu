@@ -128,9 +128,15 @@ row says the update is not available there.
      the start-up screen shows its progress, which takes about 4 minutes.
      Keep the power on.
 
-   While it installs, Settings › Power is locked. If the head unit does
-   not restart when it is done, the Update page says so and the phones can
-   connect again; the update takes effect at the next start.
+   An install cannot be stopped, so the screen stays on its progress until
+   the head unit restarts. If the head unit does not restart when it is
+   done, the Update page says so and the phones can connect again; the
+   update takes effect at the next start.
+
+Leaving the Update page does not stop anything before **Install**: the
+transfer and the check go on, and Settings shows how far it is. **Cancel
+update**, on the Update page and beside the QR codes, stops a transfer and
+removes what arrived.
 
 After the restart, the head unit says once whether the update went in. If
 it was cut off (the power went), it says so, and the update can be

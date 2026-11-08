@@ -43,6 +43,7 @@ pub enum Call {
     UpdateServe,
     UpdateScreens(bool),
     UpdateInstall,
+    UpdateCancel,
     UpdateOutcomeSeen,
 }
 
@@ -543,6 +544,10 @@ impl Host for TestHost {
 
     fn update_install(&mut self) {
         self.calls.push(Call::UpdateInstall);
+    }
+
+    fn update_cancel(&mut self) {
+        self.calls.push(Call::UpdateCancel);
     }
 
     fn update_outcome_seen(&mut self) {

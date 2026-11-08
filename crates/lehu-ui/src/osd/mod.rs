@@ -144,6 +144,7 @@ enum Action {
     DevicePress(SharedString),
     MediaKey(i32),
     UpdateInstall,
+    UpdateCancel,
     PromptAccept,
     PromptCancel,
 }
@@ -725,6 +726,12 @@ impl<H: Host> State<H> {
                     self.dialog_dirty = true;
                 }
             }
+            Action::UpdateCancel => {
+                if self.host.update().can_cancel {
+                    self.system_ask = Ask::CancelUpdate;
+                    self.dialog_dirty = true;
+                }
+            }
             // The dialog answers whoever asked: our own question, or Bluetooth.
             Action::PromptAccept => {
                 if self.dialog_local {
@@ -851,6 +858,7 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_device_press, |id| Action::DevicePress(id));
     on!(on_media_key, |key| Action::MediaKey(key));
     on!(on_update_install, || Action::UpdateInstall);
+    on!(on_update_cancel, || Action::UpdateCancel);
     on!(on_prompt_accept, || Action::PromptAccept);
     on!(on_prompt_cancel, || Action::PromptCancel);
 }

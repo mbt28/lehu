@@ -20,6 +20,8 @@ pub(super) enum Ask {
     ForgetDevice,
     /// Update > Install: the head unit restarts.
     Install,
+    /// Update > Cancel update: what arrived is removed.
+    CancelUpdate,
     /// How the last update went, once after the restart.
     UpdateOutcome,
 }
@@ -69,6 +71,7 @@ impl<H: Host> State<H> {
             Ask::Shutdown if yes => self.host.request_power(Power::Shutdown),
             Ask::ForgetDevice if yes => self.host.device_forget(&self.device_id),
             Ask::Install if yes => self.host.update_install(),
+            Ask::CancelUpdate if yes => self.host.update_cancel(),
             Ask::UpdateOutcome => {
                 // Interrupted: its accept opens the page to install again.
                 if yes && self.host.update().outcome == crate::host::UpdateOutcome::Interrupted {
@@ -108,6 +111,13 @@ impl<H: Host> State<H> {
                     },
                     "Install",
                 ),
+                Ask::CancelUpdate => (
+                    2,
+                    "Cancel the update?",
+                    "",
+                    super::update::HINT_CANCEL,
+                    "Remove",
+                ),
                 Ask::UpdateOutcome => (outcome.0, outcome.1, "", &self.update_hint, outcome.2),
                 Ask::CameraKey => (2, "Camera key", "", HINT_CAMERA_KEY, "Clear"),
                 Ask::Reboot => (2, "Reboot the head unit?", "", HINT_REBOOT, "Reboot"),
@@ -133,7 +143,11 @@ impl<H: Host> State<H> {
             let danger = self.dialog_local
                 && matches!(
                     self.system_ask,
-                    Ask::Reboot | Ask::Shutdown | Ask::ForgetDevice | Ask::Install
+                    Ask::Reboot
+                        | Ask::Shutdown
+                        | Ask::ForgetDevice
+                        | Ask::Install
+                        | Ask::CancelUpdate
                 );
             bridge.set_prompt_danger(danger);
         }

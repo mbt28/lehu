@@ -168,6 +168,7 @@ export global Bridge {
     // installer it is there but does nothing. Text composed in Rust.
     in property <bool> update-shown;
     in property <bool> update-available;
+    in property <bool> update-can-cancel;     // stopping now is safe: Cancel update shows
     in property <string> update-label;        // the Settings row: the version, "Update ready"
     in property <string> update-version;      // the version running
     // 0 nothing, 1 receiving, 2 checking, 3 ready to install, 4 failed,
@@ -237,6 +238,7 @@ export global Bridge {
     callback device-press(string);            // Enter or a tap on a phone's row
     callback media-key(int);                  // 0 previous, 1 play / pause, 2 next
     callback update-install();                // the Install row: asks first
+    callback update-cancel();                 // Cancel update: asks first
     callback prompt-accept();
     callback prompt-cancel();
 }
@@ -1045,9 +1047,10 @@ component Caption inherits Text {
 component ListPage inherits Rectangle {
     in property <string> title;
     in property <string> note;
+    in property <bool> back: true;
     background: Theme.bg;
     VerticalLayout {
-        TopBar { title: root.title; note: root.note; }
+        TopBar { title: root.title; note: root.note; back: root.back; }
         Flickable {
             vertical-stretch: 1;
             content-height: col.preferred-height;
@@ -1922,10 +1925,12 @@ component ProgressLine inherits VerticalLayout {
 
 // Settings > Update: the version running; the update brought from the
 // phone ("Get from phone"); once checked, what it is and Install, which
-// asks first; while it installs, how far it is. The head unit restarts by
+// asks first; Cancel update, until it installs; while it installs, how far
+// it is, and no way out: it cannot be stopped, and the head unit restarts by
 // itself at the end.
 component ScreenUpdate inherits ListPage {
     title: "Update";
+    back: Bridge.update-stage < 5;
     InfoLine { icon: "tag"; label: "Version"; value: Bridge.update-version; }
     if Bridge.update-stage < 5: NavRow {
         ring-key: "get";
@@ -1961,9 +1966,21 @@ component ScreenUpdate inherits ListPage {
         more: false;
         clicked => { Bridge.update-install(); }
     }
+    if Bridge.update-can-cancel: NavRow {
+        ring-key: "cancel";
+        icon: "trash";
+        label: "Cancel update";
+        more: false;
+        clicked => { Bridge.update-cancel(); }
+    }
     if Bridge.update-stage >= 5: ProgressLine {
         text: Bridge.update-message;
         level: Bridge.update-stage == 5 ? Bridge.update-progress : -1;
+    }
+    if Bridge.update-stage >= 5: HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        Caption { text: "Keep the power on. The head unit restarts by itself."; }
     }
 }
 
@@ -2026,8 +2043,13 @@ component ScreenUpdatePhone inherits Rectangle {
                 line2: "Then tap Download on the phone";
             }
         }
-        VerticalLayout {
+        HorizontalLayout {
             padding-bottom: 16px;
+            padding-right: 16px;
+            spacing: 8px;
+            VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
             if Bridge.update-serve-error != "": ProgressLine {
                 text: Bridge.update-serve-error;
                 text-color: Theme.danger;
@@ -2046,6 +2068,16 @@ component ScreenUpdatePhone inherits Rectangle {
             if Bridge.update-serve-error == "" && Bridge.update-stage == 4: ProgressLine {
                 text: Bridge.update-message;
                 text-color: Theme.danger;
+            }
+            }
+            if Bridge.update-can-cancel: NavRow {
+                ring-key: "cancel";
+                width: 160px;
+                height: 56px;
+                icon: "trash";
+                label: "Cancel";
+                more: false;
+                clicked => { Bridge.update-cancel(); }
             }
         }
     }

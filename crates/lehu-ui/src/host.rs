@@ -293,6 +293,8 @@ pub struct Update {
     pub url: String,
     pub serve_error: String,
     pub outcome: UpdateOutcome,
+    /// There is something to cancel, and stopping now is safe.
+    pub can_cancel: bool,
 }
 
 /// The program as the screens see it.
@@ -482,6 +484,8 @@ pub trait Host {
     /// Install the checked update, once asked: the phone's session ends
     /// first, then the installer runs and restarts the head unit.
     fn update_install(&mut self);
+    /// Cancel the update, once asked: a transfer stops, what arrived goes.
+    fn update_cancel(&mut self);
     /// The last update's outcome was shown.
     fn update_outcome_seen(&mut self);
 }

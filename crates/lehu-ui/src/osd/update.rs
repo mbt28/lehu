@@ -7,8 +7,10 @@
 //! pixels, at the size they show. They are made when the view opens or
 //! what they say changes, and dropped when it closes. Once the update is
 //! checked the view gives way to the Update page, where Install asks first
-//! (the head unit restarts) and then shows the install's progress. After a
-//! restart, how the last update went is said once.
+//! (the head unit restarts) and then shows the install's progress. Until
+//! then Cancel update stops and removes it; an install cannot be stopped, so
+//! from there on the screen stays on its progress. After a restart, how the
+//! last update went is said once.
 
 use qrcodegen::{QrCode, QrCodeEcc};
 use slint::{Image, Rgb8Pixel, SharedPixelBuffer, SharedString};
@@ -21,6 +23,8 @@ const QUIET: u32 = 4;
 /// A QR code's largest side on the screen, in pixels.
 pub(super) const QR_MAX: u32 = 216;
 
+pub(super) const HINT_CANCEL: &str = "What arrived is removed from the head unit. It can be \
+                                      sent again from the phone.";
 pub(super) const HINT_INSTALL: &str = "The head unit restarts when it is done, in about a \
                                        minute. A connected phone is disconnected first.";
 pub(super) const HINT_INSTALL_BOOT: &str = "The head unit restarts and installs it, which \
@@ -124,6 +128,15 @@ impl<H: Host> State<H> {
         if std::mem::take(&mut self.update_goto) {
             bridge.set_screen(UPDATE);
         }
+        // An install cannot be stopped: its progress stays on the screen,
+        // whichever way anything tried to leave it. Seen in this same tick,
+        // so nothing else draws.
+        let stage = self.host.update().stage;
+        if matches!(stage, UpdateStage::Installing | UpdateStage::Restarting)
+            && bridge.get_screen() != UPDATE
+        {
+            bridge.set_screen(UPDATE);
+        }
         let generation = self.host.update_generation();
         let changed = !self.update_seen || generation != self.p_update_gen;
         if changed {
@@ -170,6 +183,8 @@ impl<H: Host> State<H> {
         let stage = u.stage;
         bridge.set_update_shown(u.shown);
         bridge.set_update_available(u.available);
+        bridge.set_update_can_cancel(u.can_cancel);
+        let can_cancel = u.can_cancel;
         let label = if !u.available {
             "Not available on this system"
         } else {
@@ -222,6 +237,7 @@ impl<H: Host> State<H> {
         let installing = matches!(stage, UpdateStage::Installing | UpdateStage::Restarting);
         if (ring.as_str() == "install" && stage != UpdateStage::Ready)
             || (matches!(ring.as_str(), "get" | "power") && installing)
+            || (ring.as_str() == "cancel" && !can_cancel)
         {
             self.ring_gone(bridge);
         }

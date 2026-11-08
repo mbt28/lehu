@@ -2507,7 +2507,63 @@ fn on_the_knob_a_checked_update_lands_on_install() {
     // Installing: the row goes, the ring back on the first stop.
     set_update(&mut osd, |u| u.stage = UpdateStage::Installing);
     tick(&mut osd);
-    assert_eq!(ring(&osd), "back");
+    assert_ne!(ring(&osd), "install");
+}
+
+#[test]
+fn an_install_keeps_its_progress_on_the_screen() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    for stage in [UpdateStage::Installing, UpdateStage::Restarting] {
+        set_update(&mut osd, |u| u.stage = stage);
+        assert_eq!(screen(&osd), UPDATE);
+        // Back, Home, a screen opened: all end up here again.
+        press(&mut osd, OsdKey::Back);
+        tick(&mut osd);
+        assert_eq!(screen(&osd), UPDATE, "{stage:?}");
+        goto(&mut osd, HOME);
+        tick(&mut osd);
+        assert_eq!(screen(&osd), UPDATE, "{stage:?}");
+    }
+    // From elsewhere too (an install that started while it was shown).
+    set_update(&mut osd, |u| u.stage = UpdateStage::Failed);
+    goto(&mut osd, SETTINGS);
+    assert_eq!(screen(&osd), SETTINGS, "it failed: free again");
+    set_update(&mut osd, |u| u.stage = UpdateStage::Installing);
+    assert_eq!(screen(&osd), UPDATE);
+}
+
+#[test]
+fn cancel_update_asks_first_and_only_when_it_is_safe() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    let b = |osd: &Osd<TestHost>| osd.ui.global::<Bridge<'_>>().get_update_can_cancel();
+    assert!(!b(&osd));
+    // Nothing to cancel: nothing asked.
+    osd.ui.global::<Bridge<'_>>().invoke_update_cancel();
+    tick(&mut osd);
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_prompt_kind(), 0);
+    set_update(&mut osd, |u| {
+        u.stage = UpdateStage::Ready;
+        u.can_cancel = true;
+    });
+    assert!(b(&osd));
+    osd.ui.global::<Bridge<'_>>().invoke_update_cancel();
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_prompt_title), "Cancel the update?");
+    assert!(!osd.host().has(&Call::UpdateCancel));
+    osd.ui.global::<Bridge<'_>>().invoke_prompt_cancel();
+    tick(&mut osd);
+    assert!(!osd.host().has(&Call::UpdateCancel), "kept");
+    osd.ui.global::<Bridge<'_>>().invoke_update_cancel();
+    tick(&mut osd);
+    osd.ui.global::<Bridge<'_>>().invoke_prompt_accept();
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::UpdateCancel));
 }
 
 #[test]
@@ -2523,6 +2579,7 @@ fn power_is_locked_while_an_update_installs() {
     }
     // It did not go through: Power is back.
     set_update(&mut osd, |u| u.stage = UpdateStage::Failed);
+    goto(&mut osd, SETTINGS);
     pick_press(&mut osd, 3);
     tick(&mut osd);
     assert_eq!(osd.ui.global::<Bridge<'_>>().get_pick(), 3);
