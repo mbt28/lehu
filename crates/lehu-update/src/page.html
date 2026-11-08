@@ -48,8 +48,8 @@ function meter(done, total, what) {
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 async function getJson(url) {
   var r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
+  if (!r.ok) { var e = new Error("HTTP " + r.status); e.answered = true; throw e; }
+  try { return await r.json(); } catch (x) { x.answered = true; throw x; }
 }
 function failed(text) {
   say(text, "bad");
@@ -76,6 +76,8 @@ async function start() {
   try { list = await getJson(info.manifest_url); } catch (e) {
     // One it has already is still there to install.
     if (info.stage === "ready") return follow();
+    // The server answered, with no list: the network is not the trouble.
+    if (e.answered) return failed("The update server has no list of updates.");
     return failed("No internet on the phone. Keep this Wi-Fi, turn on mobile data, and try again.");
   }
   var updates = (list && list.updates) || [];
