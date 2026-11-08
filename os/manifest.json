@@ -1,0 +1,16 @@
+{
+ "format": 1,
+ "branch": "lehu-os",
+ "updates": [
+  {
+   "version": "22.0.1-phone-test-1",
+   "commit": "6919b88e7e00aa414c3f493615a0b151162ec591b42c0f1e9dc12e830e57f3e5",
+   "from": "540c5931fd87527f6016daf3d3169a305ec99c4abc0d0320b11763e4a4d065c0",
+   "file": "lehu-os-22.0.1-phone-test-1-from-540c593.tar",
+   "size": 30720,
+   "sha256": "0786171875d3011229f29656600f9fbaa61964cf03b1ee974c0b6c313be66990",
+   "notes": "Test update 1: a small one, installed in place",
+   "made": "2026-11-08T13:24:35Z"
+  }
+ ]
+}
