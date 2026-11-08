@@ -3,14 +3,14 @@
  "branch": "lehu-os",
  "updates": [
   {
-   "version": "22.0.1-20261108142800",
-   "commit": "af11aef2dfe15a3e1bb4fa78d8972cfaa9c8e106c992b2fa4e7f7a02f274821e",
-   "from": "8d8e72cb3d046fef7b5014927eb9fde36669af18dfa284f3ccc8b350c20bf953",
-   "file": "lehu-os-22.0.1-20261108142800-from-8d8e72c.tar",
-   "size": 296960,
-   "sha256": "6c558fca44abd99e1c9e1e2c290a13e4be57f945f556c02a584b9e9b0e9ae695",
-   "notes": "Test update 3: a new LEHU, with Cancel update",
-   "made": "2026-11-08T14:29:00Z"
+   "version": "22.0.1-phone-test-4",
+   "commit": "e1030b0bac68aea55812c687bb05146bc69890d25ea3ebc98a20c72b5137488f",
+   "from": "af11aef2dfe15a3e1bb4fa78d8972cfaa9c8e106c992b2fa4e7f7a02f274821e",
+   "file": "lehu-os-22.0.1-phone-test-4-from-af11aef.tar",
+   "size": 39475200,
+   "sha256": "cbf887e09a676424eeb6f5a530f6923de367a67fab35ca2f0deb75a0f3e85cdf",
+   "notes": "Test update 4: the new Settings menu, with test data so that Cancel can be tried in mid-transfer",
+   "made": "2026-11-08T15:50:39Z"
   }
  ]
 }
