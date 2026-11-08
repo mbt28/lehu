@@ -158,6 +158,17 @@ fast-switch = false
 # brightness = 40
 # contrast = 140
 
+[update]
+# Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,
+# /usr/sbin/lehu-os-update, must be there). The board has no internet of its
+# own: the phone joins the head unit's Wi-Fi, opens the page LEHU serves on
+# the access point's address at this port, and its browser fetches the
+# update over the phone's own network and hands it over. The head unit
+# checks the update's signature before it installs it. manifest-url is the
+# update server's list of updates; empty hides the Update row.
+manifest-url = "https://mbt28.github.io/lehu/os/manifest.json"
+port = 8080
+
 [system]
 # error, warn, info, debug, verbose, protocol.
 log-level = "info"

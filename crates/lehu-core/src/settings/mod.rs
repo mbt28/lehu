@@ -41,6 +41,7 @@ pub struct Settings {
     pub usb: Usb,
     pub decode: Decode,
     pub camera: Camera,
+    pub update: Update,
     pub system: System,
 }
 
@@ -245,6 +246,18 @@ pub struct Camera {
     pub inputs: Vec<CameraInput>,
 }
 
+/// Settings > Update: LEHU OS updates, carried by the phone's browser from
+/// the update server to a page the head unit serves on its access point.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct Update {
+    /// The update server's manifest.json, as the phone fetches it; the
+    /// updates' files are named relative to it. Empty: no Update row.
+    pub manifest_url: String,
+    /// The TCP port of the page on the access point's address.
+    pub port: u32,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogLevel {
@@ -399,6 +412,15 @@ impl Default for CameraInput {
     }
 }
 
+impl Default for Update {
+    fn default() -> Self {
+        Self {
+            manifest_url: "https://mbt28.github.io/lehu/os/manifest.json".into(),
+            port: 8080,
+        }
+    }
+}
+
 impl Default for System {
     fn default() -> Self {
         Self {
@@ -462,6 +484,7 @@ impl Settings {
         clamp("android-auto.fps", &mut self.android_auto.fps, 30, 60);
         clamp("display.fps", &mut self.display.fps, 24, 60);
         clamp("camera.input", &mut self.camera.input, 0, 3);
+        clamp("update.port", &mut self.update.port, 1, 65535);
         if !(0.0..=10.0).contains(&self.audio.fade) {
             notes.push(format!(
                 "audio.fade = {} is outside 0..=10, using 0.3",
