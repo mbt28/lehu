@@ -223,6 +223,9 @@ pub struct Driver {
     /// The phone's time zone and daylight saving, minutes east of UTC,
     /// once it told them (CarPlay's clock): the arrival as a time of day.
     zone_min: Option<i32>,
+    /// An update installs: every session ended as at shutdown, and none
+    /// starts (a cable, Connect, the wireless listeners) until it failed.
+    held_for_update: bool,
 }
 
 // `ports`, `adopt`, `kind`, `phase` and `front` are the protocol starts'
@@ -340,6 +343,7 @@ impl Driver {
             art_seen: 0,
             art,
             zone_min: None,
+            held_for_update: false,
         }
     }
 
@@ -694,8 +698,12 @@ impl Driver {
                             }
                             self.plugged_serial = Some(serial);
                         }
-                        self.start_carplay(d);
+                        if !self.held_for_update {
+                            self.start_carplay(d);
+                        }
                     }
+                    // Held: the cable is followed, its session starts after.
+                    _ if self.held_for_update => {}
                     lehu_usb::Role::Accessory => self.start_android(d),
                     lehu_usb::Role::Other => self.switch_android(d),
                     lehu_usb::Role::Hub => {}
@@ -1200,6 +1208,9 @@ impl Driver {
     /// one is let back and woken, over its cable when it is the one
     /// plugged in, else over Bluetooth, which starts its wireless session.
     pub fn connect_device(&mut self, id: &str) {
+        if self.held_for_update {
+            return;
+        }
         let Some(d) = self.registry.by_id(id).cloned() else {
             return;
         };
@@ -1438,6 +1449,10 @@ impl Driver {
     /// Everything the session reported since the last turn, and a due
     /// restart on a phone still plugged in.
     pub fn drain(&mut self) {
+        // Nothing runs while an update installs, and nothing restarts.
+        if self.held_for_update {
+            return;
+        }
         self.drain_waiters();
         if self.wants_keyframe.swap(false, Ordering::AcqRel) {
             self.command(Cmd::Keyframe);
@@ -1804,6 +1819,27 @@ impl Driver {
         }
     }
 
+    /// An update is about to install: the phone is told goodbye and the
+    /// listeners close, as at shutdown, and no session starts until
+    /// `release_after_update` (the install failed; on success the head
+    /// unit restarts).
+    pub fn hold_for_update(&mut self) {
+        self.withdraw_question(false);
+        self.switching = None;
+        self.stop();
+        self.registry.session_ended();
+        self.held_for_update = true;
+        self.set_status();
+    }
+
+    /// The install failed: the sessions start over, on a cable still
+    /// plugged in or over the air.
+    pub fn release_after_update(&mut self) {
+        if std::mem::take(&mut self.held_for_update) {
+            self.restart_at = Some(clock::now_ms());
+        }
+    }
+
     /// Shutdown: the phone is told goodbye, the decoder stopped.
     pub fn stop(&mut self) {
         self.restart_at = None;
@@ -2014,6 +2050,32 @@ mod tests {
         // Connect lets it back.
         d.connect_device("a");
         assert!(!d.registry.is_held("a"));
+    }
+
+    #[test]
+    fn an_update_holds_every_session_until_it_failed() {
+        let mut d = test_driver();
+        d.registry
+            .seen("b", devices::Kind::AndroidAuto, "Pixel", B_BT, "", 1);
+        let (_, stops) = live(&mut d, "a", Some(A_BT));
+        d.hold_for_update();
+        assert!(!d.active());
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        assert!(d.restart_at.is_none());
+        // Nothing starts again meanwhile: not the listeners, not Connect.
+        d.drain();
+        assert!(d.restart_at.is_none() && d.waiters.is_empty());
+        d.connect_device("b");
+        assert!(d.switching.is_none());
+        // The phone in session then is not held, and shows as gone.
+        assert!(!d.registry.is_held("a"));
+        assert_ne!(
+            d.registry.by_id("a").unwrap().presence,
+            devices::Presence::Active
+        );
+        d.release_after_update();
+        assert!(d.restart_at.is_some(), "the listeners open again");
+        d.release_after_update();
     }
 
     #[test]
