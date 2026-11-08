@@ -128,6 +128,10 @@ row says the update is not available there.
      the start-up screen shows its progress, which takes about 4 minutes.
      Keep the power on.
 
+   While it installs, Settings › Power is locked. If the head unit does
+   not restart when it is done, the Update page says so and the phones can
+   connect again; the update takes effect at the next start.
+
 After the restart, the head unit says once whether the update went in. If
 it was cut off (the power went), it says so, and the update can be
 installed again from Settings › Update. A received update that was not

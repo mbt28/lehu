@@ -334,6 +334,12 @@ fn shots() {
     s.goto(SETTINGS);
     s.keys(OsdKey::Next, 8);
     s.save("58-settings-update-not-available");
+    let mut h = phone_host();
+    h.update.stage = UpdateStage::Installing;
+    let mut s = Shot::new(h);
+    s.goto(SETTINGS);
+    s.keys(OsdKey::Next, 8);
+    s.save("62-settings-update-installing");
     let mut h = base_host();
     h.update.outcome = UpdateOutcome::Updated("22.0.1-20261108095815".into());
     let mut s = Shot::new(h);

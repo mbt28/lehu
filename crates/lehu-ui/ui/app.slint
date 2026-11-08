@@ -1536,7 +1536,13 @@ component ScreenSettings inherits ListPage {
     }
     // Each asks first, in the dialog; the app then closes down cleanly and
     // the system's own reboot / poweroff takes over. It opens on Cancel.
-    ChoiceRow {
+    // Not while an update installs: that would cut it off.
+    if Bridge.update-stage >= 5: InfoLine {
+        icon: "power";
+        label: "Power";
+        value: "Updating";
+    }
+    if Bridge.update-stage < 5: ChoiceRow {
         ring-key: "power";
         icon: "power";
         label: "Power";

@@ -18,6 +18,7 @@ use super::{
     ACCESS_POINT, AUDIO, Ask, BUFFER_SAVE_MS, BUFFER_STEP_MS, Bridge, DEVICES, FAST_DETENT_MS,
     FAST_PERCENT, Host, SETTINGS, State, VIDEO,
 };
+use crate::host::UpdateStage;
 use crate::keys::OsdKey;
 
 /// Which row is picking, as `Bridge.pick` numbers them.
@@ -179,6 +180,15 @@ impl<H: Host> State<H> {
     /// Enter (or a tap) on a picked row: starts it, or takes what it shows.
     pub(super) fn pick_press(&mut self, bridge: &Bridge<'_>, row: Pick) {
         if row == Pick::None {
+            return;
+        }
+        // Going down now would cut an update off.
+        if row == Pick::Power
+            && matches!(
+                self.host.update().stage,
+                UpdateStage::Installing | UpdateStage::Restarting
+            )
+        {
             return;
         }
         // A phone's row starts from its own callback, with its id.

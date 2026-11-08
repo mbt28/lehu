@@ -221,7 +221,7 @@ impl<H: Host> State<H> {
         let ring = bridge.get_ring_row();
         let installing = matches!(stage, UpdateStage::Installing | UpdateStage::Restarting);
         if (ring.as_str() == "install" && stage != UpdateStage::Ready)
-            || (ring.as_str() == "get" && installing)
+            || (matches!(ring.as_str(), "get" | "power") && installing)
         {
             self.ring_gone(bridge);
         }
