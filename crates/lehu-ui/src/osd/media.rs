@@ -11,7 +11,7 @@
 
 use slint::SharedString;
 
-use super::{Bridge, CAMERA, HOME, Host, MEDIA, NAV_CARD_MS, State, clean};
+use super::{Bridge, CAMERA, HOME, Host, MEDIA, NAV_CARD_MS, State, UPDATE_PHONE, clean};
 use crate::host::{Media, MediaKey};
 
 /// The Home tile's bar moves on this often while something plays: a thin
@@ -115,7 +115,9 @@ impl<H: Host> State<H> {
         let show = now < self.nav_until
             && !self.over_phone
             && !modal
-            && !(screen == CAMERA && self.panel_up);
+            && !(screen == CAMERA && self.panel_up)
+            // The QR codes and what they say need the whole screen.
+            && screen != UPDATE_PHONE;
         if show != self.p_nav_card {
             self.p_nav_card = show;
             bridge.set_nav_card(show);

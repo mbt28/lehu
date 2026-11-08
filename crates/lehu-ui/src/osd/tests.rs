@@ -2511,6 +2511,40 @@ fn on_the_knob_a_checked_update_lands_on_install() {
 }
 
 #[test]
+fn power_is_locked_while_an_update_installs() {
+    use crate::host::UpdateStage;
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    for stage in [UpdateStage::Installing, UpdateStage::Restarting] {
+        set_update(&mut osd, |u| u.stage = stage);
+        pick_press(&mut osd, 3);
+        tick(&mut osd);
+        assert_eq!(osd.ui.global::<Bridge<'_>>().get_pick(), 0, "{stage:?}");
+    }
+    // It did not go through: Power is back.
+    set_update(&mut osd, |u| u.stage = UpdateStage::Failed);
+    pick_press(&mut osd, 3);
+    tick(&mut osd);
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_pick(), 3);
+}
+
+#[test]
+fn the_card_gives_the_qr_codes_the_screen() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, UPDATE);
+    guiding(&mut osd);
+    tick(&mut osd);
+    assert!(card(&osd));
+    goto(&mut osd, UPDATE_PHONE);
+    tick(&mut osd);
+    assert!(!card(&osd));
+    goto(&mut osd, UPDATE);
+    tick(&mut osd);
+    assert!(card(&osd));
+}
+
+#[test]
 fn the_last_update_is_said_once() {
     use crate::host::UpdateOutcome;
     let mut host = TestHost::new();
