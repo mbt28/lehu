@@ -1,16 +1,5 @@
 {
  "format": 1,
  "branch": "lehu-os",
- "updates": [
-  {
-   "version": "22.0.1-phone-test-5",
-   "commit": "8e4e5683d78198b60a61a5ee0adbdc6f280119b782dba2cfcb3701b00939d69a",
-   "from": "0647e985e1684ce3ea370e725a8d07f6a49806f22fd6b1950d6fa07a26633403",
-   "file": "lehu-os-22.0.1-phone-test-5-from-0647e98.tar",
-   "size": 30720,
-   "sha256": "23e13873bbb23cd25d4f3b8d11caa56b1c257821a30341233e1aed786f25776d",
-   "notes": "Test update 5: a small one, for the install lock and Cancel",
-   "made": "2026-11-08T17:47:07Z"
-  }
- ]
+ "updates": []
 }
