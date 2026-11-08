@@ -40,11 +40,14 @@ use std::time::{Duration, Instant, SystemTime};
 pub const INSTALLER: &str = "/usr/sbin/lehu-os-update";
 /// Where `apply` says how far it is.
 pub const PROGRESS: &str = "/run/lehu-os-update/progress";
-/// Where an update is received: on the SD card (the image makes it 0770
+/// Where an update is received: on the SD card (the image makes it 1770
 /// root:lehu). Never /tmp or /var/tmp: they are RAM.
 pub const CACHE: &str = "/var/cache/lehu-update";
 /// The page stops this long after the Update pages were left.
 pub const IDLE_STOP: Duration = Duration::from_secs(600);
+/// The installer restarts the head unit within this after it ended; if not,
+/// the screens say so and the phones may come back.
+pub const RESTART_WAIT: Duration = Duration::from_secs(120);
 
 /// Where everything is; the program's is [`Config::system`], tests point
 /// it at a folder and a stand-in installer.
@@ -63,6 +66,8 @@ pub struct Config {
     /// The installer's unit runs (an `apply` LEHU did not see start).
     pub unit_running: fn() -> bool,
     pub idle_stop: Duration,
+    /// How long the restart after a good `apply` is waited for.
+    pub restart_wait: Duration,
     /// A connection that sends nothing this long is dropped.
     pub read_timeout: Duration,
 }
@@ -81,6 +86,7 @@ impl Config {
             port,
             unit_running,
             idle_stop: IDLE_STOP,
+            restart_wait: RESTART_WAIT,
             read_timeout: Duration::from_secs(30),
         }
     }
@@ -713,6 +719,18 @@ fn run_apply(shared: &Shared, tar: &Path) {
             shared.push(inner, Job::Status { at_start: false });
         }
     });
+    if ok {
+        // Nothing else is queued while it restarts: the worker can wait.
+        std::thread::sleep(cfg.restart_wait);
+        log::warn!("update: the head unit did not restart");
+        shared.change(|inner| {
+            let v = &mut inner.view;
+            v.stage = Stage::Failed;
+            v.message = "The head unit did not restart. \
+                         The update takes effect at the next start"
+                .into();
+        });
+    }
 }
 
 fn short(commit: &str) -> &str {

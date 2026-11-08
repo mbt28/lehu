@@ -57,6 +57,7 @@ fn setup(name: &str) -> (PathBuf, Config) {
         port: 0,
         unit_running: no_unit,
         idle_stop: Duration::from_secs(600),
+        restart_wait: Duration::from_secs(600),
         read_timeout: Duration::from_secs(2),
     };
     (root, cfg)
@@ -600,6 +601,24 @@ fn a_failed_install_says_why_and_frees_the_phone() {
     assert!(u.install());
     let v = wait_for(&u, "the failure", |v| v.stage == Stage::Failed);
     assert_eq!(v.message, "The pull failed");
+    assert!(!u.busy());
+}
+
+#[test]
+fn a_restart_that_never_comes_frees_the_phone() {
+    let (_root, mut cfg) = setup("norestart");
+    cfg.restart_wait = Duration::from_millis(200);
+    fs::write(cfg.cache.join("u.tar"), b"x").unwrap();
+    let u = Updater::new(cfg, || {});
+    wait_for(&u, "the check", |v| v.stage == Stage::Ready);
+    assert!(u.install());
+    wait_for(&u, "the end", |v| v.stage == Stage::Restarting);
+    assert!(u.busy());
+    let v = wait_for(&u, "the wait", |v| v.stage == Stage::Failed);
+    assert!(
+        v.message.starts_with("The head unit did not restart"),
+        "{v:?}"
+    );
     assert!(!u.busy());
 }
 

@@ -74,7 +74,7 @@ Settings › Update needs what LEHU OS provides; without
   runs.
 - A sudo rule for `check` and `apply` (`status` runs as LEHU's user):
   `lehu ALL=(root) NOPASSWD: /usr/sbin/lehu-os-update check *, /usr/sbin/lehu-os-update apply *, /usr/sbin/lehu-os-update status`.
-- `/var/cache/lehu-update`, `0770 root:lehu`, on persistent storage with
+- `/var/cache/lehu-update`, `1770 root:lehu`, on persistent storage with
   room for an update (tens of MB) and its unpacked copy: LEHU receives the
   update there, never in RAM.
 - The access point (above) with an IPv4 address: the page is served on it,
