@@ -153,10 +153,13 @@ async function go() {
     return failed("The download stopped. Check the phone's mobile data and try again.");
   }
   say("Sending it to the head unit over Wi-Fi...");
-  var most = -1, damaged = 0;
+  var most = -1, damaged = 0, cancels = null;
   for (var tries = 0; tries < 6; tries++) {
     var here;
     try { here = await getJson("/info"); } catch (e) { await sleep(2000); continue; }
+    // Cancelled on the head unit: that stands until someone taps again.
+    if (cancels === null) cancels = here.cancels;
+    else if (here.cancels !== cancels) return failed("Cancelled on the head unit.");
     if (here.file === entry.file && here.complete) return follow();
     var offset = here.file === entry.file ? here.have : 0;
     // A try that got further does not count against the next.

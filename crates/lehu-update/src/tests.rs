@@ -605,6 +605,79 @@ fn a_failed_install_says_why_and_frees_the_phone() {
 }
 
 #[test]
+fn cancel_removes_what_arrived_and_tells_the_page() {
+    let (_root, cfg) = setup("cancel");
+    let cache = cfg.cache.clone();
+    let u = Updater::new(cfg, || {});
+    wait_for(&u, "the status", |v| !v.booted.is_empty());
+    assert!(!u.cancel(), "nothing to cancel");
+
+    // Part of one, waiting for the phone: the part goes.
+    u.shared.change(|inner| {
+        let v = &mut inner.view;
+        v.file = "p.tar".into();
+        v.size = 100;
+        v.received = 10;
+    });
+    fs::write(cache.join("p.tar.part"), [0u8; 10]).unwrap();
+    assert!(u.cancel());
+    assert!(!cache.join("p.tar.part").exists());
+    let v = u.view();
+    assert_eq!((v.stage, v.received, v.cancels), (Stage::Idle, 0, 1));
+    assert!(!v.can_cancel());
+
+    // Checked: the installer's discard removes it.
+    fs::write(cache.join("c.tar"), b"x").unwrap();
+    u.shared.change(|inner| {
+        let v = &mut inner.view;
+        v.stage = Stage::Ready;
+        v.file = "c.tar".into();
+    });
+    assert!(u.cancel());
+    assert_eq!(u.view().stage, Stage::Idle);
+    assert_eq!(u.view().cancels, 2);
+}
+
+#[test]
+fn nothing_cancels_a_check_or_an_install() {
+    let mut v = View::default();
+    for (stage, can) in [
+        (Stage::Idle, false),
+        (Stage::Receiving, true),
+        (Stage::Checking, false),
+        (Stage::Ready, true),
+        (Stage::Failed, false),
+        (Stage::Installing, false),
+        (Stage::Restarting, false),
+    ] {
+        v.stage = stage;
+        assert_eq!(v.can_cancel(), can, "{stage:?}");
+    }
+    v.stage = Stage::Failed;
+    v.file = "u.tar".into();
+    assert!(v.can_cancel(), "a failed install left it there");
+}
+
+#[test]
+fn a_transfer_cancelled_midway_leaves_nothing() {
+    let (_root, cfg) = setup("cancelmid");
+    let cache = cfg.cache.clone();
+    let sh = shared(cfg);
+    let data = [7u8; 64];
+    let up = upload("m.tar", &data, 0);
+    begin(&sh, &up, 64).unwrap();
+    // As `Updater::cancel` leaves it; the connection then ends early.
+    sh.lock().cancel_upload = true;
+    let mut chunk = [0u8; 16];
+    let stop = AtomicBool::new(false);
+    let got = receive(&sh, &up, 64, &mut &data[..10], &mut chunk, &stop);
+    assert_eq!(got, Received::Cut(10));
+    assert!(!cache.join("m.tar.part").exists());
+    let v = sh.lock().view.clone();
+    assert_eq!((v.stage, v.received, v.cancels), (Stage::Idle, 0, 1));
+}
+
+#[test]
 fn a_restart_that_never_comes_frees_the_phone() {
     let (_root, mut cfg) = setup("norestart");
     cfg.restart_wait = Duration::from_millis(200);

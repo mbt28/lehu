@@ -410,6 +410,7 @@ pub(crate) fn info(shared: &Shared) -> String {
         .str("file", &file)
         .num("have", have)
         .bool("complete", complete)
+        .num("cancels", u64::from(v.cancels))
         .done()
 }
 
@@ -650,23 +651,32 @@ pub(crate) fn receive(
         Ok(Received::Complete)
     })();
     let result = result.unwrap_or_else(|e: io::Error| Received::Failed(e.to_string()));
-    shared.change(|inner| match &result {
-        Received::Complete => shared.received(inner, &up.file),
-        Received::Partial(n) | Received::Cut(n) => {
-            inner.view.received = *n;
-            if inner.view.stage == Stage::Receiving {
-                inner.view.stage = Stage::Idle;
+    shared.change(|inner| {
+        // Cancelled on the head unit meanwhile: however it ended, it goes.
+        if std::mem::take(&mut inner.cancel_upload) {
+            let whole = result == Received::Complete;
+            shared.drop_update(inner, whole);
+            return;
+        }
+        match &result {
+            Received::Complete => shared.received(inner, &up.file),
+            Received::Partial(n) | Received::Cut(n) => {
+                inner.view.received = *n;
+                if inner.view.stage == Stage::Receiving {
+                    inner.view.stage = Stage::Idle;
+                }
             }
-        }
-        Received::Damaged => {
-            inner.view.stage = Stage::Failed;
-            inner.view.received = 0;
-            inner.view.message = "The update arrived damaged. Send it again".into();
-        }
-        Received::Failed(why) => {
-            log::warn!("update: cannot save {}: {why}", up.file);
-            inner.view.stage = Stage::Failed;
-            inner.view.message = "The update cannot be saved".into();
+            Received::Damaged => {
+                inner.view.stage = Stage::Failed;
+                inner.view.file.clear();
+                inner.view.received = 0;
+                inner.view.message = "The update arrived damaged. Send it again".into();
+            }
+            Received::Failed(why) => {
+                log::warn!("update: cannot save {}: {why}", up.file);
+                inner.view.stage = Stage::Failed;
+                inner.view.message = "The update cannot be saved".into();
+            }
         }
     });
     result

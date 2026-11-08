@@ -188,6 +188,36 @@ pub struct View {
     pub url: String,
     pub serve_error: String,
     pub outcome: Option<Outcome>,
+    /// Counts the updates cancelled here: the page stops sending when it
+    /// moves, and does not start over by itself.
+    pub cancels: u32,
+}
+
+impl View {
+    /// There is something to cancel, and stopping now is safe. A check runs
+    /// for seconds and then there is; an install cannot be stopped.
+    pub fn can_cancel(&self) -> bool {
+        match self.stage {
+            Stage::Receiving | Stage::Ready => true,
+            Stage::Idle => self.received > 0,
+            Stage::Failed => !self.file.is_empty(),
+            Stage::Checking | Stage::Installing | Stage::Restarting => false,
+        }
+    }
+
+    /// No update any more, whatever the stage was.
+    pub(crate) fn clear_update(&mut self) {
+        self.stage = Stage::Idle;
+        self.file.clear();
+        self.received = 0;
+        self.size = 0;
+        self.notes.clear();
+        self.version.clear();
+        self.mode = Mode::default();
+        self.size_kb = 0;
+        self.percent = 0;
+        self.message.clear();
+    }
 }
 
 enum Job {
@@ -202,6 +232,10 @@ enum Job {
         quiet: bool,
     },
     Apply {
+        tar: PathBuf,
+    },
+    /// Remove a checked (or checked and failed) update.
+    Discard {
         tar: PathBuf,
     },
 }
@@ -224,6 +258,8 @@ pub(crate) struct Inner {
     /// (cut when it stops).
     pub(crate) server_stop: Option<Arc<AtomicBool>>,
     pub(crate) conn: Option<TcpStream>,
+    /// Cancelled while it arrives: what is there goes when the transfer ends.
+    pub(crate) cancel_upload: bool,
     /// The outcome shown: written to `cfg.shown` once seen.
     shown_pending: Option<(String, String)>,
     /// The last wake for a transfer's progress.
@@ -245,6 +281,7 @@ impl Shared {
                 left_at: Some(Instant::now()),
                 server_stop: None,
                 conn: None,
+                cancel_upload: false,
                 shown_pending: None,
                 noted_at: None,
             }),
@@ -302,6 +339,21 @@ impl Shared {
         inner.view.message.clear();
         let tar = self.cfg.cache.join(file);
         self.push(inner, Job::Check { tar, quiet: false });
+    }
+
+    /// The update removed: the part is ours, and whatever the installer
+    /// unpacked is its own to remove.
+    pub(crate) fn drop_update(&self, inner: &mut Inner, whole: bool) {
+        let file = inner.view.file.clone();
+        if !file.is_empty() {
+            let _ = fs::remove_file(store::part_path(&self.cfg.cache, &file));
+            if whole {
+                let tar = self.cfg.cache.join(&file);
+                self.push(inner, Job::Discard { tar });
+            }
+        }
+        inner.view.clear_update();
+        inner.view.cancels = inner.view.cancels.wrapping_add(1);
     }
 }
 
@@ -412,6 +464,30 @@ impl Updater {
         })
     }
 
+    /// Cancel the update: a transfer stops and what arrived goes; a checked
+    /// update is removed. Nothing to cancel (see [`View::can_cancel`]): false.
+    pub fn cancel(&self) -> bool {
+        let shared = &self.shared;
+        shared.change(|inner| {
+            if !inner.view.can_cancel() {
+                return false;
+            }
+            log::info!("update: cancelled at {}", inner.view.stage.word());
+            match inner.view.stage {
+                Stage::Receiving => {
+                    // The transfer's thread finishes it: see `server::receive`.
+                    inner.cancel_upload = true;
+                    if let Some(conn) = &inner.conn {
+                        let _ = conn.shutdown(std::net::Shutdown::Both);
+                    }
+                }
+                Stage::Idle => shared.drop_update(inner, false),
+                _ => shared.drop_update(inner, true),
+            }
+            true
+        })
+    }
+
     /// The outcome was shown: not again after the next start.
     pub fn outcome_seen(&self) {
         let pending = self.shared.change(|inner| {
@@ -457,6 +533,7 @@ fn work(shared: &Shared) {
             Job::Status { at_start } => run_status(shared, at_start),
             Job::Check { tar, quiet } => run_check(shared, &tar, quiet),
             Job::Apply { tar } => run_apply(shared, &tar),
+            Job::Discard { tar } => run_discard(shared, &tar),
         }
     }
 }
@@ -608,12 +685,28 @@ fn run_check(shared: &Shared, tar: &Path, quiet: bool) {
                     v.stage = Stage::Idle;
                     v.file.clear();
                 } else {
+                    // The installer removed what it refused.
                     v.stage = Stage::Failed;
+                    v.file.clear();
                     v.message = why;
                 }
             }
         }
     });
+}
+
+fn run_discard(shared: &Shared, tar: &Path) {
+    let out = installer(&shared.cfg, &["discard".as_ref(), tar.as_os_str()], true).output();
+    match out {
+        Ok(o) if o.status.success() => log::info!("update: {} removed", tar.display()),
+        // Gone already is what was wanted; the next upload clears the rest.
+        Ok(o) => log::info!(
+            "update: discard {}: {}",
+            tar.display(),
+            String::from_utf8_lossy(&o.stdout).trim()
+        ),
+        Err(e) => log::warn!("update: discard {}: {e}", tar.display()),
+    }
 }
 
 /// A child's output, read on a thread of its own so a full pipe never
@@ -726,6 +819,10 @@ fn run_apply(shared: &Shared, tar: &Path) {
         shared.change(|inner| {
             let v = &mut inner.view;
             v.stage = Stage::Failed;
+            // Installed beside the system: nothing is left to remove.
+            if v.mode == Mode::InPlace {
+                v.file.clear();
+            }
             v.message = "The head unit did not restart. \
                          The update takes effect at the next start"
                 .into();
