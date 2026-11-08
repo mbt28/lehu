@@ -2466,6 +2466,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lehu-update"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+]
+
+[[package]]
 name = "lehu-usb"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEHU update</title>
+<style>
+:root { color-scheme: light dark; --dim: #6e7781; --bad: #cf222e; --ok: #1a7f37; --accent: #0969da; }
+body { font: 17px/1.45 -apple-system, system-ui, sans-serif; margin: 0 auto; padding: 20px 16px; max-width: 560px; }
+h1 { font-size: 24px; margin: 0 0 16px; }
+h2 { font-size: 20px; margin: 0 0 4px; }
+p { margin: 0 0 12px; }
+.dim { color: var(--dim); }
+.bad { color: var(--bad); }
+.ok { color: var(--ok); }
+button { font: inherit; font-weight: 600; width: 100%; padding: 16px; margin: 8px 0; border: 0;
+         border-radius: 12px; background: var(--accent); color: #fff; }
+button:disabled { opacity: .5; }
+.bar { height: 10px; border-radius: 5px; background: rgba(128,128,128,.25); overflow: hidden; margin: 8px 0 4px; }
+.bar > div { height: 100%; width: 0; background: var(--accent); }
+.hide { display: none; }
+</style>
+</head>
+<body>
+<h1>LEHU update</h1>
+<div id="what" class="hide">
+  <h2 id="version"></h2>
+  <p id="notes" class="dim"></p>
+  <p id="size" class="dim"></p>
+</div>
+<p id="say">Asking the head unit...</p>
+<div id="meter" class="hide"><div class="bar"><div id="fill"></div></div><p id="count" class="dim"></p></div>
+<button id="go" class="hide">Download and send to the head unit</button>
+<button id="again" class="hide">Try again</button>
+<script>
+"use strict";
+var $ = function (id) { return document.getElementById(id); };
+var info = null, entry = null, blob = null, blobFile = "", waited = 0;
+
+function say(text, kind) { $("say").textContent = text; $("say").className = kind || ""; }
+function show(id, on) { $(id).classList.toggle("hide", !on); }
+function mb(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + " MB"; }
+function meter(done, total, what) {
+  show("meter", true);
+  $("fill").style.width = (total > 0 ? Math.min(100, 100 * done / total) : 0) + "%";
+  $("count").textContent = what + ": " + mb(done) + " of " + mb(total);
+}
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+async function getJson(url) {
+  var r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+function failed(text) {
+  say(text, "bad");
+  show("go", false);
+  show("again", true);
+}
+
+// The head unit, then the update server over the phone's own network.
+async function start() {
+  show("again", false); show("go", false); show("meter", false); show("what", false);
+  say("Asking the head unit...");
+  try { info = await getJson("/info"); } catch (e) {
+    return failed("The head unit does not answer. Is this phone on its Wi-Fi?");
+  }
+  if (!info.booted) {
+    if (++waited > 15) return failed("The head unit does not know its version.");
+    say("The head unit is starting...");
+    await sleep(2000);
+    return start();
+  }
+  if (["checking", "installing", "restarting"].indexOf(info.stage) >= 0) return follow();
+  say("Looking for updates...");
+  var list;
+  try { list = await getJson(info.manifest_url); } catch (e) {
+    // One it has already is still there to install.
+    if (info.stage === "ready") return follow();
+    return failed("No internet on the phone. Keep this Wi-Fi, turn on mobile data, and try again.");
+  }
+  var updates = (list && list.updates) || [];
+  entry = updates.filter(function (u) { return u.from === info.booted; })[0];
+  if (!entry) {
+    var current = updates.some(function (u) { return u.commit === info.booted; });
+    say(current ? "Up to date." : "No update for this version.", current ? "ok" : "");
+    show("again", false);
+    return;
+  }
+  $("version").textContent = "Version " + entry.version;
+  $("notes").textContent = entry.notes || "";
+  $("size").textContent = mb(entry.size) + (info.booted_version ? ", now " + info.booted_version : "");
+  show("what", true);
+  if (info.file === entry.file && info.complete) return follow();
+  say(info.file === entry.file && info.have > 0
+    ? "Part of it is on the head unit already." : "");
+  show("go", true);
+}
+
+// Over the phone's network, as a Blob: with the bytes counted where the
+// browser lets them be.
+async function download() {
+  var url = new URL(entry.file, new URL(info.manifest_url, location.href)).href;
+  var r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (r.body && r.body.getReader) {
+    var reader = r.body.getReader(), parts = [], got = 0;
+    for (;;) {
+      var step = await reader.read();
+      if (step.done) break;
+      parts.push(step.value);
+      got += step.value.length;
+      meter(got, entry.size, "Downloading");
+    }
+    return new Blob(parts);
+  }
+  return r.blob();
+}
+
+// One POST of what the head unit does not have yet, its progress counted.
+function send(offset) {
+  return new Promise(function (resolve) {
+    var x = new XMLHttpRequest();
+    var q = "file=" + encodeURIComponent(entry.file) + "&size=" + entry.size +
+      "&sha256=" + encodeURIComponent(entry.sha256) + "&offset=" + offset +
+      "&notes=" + encodeURIComponent((entry.notes || "").slice(0, 300));
+    x.open("POST", "/upload?" + q);
+    x.upload.onprogress = function (ev) { meter(offset + ev.loaded, entry.size, "Sending"); };
+    x.onload = function () {
+      var body = {};
+      try { body = JSON.parse(x.responseText); } catch (e) {}
+      resolve({ status: x.status, body: body });
+    };
+    x.onerror = x.ontimeout = x.onabort = function () { resolve({ status: 0, body: {} }); };
+    x.send(blob.slice(offset));
+  });
+}
+
+async function go() {
+  show("go", false);
+  try {
+    // Downloaded once: a transfer tried again sends the same.
+    if (!blob || blobFile !== entry.file) {
+      blob = null;
+      say("Downloading the update over the phone's network...");
+      var got = await download();
+      if (got.size !== entry.size) throw new Error("short");
+      blob = got;
+      blobFile = entry.file;
+    }
+  } catch (e) {
+    return failed("The download stopped. Check the phone's mobile data and try again.");
+  }
+  say("Sending it to the head unit over Wi-Fi...");
+  var most = -1, damaged = 0;
+  for (var tries = 0; tries < 6; tries++) {
+    var here;
+    try { here = await getJson("/info"); } catch (e) { await sleep(2000); continue; }
+    if (here.file === entry.file && here.complete) return follow();
+    var offset = here.file === entry.file ? here.have : 0;
+    // A try that got further does not count against the next.
+    if (offset > most) { most = offset; tries = 0; }
+    var r = await send(offset);
+    if (r.status === 200 && r.body.complete) return follow();
+    if (r.status === 409 && r.body.error === "busy") return follow();
+    if (r.status === 507) return failed("The head unit has no room for the update.");
+    if (r.status === 400 && r.body.error === "parameters") return failed("The update list is not right: " + r.body.message);
+    if (r.status === 422) {
+      // Twice: it is what was downloaded. Try again downloads it again.
+      if (++damaged > 1) { blob = null; return failed("The update is damaged. Try again."); }
+      say("It arrived damaged. Sending it again...");
+    } else if (r.status !== 200) await sleep(2000);
+  }
+  failed("The update did not get through. Stay close to the head unit and try again.");
+}
+
+// What the head unit does with it, until it is ready to install.
+async function follow() {
+  show("go", false);
+  for (;;) {
+    var s;
+    try { s = await getJson("/state"); } catch (e) {
+      say("The head unit does not answer.", "bad"); await sleep(2000); continue;
+    }
+    if (s.stage === "receiving") meter(s.received, s.size, "Sending");
+    else show("meter", false);
+    if (s.stage === "checking") say("The head unit is checking the update...");
+    else if (s.stage === "ready") {
+      say("Continue on the head unit: Settings > Update > Install." +
+        (s.version ? " Version " + s.version + "." : ""), "ok");
+      return;
+    } else if (s.stage === "failed") return failed(s.message || "The update failed.");
+    else if (s.stage === "installing" || s.stage === "restarting") {
+      say("The head unit is installing the update.", "ok"); return;
+    } else if (s.stage === "idle") return start();
+    await sleep(1000);
+  }
+}
+
+$("go").onclick = go;
+$("again").onclick = start;
+start();
+</script>
+</body>
+</html>

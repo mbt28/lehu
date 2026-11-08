@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lehu", "crates/lehu-aa", "crates/lehu-camera", "crates/lehu-core", "crates/lehu-cp", "crates/lehu-drm", "crates/lehu-input", "crates/lehu-session", "crates/lehu-ui", "crates/lehu-usb", "crates/lehu-video", "crates/lehu-audio", "crates/lehu-bt", "crates/lehu-wifi", "crates/lehu-fuzz", "crates/lehu-image"]
+members = ["lehu", "crates/lehu-aa", "crates/lehu-camera", "crates/lehu-core", "crates/lehu-cp", "crates/lehu-drm", "crates/lehu-input", "crates/lehu-session", "crates/lehu-ui", "crates/lehu-usb", "crates/lehu-video", "crates/lehu-audio", "crates/lehu-bt", "crates/lehu-wifi", "crates/lehu-fuzz", "crates/lehu-image", "crates/lehu-update"]
 
 # ARMv5 has no 64-bit atomics: fontique's counter becomes 32 bits; and
 # parley's dictionary segmenter (3 MB of tables for Thai, Khmer, Lao,
