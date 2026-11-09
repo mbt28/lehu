@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The protobuf bodies the head unit builds and parses, written by hand
 //! for the messages it uses rather than generated from the whole protocol:
 //! prost's derive gives the encoding, the field numbers come from the

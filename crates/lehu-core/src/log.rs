@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Logging: the `log` facade, written to stderr one line at a time with the
 //! seconds since start, the level and the module. The level comes from
 //! `system.log-level`; `verbose` and `protocol` both map to trace, so every

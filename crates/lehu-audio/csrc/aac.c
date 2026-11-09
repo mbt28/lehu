@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * AAC-LC access units to S16 PCM through libavcodec's fixed-point decoder.
  *

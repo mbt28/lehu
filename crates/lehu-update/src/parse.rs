@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What `lehu-os-update` prints, and its progress file: `name=value`
 //! lines. A command that failed exits 1 with `message=` on its last line.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Settings: TOML, in three layers.
 //!
 //! 1. The defaults compiled in (`Settings::default()`, documented in

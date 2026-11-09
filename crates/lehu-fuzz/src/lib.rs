@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Fuzz targets for the host, in plain `cargo test`: no libFuzzer, no
 //! nightly. Every parser that reads bytes from a phone, a network, the
 //! kernel or a file gets the seeds it normally sees, every truncation of

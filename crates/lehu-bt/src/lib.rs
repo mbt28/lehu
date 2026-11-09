@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Bluetooth through BlueZ, for the whole program: one manager thread that
 //! runs the pairing agent, keeps the input devices the screens list, and
 //! registers the RFCOMM profiles the phones' wireless bootstraps run on.

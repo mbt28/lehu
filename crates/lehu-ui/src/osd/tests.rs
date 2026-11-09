@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The controller against the recording host. Each test instantiates its
 //! own screens: Slint's platform is per thread, and the test harness gives
 //! every test a thread.

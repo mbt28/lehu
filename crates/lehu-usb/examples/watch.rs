@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Print the devices on the bus and every attach and detach until Ctrl-C:
 //! `watch` alone, or `watch reset BUS ADDRESS` to reset one port.
 

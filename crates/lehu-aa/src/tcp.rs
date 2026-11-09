@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The TCP side of a wireless phone: the listener on port 5277 the phone
 //! connects to once it has joined the access point, and the tuning of the
 //! accepted socket. From the accepted connection on, the GAL session runs

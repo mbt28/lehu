@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! RFCOMM services for the phones' wireless bootstraps: a profile (its
 //! UUID, channel and SDP record) registered with bluetoothd, which binds
 //! the channel, publishes the record and hands every accepted connection to

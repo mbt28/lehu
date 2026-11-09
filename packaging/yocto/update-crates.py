@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Write the Yocto recipe's crate list from Cargo.lock.
 
     packaging/yocto/update-crates.py

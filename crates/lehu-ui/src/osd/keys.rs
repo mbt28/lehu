@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One keyboard event, on the loop thread.
 //!
 //! Dialogs take keys first. On the list screens Up/Down move Slint's focus

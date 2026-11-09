@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The UI sync channel of a CarPlay Ultra session with a car-maker theme:
 //! the phone and the head unit agree on the instrument layout the theme's
 //! cluster shows. Each message is an OPACK frame naming the panel, with a

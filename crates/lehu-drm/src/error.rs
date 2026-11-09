@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What can go wrong opening the display. Showing a picture never returns
 //! an error: `Show` says what became of it.
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The vehicle state protocol of a CarPlay Ultra session, at its minimum.
 //! The head unit describes itself as accessories made of services and
 //! their characteristics (each an instance id, a type, a format, who may

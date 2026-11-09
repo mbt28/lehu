@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A V4L2 capture device -- the composite reversing camera on the F1C200s
 //! TV decoder -- shown full screen on the video plane with no copy: its
 //! buffers are exported as dma-bufs and scanned out as they are, so it

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Which codec each phone is asked for: the probe's answer, with
 //! `display.codec` as an override the hardware must be able to honour.
 

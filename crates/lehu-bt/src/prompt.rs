@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The dialog the screens show for Bluetooth, and its texts.
 
 use crate::device::{six_digits, spaced};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The decoders behind one face, keyed by the session's `AudioFormat`:
 //! what the loop opens when a CarPlay stream starts and feeds from
 //! `Sinks::audio_packet`, one packet in, PCM appended to a `Segment` out.

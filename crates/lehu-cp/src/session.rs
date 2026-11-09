@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The session the main loop holds: its threads, the state they share,
 //! and the `lehu_session::Session` face of it. Started on a plugged
 //! iPhone (`start`) or for the phones that come over Bluetooth and the

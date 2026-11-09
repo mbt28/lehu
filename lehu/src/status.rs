@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What LEHU is doing, as a small JSON file for another process on the
 //! board (a settings or update service) to show, with no protocol between
 //! them. Ported from FastCarPlay's status file, at /run/lehu/status.json.

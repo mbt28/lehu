@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The V4L2 shim (`csrc/camera.c`) behind a device handle. Every call maps
 //! -errno to `Err(errno)`.
 

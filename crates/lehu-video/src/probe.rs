@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The system's video decoders, probed once at start. Each V4L2
 //! memory-to-memory node is asked which coded formats its OUTPUT queue
 //! takes and how large a picture it decodes; libavcodec is asked whether it

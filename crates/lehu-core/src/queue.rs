@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Bounded queues between threads.
 //!
 //! A producer on the wire must never block or allocate: it pushes and is

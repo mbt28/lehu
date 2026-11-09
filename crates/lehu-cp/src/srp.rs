@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! SRP-6a, the accessory side, over the 3072-bit group of RFC 5054 with
 //! SHA-512: CarPlay's pair-setup. The user is the literal "Pair-Setup", the
 //! password the setup code "3939" (the phone never asks the driver for a

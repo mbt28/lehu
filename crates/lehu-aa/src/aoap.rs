@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The Android Open Accessory switch: puts an attached phone into accessory
 //! mode, so that it re-enumerates as 18d1:2d00 (or 2d01) with a pair of
 //! bulk endpoints and starts its Android Auto stack.

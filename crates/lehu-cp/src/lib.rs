@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CarPlay: the triggers that bring an iPhone to the head unit and the AV
 //! stack the phone then connects to, driven by the main loop as a
 //! `lehu_session::Session`.

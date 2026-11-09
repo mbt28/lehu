@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the CPU can do, read once at start.
 //!
 //! The fixed-point audio path and the software crypto are always there and are

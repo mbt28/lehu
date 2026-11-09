@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The decode thread: access units off the queue, pictures onto the plane.
 //!
 //! One decoder per session, built when the phone's video starts and stopped

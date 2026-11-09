@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! List models synced in place by id: a row made from one of the host's
 //! records is updated where it stands, erased when its record went,
 //! inserted where the host has it when new. Never a reset or a new model:

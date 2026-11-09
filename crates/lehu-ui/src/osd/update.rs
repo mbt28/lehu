@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Settings > System > Update (screen 14) and "Get from phone" (screen 15).
 //!
 //! The program has the update (see [`crate::host::Update`]); this shows it.

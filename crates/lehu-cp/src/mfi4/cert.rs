@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The phone's certificates as MFi 4 carries them: compressed, every field
 //! at a fixed width (the kind, the issuer's and subject's short names, the
 //! validity times as digits, the compressed key, the leaf's property, the

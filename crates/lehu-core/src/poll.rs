@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The main loop's one wait: `poll()` over a few descriptors, with an
 //! eventfd other threads use to wake it and a timerfd for the nearest
 //! deadline. Nothing here allocates after construction, and nothing spins:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The phone's video: Annex-B access units in, pictures on the video plane
 //! out, with the behaviour FastCarPlay's V4l2DrmDecoder earned on the board.
 //!

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The album art over iAP2 file transfer: a session of its own on the link
 //! (declared in the link synchronisation, `LinkSync::proposal`), no
 //! identification needed. The now playing update names the artwork's

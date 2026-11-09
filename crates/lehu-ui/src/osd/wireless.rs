@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The access point (screen 12) and the Link speed page (screen 13), both
 //! under Wireless.
 //!

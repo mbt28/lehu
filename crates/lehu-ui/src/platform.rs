@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The Slint platform under the screens: one software-rendered window of the
 //! panel's size and no event loop of its own -- the main loop ticks it.
 //! Slint keeps one platform per thread for the life of the process, so the

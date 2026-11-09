@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The slot ring between the USB read thread and the frame reader: a fixed
 //! set of transfer buffers that cycle from free to in flight to filled to
 //! consumed, with no copy and no allocation after the ring is built. The

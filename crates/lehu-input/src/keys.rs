@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Keys from Bluetooth keyboards and remotes: to the phone as its buttons,
 //! or to the screens as navigation and typed characters, with the repeats,
 //! the volume keys, the wheel as a knob, the camera key and key learning.

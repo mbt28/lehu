@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! Now playing and route guidance over iAP2: the subscriptions the head
 //! unit sends once the phone accepted it, and the phone's updates parsed
 //! into the session's side channel. The parameter ids, the guidance

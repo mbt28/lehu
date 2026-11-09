@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Settings > Update: system updates, installed by the image's
 //! `/usr/sbin/lehu-os-update` (LEHU OS, and Buildroot images that carry
 //! it; elsewhere the screens say it is not available).

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The CarPlay primitives, all pure Rust: X25519 and Ed25519 for the
 //! pairing, HKDF-SHA512 for every derived key, ChaCha20-Poly1305 for every
 //! sealed byte, AES-128-CTR and SHA-1 for the MFiSAP. The stream AEAD keeps

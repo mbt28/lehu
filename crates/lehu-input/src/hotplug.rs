@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Hotplug without udev: inotify on /dev/input, and the names of its nodes
 //! kept without allocating.
 

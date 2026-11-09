@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Shared pieces of LEHU that every other crate builds on.
 
 pub mod clock;

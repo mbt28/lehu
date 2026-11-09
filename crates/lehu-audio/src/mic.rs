@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The microphone: blocking capture from the ADC on its own thread, framed
 //! and coded as the phone asked (`MicFormat`), each frame pushed into the
 //! session's microphone queue for the protocol to seal and send.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Android Auto, wired and wireless: the accessory switch and the GAL
 //! session over the accessory's bulk pipe, or the Bluetooth handoff and the
 //! same session over the phone's TCP connection, shown to the main loop as

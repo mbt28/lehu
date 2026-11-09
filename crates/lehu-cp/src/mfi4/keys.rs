@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The MFi 4 SIGMA-I keys: ephemeral P-256 points (33-byte compressed),
 //! their ECDH secret, a CMAC-based extract-and-expand into 200 bytes of key
 //! material, cut into AES-128-CCM channels (a key and a 12-byte nonce that

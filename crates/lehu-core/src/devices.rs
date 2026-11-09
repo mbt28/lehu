@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The phones the head unit knows: one record per phone, however it
 //! came (a cable, Bluetooth, Wi-Fi), with the identities each link gave
 //! it, so a phone seen over Bluetooth and later plugged in is one entry,

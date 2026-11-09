@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The device: opening the card, choosing the planes, and every commit.
 
 use std::fs::{File, OpenOptions};

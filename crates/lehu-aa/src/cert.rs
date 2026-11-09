@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2018 f1x.studio (Michal Szwaj) (aasdk, https://github.com/f1xpl/aasdk)
 //! The head unit's client certificate for the GAL TLS handshake.
 //!
 //! This is the standard Android Auto head-unit client certificate, signed

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The one Bluetooth manager: a private system-bus connection on its own
 //! thread, the one pairing agent (`DisplayYesNo`, the default agent), the
 //! input devices the screens list, pair, connect and forget, the adapter

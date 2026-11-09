@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the wired and the wireless triggers share: the head unit's ids as
 //! the phone is told them, the answers to the control-session messages
 //! both paths see (the identification's outcome, the MFi authentication,

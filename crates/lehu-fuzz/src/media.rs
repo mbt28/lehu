@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The media paths' own parsing: the NAL kinds of an access unit, the
 //! Annex-B splitter that cuts a stream into units, the PCM the phones send,
 //! the format word between the protocols and the mixer, and the album

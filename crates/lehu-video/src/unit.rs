@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One access unit as the protocol hands it over: an Annex-B buffer, filled
 //! in place, carried through the queue by value and reused.
 

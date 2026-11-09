@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The GAL wire vocabulary: ids, flags, channels, keycodes and the timings.
 //! The numbers mirror the protobuf enums in the vendored definitions
 //! (ControlMessageType, MediaMessageId, InputMessageId, SensorMessageId);

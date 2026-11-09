@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! Apple property lists: the binary form (`bplist00`) every CarPlay AV
 //! message is, and the XML form lockdown speaks. Both decoders check every
 //! offset against the buffer before they read it, so a corrupt message is

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CarPlay Ultra: the MFi 4 messages and the phone's compressed
 //! certificates, the MFi 4 session's first steps, OPACK, the vehicle state
 //! and UI sync messages, the data streams' packages and the theme file.

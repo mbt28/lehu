@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The output volume: 0-100 % plus mute, kept across restarts in the user
 //! settings. Applied through the sound card's own playback control when
 //! it has one (ALSA's simple mixer, so any Linux card: "Master", "PCM",

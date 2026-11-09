@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The album art's pictures: JPEG (baseline and progressive) and PNG,
 //! decoded straight to the size they show at.
 //!

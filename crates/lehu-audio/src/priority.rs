@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Realtime priority for the audio threads, best effort. The image either
 //! raises the rtprio limit for `lehu` or grants `cap_sys_nice`
 //! (`docs/image-requirements.md`); without either the threads stay at

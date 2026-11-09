@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The touchscreen: multitouch protocol B or single-touch, calibrated into
 //! panel ten-thousandths, one frame per `SYN_REPORT`, routed to the screens
 //! or to the phone. Pure: events come in as values, frames go out through

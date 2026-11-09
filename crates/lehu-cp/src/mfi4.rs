@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! MFi 4 mutual authentication, as a phone that runs CarPlay Ultra asks
 //! for it: a SIGMA-I exchange on `/auth-setup` (marked `x-apple-at: 0x20`)
 //! in which the phone proves itself with its Apple-issued certificate and

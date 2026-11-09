@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! CarPlay's video framing to Annex-B. A screen frame is a chain of NAL
 //! units each behind a 4-byte big-endian length; the codec configuration is
 //! an `avcC` or `hvcC` record (sometimes inside an `avc1`/`hvc1` sample

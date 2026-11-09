@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The access point's radio in hostapd's config: the band, the channel, the
 //! width and the country, read from the file and written back into it.
 //!

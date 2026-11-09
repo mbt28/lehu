@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One atomic request, reused: fixed arrays instead of a growing property
 //! list, so a commit allocates nothing. The properties of one object stay
 //! together, as the ioctl wants them.

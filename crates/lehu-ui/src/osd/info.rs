@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Settings > System > Info (screen 18): what the system is, and once a
 //! second while it shows, what it does. Nothing is read off this page.
 

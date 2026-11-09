@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What BlueZ tells us about a device, and what the screens make of it:
 //! whether it is an input device, what kind, and a name they can show.
 

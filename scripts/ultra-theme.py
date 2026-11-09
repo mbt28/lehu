@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# A Python port of LIVI's livi-core/src/theme_catalog.rs (Copyright (C) 2025
-# Lasse Heitgres, GPL-3.0-or-later, https://github.com/f-io/LIVI); changed
-# for LEHU.
+# Copyright (C) 2026 Mehmet Tekbas
+# Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
+# A Python port of LIVI's livi-core/src/theme_catalog.rs; changed for LEHU.
 """Prepare a CarPlay Ultra car-maker theme for LEHU, on a PC with internet.
 
 The board has no internet. The phone fetches a theme's artwork itself; the

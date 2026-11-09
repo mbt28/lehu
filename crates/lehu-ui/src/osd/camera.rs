@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The camera view (screen 9): the settings column over the picture is up
 //! for a few seconds after the last input. Two pages: the menu (Back, the
 //! inputs, Standard, Picture) and Picture (Back, the levels). The page,

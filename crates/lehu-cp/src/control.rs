@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! One control connection from the phone: RTSP in the clear for the
 //! pairing, then sealed frames for everything after, routed to the pairing
 //! responders, the MFiSAP and the AV session. Bytes in, bytes out, so the

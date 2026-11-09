@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A minimal mDNS responder announcing exactly one service, the head unit's
 //! `_airplay._tcp` on the control port, so an iPhone on the access point
 //! finds it. It announces on start and answers PTR, SRV, TXT and A queries

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The sealed framing of the control and event channels after pair-verify,
 //! and of the iAP tunnel: `[2-byte length LE][ciphertext][16-byte tag]`,
 //! the length being the associated data and the nonce a per-direction

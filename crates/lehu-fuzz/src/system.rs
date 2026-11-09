@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the system tells the head unit: USB device names from the kernel,
 //! Bluetooth addresses and names from BlueZ, hostapd's config file.
 

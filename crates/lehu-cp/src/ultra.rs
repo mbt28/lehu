@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! CarPlay Ultra on a head unit with one screen and no car behind it.
 //!
 //! What makes an iPhone run an Ultra session rather than classic CarPlay:

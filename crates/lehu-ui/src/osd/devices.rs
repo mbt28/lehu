@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The Phones screen (screen 10): the phones the head unit knows, as the
 //! host lists them -- the connected one first. Each row is picked in place
 //! as the Settings rows are (`Pick::Device`, the phone's id beside it):

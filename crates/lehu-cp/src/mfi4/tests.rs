@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The whole exchange against a phone played here: its own P-256 key and
 //! a leaf for it, a chip that signs with another key, every message
 //! sealed and opened the way the other side does.

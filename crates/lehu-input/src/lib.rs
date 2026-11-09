@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Input for the head unit, straight from evdev: the touchscreen, and the
 //! Bluetooth keyboards and remotes paired with it. One thread polls every
 //! device and the hotplug watch; what it reads leaves through a [`Sink`]

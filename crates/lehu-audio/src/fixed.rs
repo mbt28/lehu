@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Integer arithmetic for the volume scale. The ARM926 has no FPU, and the
 //! few logarithms a volume key needs are done here in Q16 rather than on
 //! soft-float: a 2^x polynomial and a log2 by squaring, each within a few

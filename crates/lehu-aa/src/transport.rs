@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The byte transport under the GAL session. The session speaks the same
 //! protocol (framing, TLS, discovery, channels) whether the bytes ride the
 //! accessory's bulk pipe (wired) or a TCP socket (wireless), so

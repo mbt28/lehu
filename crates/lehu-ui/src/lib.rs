@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The screens: the head unit's own Slint UI, ported from FastCarPlay as it
 //! is -- the knob-first lists with Back on top, the rows picked in place, the
 //! on-screen keyboard, the camera column, the volume bar -- and the

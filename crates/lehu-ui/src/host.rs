@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the screens need from the rest of the program, and nothing more:
 //! the contract FastCarPlay kept in ui_bridge and in the singletons its
 //! controller reached for (settings, volume, camera, Bluetooth). The

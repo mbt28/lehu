@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The phone's USB side: finding it in sysfs, switching it to its CarPlay
 //! configuration, and Apple's usbmux, a TCP multiplexer on two bulk
 //! endpoints, through which lockdown and the carkit service are reached.

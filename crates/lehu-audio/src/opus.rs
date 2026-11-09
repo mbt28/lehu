@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! libopus, declared here: the image's build is fixed point, so decoding
 //! lands in S16 with no float step (ffmpeg's libopus wrapper only decodes
 //! to float, and float to S16 per sample on this core is soft-float and

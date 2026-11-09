@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The folder an update is received into (`/var/cache/lehu-update`, on the
 //! SD card, never the RAM of `/tmp`): its names, the part being received,
 //! what is left over, the space there is.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The phone's audio: PCM segments in, the sound card out, with the
 //! behaviour FastCarPlay's mixer earned on the board, and the pieces around
 //! it.

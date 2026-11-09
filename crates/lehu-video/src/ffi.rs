@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The C helper (`csrc/decoder.c`) behind a safe face. Without ffmpeg's
 //! headers on the host the stub below takes its place and every open fails.
 

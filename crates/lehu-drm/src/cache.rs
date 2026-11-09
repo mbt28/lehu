@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Framebuffers for the pictures, keyed by the first plane's dma-buf fd.
 //!
 //! The decoder's pool cycles a small, stable set of buffers, so each

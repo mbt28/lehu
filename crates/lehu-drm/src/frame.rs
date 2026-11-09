@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A decoded picture as the decoder or the camera hands it over: dma-buf
 //! planes that stay open and unchanged while the picture is on the plane.
 

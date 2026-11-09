@@ -16,8 +16,8 @@ screens were carried over into Rust. The port's native CarPlay and Android
 Auto backends were written after LIVI's, file by file, and LEHU's ports of
 them keep that descent; the list below names the LIVI files.
 
-LIVI, a Rust CarPlay and Android Auto host, Copyright (C) 2025 Lasse
-Heitgres, GPL-3.0-or-later:
+LIVI, a Rust CarPlay and Android Auto host, Copyright (C) 2025-2026
+Lasse Heitgres, GPL-3.0-or-later:
   https://github.com/f-io/LIVI
 Files are named as they were when the code was taken: the TypeScript and
 Python of its Electron era (src/main/services/projection/driver/, until

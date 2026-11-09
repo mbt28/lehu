@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! iAP2, the protocol an accessory identifies itself with: link packets
 //! with their two checksums, the link synchronisation that opens a link,
 //! and control-session messages (CSMs). The link runs over any reliable

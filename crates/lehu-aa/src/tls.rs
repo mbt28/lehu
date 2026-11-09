@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The TLS 1.2 client the GAL session runs inside its frames.
 //!
 //! Nothing here touches a socket: the records travel as the payload of

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Wired Android Auto on the board without the rest of LEHU: switches the
 //! phone that is plugged in, runs the session, logs what it reports and
 //! counts the video and audio, until Ctrl-C. `aa` alone, or `aa chacha`

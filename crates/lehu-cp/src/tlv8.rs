@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! TLV8, the pairing messages' encoding: `[type][length][value]`, a value
 //! over 255 bytes split into consecutive items of the same type and joined
 //! again on decode.

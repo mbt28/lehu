@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! PNG: every colour type and bit depth, not interlaced. The image data is
 //! inflated a row at a time into two row buffers (this one, the one
 //! above, for the filters), so only the inflater's 32 KB window and two

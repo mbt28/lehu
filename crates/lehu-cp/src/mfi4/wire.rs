@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The MFi 4 message format: a 6-byte header (the start word, the whole
 //! length, the message id, all big-endian) and parameters, each a 4-byte
 //! header (its whole length and its id) and its value. The start word is

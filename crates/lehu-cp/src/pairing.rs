@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The accessory side of CarPlay's pairing: pair-setup (SRP-6a, then the
 //! long-term Ed25519 keys exchanged under a key from the SRP session),
 //! pair-verify (ephemeral X25519 and signatures with those long-term keys,

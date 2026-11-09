@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Now playing and the route guidance as the screens show them: the
 //! session's side channel turned into the Media page's fields and the
 //! navigation card's words. Integers only; runs when the phone sent

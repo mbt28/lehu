@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The running session: two threads around the machine and the transport,
 //! and for a wireless phone the thread that waits for it first.
 //!

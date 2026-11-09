@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JPEG: Huffman-coded baseline and progressive, 8-bit samples, one
 //! component (grey) or three (YCbCr, or RGB when an Adobe marker says so).
 //!

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! RTSP-style framing on the control channel: a request line, headers, an
 //! optional body sized by Content-Length. Requests are cut out of a stream
 //! buffer as they complete; a partial one waits for more bytes. The

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One monotonic clock for the whole program: milliseconds since it started.
 //! Timers and timestamps across threads compare these numbers directly; they
 //! never go backwards and will not wrap in the life of a head unit.

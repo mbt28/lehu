@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! Now playing and turn-by-turn from the phone: the media playback status
 //! channel and the navigation status channel, decoded into the session's
 //! side channel. The phone only sends on these channels; the head unit

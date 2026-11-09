@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Input, as the main loop receives it: the input thread calls the `Sink`
 //! and returns at once; each call becomes one fixed-size `Event` in a
 //! bounded queue and a wake of the loop, which drains the queue on its next

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! What the head unit tells the phone about itself in `GET /info`, and the
 //! commands it sends over the event channel. The info plist is the part of
 //! the protocol the phone judges whole: a missing view area, an icon, an

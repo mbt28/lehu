@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The mixer's work for one period, with no device in sight: the two
 //! sources rendered, ducked, volumed and clamped into one period of S16
 //! stereo, and the decisions around it (prefill, the jitter buffer, the
