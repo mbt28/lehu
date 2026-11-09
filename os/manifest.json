@@ -1,5 +1,15 @@
 {
  "format": 1,
- "branch": "lehu-os",
- "updates": []
+ "updates": [
+  {
+   "version": "2026.05-20261109182104",
+   "commit": "183f17734b068a3ee9caf8667c08f6f52cbd007556ea89e21a928ae75b805d4b",
+   "from": "d064ac7e2df6153d7bfa51b1aef90baaa65bc1018578c68c75205ef391e95edc",
+   "file": "buildroot-2026.05-20261109182104-from-d064ac7.tar",
+   "size": 30720,
+   "sha256": "59562e78cfca48a9879852aad4c9c06d3a6bed4f2e98922b0bd90777d81bbf84",
+   "notes": "Buildroot phone test 1: marker file only (/usr/share/lehu-phone-test)",
+   "made": "2026-11-09T18:21:32Z"
+  }
+ ]
 }
