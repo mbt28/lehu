@@ -18,7 +18,7 @@ Four tiles:
   Bluetooth name.
 - **Now playing**: the title, the artist and the progress. Opens the media
   page, with the album art and large previous, play/pause and next keys.
-- **Phones**: the phones LEHU knows.
+- **Linked Phones**: the phones LEHU knows.
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,
@@ -29,7 +29,7 @@ the camera.
 
 | Setting | What it holds |
 |---|---|
-| Connection | **Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
+| Connection | **Linked Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
 | Video | Night (Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
 | System | **Update**: the version running, and a new version of LEHU OS brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
@@ -41,7 +41,7 @@ power off) ask first and open on Cancel.
 
 Every link listens at the same time: wired and wireless CarPlay, wired and
 wireless Android Auto. A phone on the cable always comes first. A phone
-LEHU has seen before stays in the Phones list:
+LEHU has seen before stays in the Linked Phones list:
 
 - **Connect** wakes it, over its cable or over Bluetooth, and ends the
   session of the phone that was connected.

@@ -1375,7 +1375,7 @@ component ScreenHome inherits Rectangle {
                 Tile {
                     ring-key: "phones";
                     icon: "phone";
-                    title: "Phones";
+                    title: "Linked Phones";
                     sub: Bridge.phones-summary;
                     clicked => { Bridge.screen = 10; }
                 }
@@ -1515,7 +1515,7 @@ component ScreenConnection inherits ListPage {
     NavRow {
         ring-key: "phones";
         icon: "phone";
-        label: "Phones";
+        label: "Linked Phones";
         value: Bridge.active-phone != "" ? Bridge.active-phone : Bridge.phones-summary;
         value-dot: Bridge.active-phone != "" ? 2 : -1;
         clicked => { Bridge.screen = 10; }
@@ -1921,7 +1921,7 @@ component ScreenBtDevice inherits ListPage {
 // picked in place: Connect (Stop for the connected phone), Forget (asked
 // first) or Cancel. Nothing is edited here.
 component ScreenDevices inherits ListPage {
-    title: "Phones";
+    title: "Linked Phones";
     if Bridge.devices.length == 0: VerticalLayout {
         padding-left: 24px;
         padding-top: 8px;
