@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The AV session: what runs over the sealed control channel once the
 //! phone has verified. The phone drives it with RTSP requests carrying
 //! binary plists (`GET /info`, `SETUP`, `RECORD`, `/feedback`,

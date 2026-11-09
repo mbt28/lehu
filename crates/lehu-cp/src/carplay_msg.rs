@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The control-session messages of the CarPlay handshakes: the
 //! identification the phone asks for (a USB host transport when wired, a
 //! Bluetooth and a wireless CarPlay transport when not), the coprocessor's

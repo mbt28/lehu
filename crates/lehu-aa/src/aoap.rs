@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The Android Open Accessory switch: puts an attached phone into accessory
 //! mode, so that it re-enumerates as 18d1:2d00 (or 2d01) with a pair of
 //! bulk endpoints and starts its Android Auto stack.

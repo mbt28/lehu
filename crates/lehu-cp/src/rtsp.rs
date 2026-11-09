@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! RTSP-style framing on the control channel: a request line, headers, an
 //! optional body sized by Content-Length. Requests are cut out of a stream
 //! buffer as they complete; a partial one waits for more bytes. The

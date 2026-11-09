@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The sealed framing of the control and event channels after pair-verify,
 //! and of the iAP tunnel: `[2-byte length LE][ciphertext][16-byte tag]`,
 //! the length being the associated data and the nonce a per-direction

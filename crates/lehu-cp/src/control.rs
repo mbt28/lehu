@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One control connection from the phone: RTSP in the clear for the
 //! pairing, then sealed frames for everything after, routed to the pairing
 //! responders, the MFiSAP and the AV session. Bytes in, bytes out, so the

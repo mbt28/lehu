@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! TLV8, the pairing messages' encoding: `[type][length][value]`, a value
 //! over 255 bytes split into consecutive items of the same type and joined
 //! again on decode.

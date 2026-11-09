@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The protobuf bodies the head unit builds and parses, written by hand
 //! for the messages it uses rather than generated from the whole protocol:
 //! prost's derive gives the encoding, the field numbers come from the

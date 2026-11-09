@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CarPlay's video framing to Annex-B. A screen frame is a chain of NAL
 //! units each behind a 4-byte big-endian length; the codec configuration is
 //! an `avcC` or `hvcC` record (sometimes inside an `avc1`/`hvc1` sample

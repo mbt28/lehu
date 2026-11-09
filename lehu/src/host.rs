@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the screens see of the program: the settings and their persistence,
 //! the volume, the session, the camera, Bluetooth, power, the update.
 

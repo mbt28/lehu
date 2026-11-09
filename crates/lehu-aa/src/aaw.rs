@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The wireless setup conversation a phone holds with the head unit over
 //! Bluetooth before it joins the access point: short frames of
 //! `[len u16BE][id u16BE][protobuf]` on the Android Auto RFCOMM service.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The HID devices the head unit declares in `/info` and the reports it
 //! sends for them through the event channel: a two-contact touchscreen, a
 //! knob with four buttons and a wheel, the media keys and the telephony

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SRP-6a, the accessory side, over the 3072-bit group of RFC 5054 with
 //! SHA-512: CarPlay's pair-setup. The user is the literal "Pair-Setup", the
 //! password the setup code "3939" (the phone never asks the driver for a

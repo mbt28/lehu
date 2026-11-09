@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the head unit tells the phone about itself in `GET /info`, and the
 //! commands it sends over the event channel. The info plist is the part of
 //! the protocol the phone judges whole: a missing view area, an icon, an

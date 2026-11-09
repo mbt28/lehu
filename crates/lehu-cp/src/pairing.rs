@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The accessory side of CarPlay's pairing: pair-setup (SRP-6a, then the
 //! long-term Ed25519 keys exchanged under a key from the SRP session),
 //! pair-verify (ephemeral X25519 and signatures with those long-term keys,
