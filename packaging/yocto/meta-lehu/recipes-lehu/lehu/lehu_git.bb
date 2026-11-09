@@ -21,7 +21,7 @@ SRC_URI = " \
     file://lehu.tmpfiles \
 "
 SRCREV ?= "${AUTOREV}"
-PV = "0.1.0+git"
+PV = "0.2.0+git"
 S = "${UNPACKDIR}/lehu"
 
 inherit cargo cargo-update-recipe-crates pkgconfig systemd useradd

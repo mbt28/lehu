@@ -106,10 +106,10 @@ packaging/debian/build-source.sh trixie dist
 ```
 
 It has three parts:
-- the commit, `lehu_0.1.0.orig.tar.xz`;
-- the crates of `Cargo.lock`, `lehu_0.1.0.orig-cargo-vendor.tar.xz`. Crates
+- the commit, `lehu_0.2.0.orig.tar.xz`;
+- the crates of `Cargo.lock`, `lehu_0.2.0.orig-cargo-vendor.tar.xz`. Crates
   that no Linux build compiles are left as stubs;
-- the packaging, `lehu_0.1.0-1+trixie.debian.tar.xz`, described by its
+- the packaging, `lehu_0.2.0-1+trixie.debian.tar.xz`, described by its
   `.dsc`.
 
 The suite (`trixie`) goes into the version, so one repository can hold a
@@ -119,8 +119,8 @@ The binary package is built from it offline, on a 64-bit Raspberry Pi OS
 release the package is for:
 
 ```sh
-dpkg-source -x dist/lehu_0.1.0-1+trixie.dsc lehu-0.1.0
-cd lehu-0.1.0
+dpkg-source -x dist/lehu_0.2.0-1+trixie.dsc lehu-0.2.0
+cd lehu-0.2.0
 sudo apt-get build-dep ./
 dpkg-buildpackage -b -us -uc
 ```
