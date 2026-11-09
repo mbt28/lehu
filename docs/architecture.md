@@ -46,7 +46,7 @@ boards too.
 | `lehu-wifi` | the access point's configuration, read from hostapd and rewritten |
 | `lehu-camera` | the V4L2 reversing camera on the video plane, its inputs and picture levels |
 | `lehu-image` | JPEG and PNG decoding for album art |
-| `lehu-update` | LEHU OS updates: the page the phone carries them to, the installer's commands |
+| `lehu-update` | System updates (LEHU OS, Buildroot): the page the phone carries them to, the installer's commands |
 | `lehu-ui` | the Slint screens and their controller |
 | `lehu-fuzz` | fuzz targets for the parsers, run on the host |
 

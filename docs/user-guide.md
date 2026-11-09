@@ -32,7 +32,7 @@ the camera.
 | Connection | **Linked Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
 | Video | Night (Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
-| System | **Update**: the version running, and a new version of LEHU OS brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
+| System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,
 power off) ask first and open on Cancel.
@@ -98,9 +98,10 @@ camera and back from anywhere, including from the phone's video. **Fast
 switch** keeps the phone's video ready behind the camera, where memory
 allows, so the way back is instant.
 
-## Updating LEHU OS
+## Updating the system
 
-On LEHU OS, Settings › System › **Update** installs new versions. The head unit has
+On LEHU OS, and on the f1c200s Buildroot image, Settings › System ›
+**Update** installs new versions. The head unit has
 no internet of its own, so the phone fetches the update over its mobile
 data and hands it over through the head unit's Wi-Fi. On other systems the
 row says the update is not available there.

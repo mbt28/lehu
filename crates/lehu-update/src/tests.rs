@@ -760,3 +760,22 @@ fn no_installer_nothing_to_do() {
     u.serve(None);
     assert_eq!(u.view().serve_error, "The access point is not running");
 }
+
+#[test]
+fn the_installers_lock_tells_an_apply_runs() {
+    let root = store::tests::dir("lock");
+    let lock = root.join("lock");
+    // No lock file: nothing ever ran.
+    assert!(!lock_held(&lock));
+    // As `apply` leaves it: there, and nobody holds it.
+    fs::write(&lock, b"").unwrap();
+    assert!(!lock_held(&lock));
+    // `apply` runs: it holds the lock exclusively.
+    let apply = fs::File::create(&lock).unwrap();
+    apply.lock().unwrap();
+    assert!(lock_held(&lock));
+    // Asking took nothing from it.
+    assert!(lock_held(&lock));
+    drop(apply);
+    assert!(!lock_held(&lock));
+}

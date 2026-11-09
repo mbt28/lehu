@@ -1,6 +1,6 @@
-//! Settings > Update: LEHU OS updates, installed by the image's
-//! `/usr/sbin/lehu-os-update` (LEHU OS only; elsewhere the screens say it is
-//! not available).
+//! Settings > Update: system updates, installed by the image's
+//! `/usr/sbin/lehu-os-update` (LEHU OS, and Buildroot images that carry
+//! it; elsewhere the screens say it is not available).
 //!
 //! The board has no internet of its own, so the phone carries the update.
 //! It joins the head unit's access point and opens the page LEHU serves
@@ -40,6 +40,8 @@ use std::time::{Duration, Instant, SystemTime};
 pub const INSTALLER: &str = "/usr/sbin/lehu-os-update";
 /// Where `apply` says how far it is.
 pub const PROGRESS: &str = "/run/lehu-os-update/progress";
+/// Held by `apply` while it runs, without systemd.
+pub const LOCK: &str = "/run/lehu-os-update/lock";
 /// Where an update is received: on the SD card (the image makes it 1770
 /// root:lehu). Never /tmp or /var/tmp: they are RAM.
 pub const CACHE: &str = "/var/cache/lehu-update";
@@ -63,7 +65,7 @@ pub struct Config {
     /// What the page fetches; the updates' files are relative to it.
     pub manifest_url: String,
     pub port: u16,
-    /// The installer's unit runs (an `apply` LEHU did not see start).
+    /// An `apply` LEHU did not see start still runs (its unit, or its lock).
     pub unit_running: fn() -> bool,
     pub idle_stop: Duration,
     /// How long the restart after a good `apply` is waited for.
@@ -97,19 +99,33 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// `systemctl is-active lehu-os-update`: an apply runs in a unit of that
-/// name. No systemctl: none runs.
+/// An `apply` runs. Under systemd it runs in a unit named
+/// `lehu-os-update`; under BusyBox init (Buildroot) it holds [`LOCK`].
 fn unit_running() -> bool {
-    Command::new("systemctl")
-        .args(["is-active", "--quiet", "lehu-os-update"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    if Path::new("/run/systemd/system").is_dir() {
+        return Command::new("systemctl")
+            .args(["is-active", "--quiet", "lehu-os-update"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+    }
+    lock_held(Path::new(LOCK))
 }
 
-/// The installer is there: LEHU OS.
+/// Someone holds `path`'s flock. A shared lock taken and dropped at once
+/// tells, without root: the file is root's, and `apply` holds it
+/// exclusively for as long as it runs. No file: nothing holds it.
+fn lock_held(path: &Path) -> bool {
+    let Ok(f) = fs::File::open(path) else {
+        return false;
+    };
+    matches!(f.try_lock_shared(), Err(fs::TryLockError::WouldBlock))
+}
+
+/// The installer is there: LEHU OS, or an image that carries its
+/// installer (Buildroot).
 pub fn available(cfg: &Config) -> bool {
     cfg.installer.is_file()
 }
