@@ -104,9 +104,6 @@ authors and contributors.
   state. On the Android Auto side the accessory switch, the opening of its
   pipe and the status definitions are LIVI's. LEHU would not exist in this
   form without it. Many thanks to the LIVI project.
-- **[aasdk](https://github.com/f1xpl/aasdk)**: the reverse engineering of
-  the Android Auto protocol that LIVI and FastCarPlay build on, and the
-  head-unit certificate phones accept.
 - **[Slint](https://slint.dev)** for the UI toolkit (GPL-3.0), the
   **Linebender** project's fontique and parley for text, and **Open Sans**
   (SIL Open Font License 1.1) for the font.
