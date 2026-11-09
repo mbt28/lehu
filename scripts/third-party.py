@@ -297,7 +297,20 @@ BOILERPLATE = re.compile(
 )
 
 
+# Crates published without their licence files, whose repositories name the
+# holders: the lines are the repository's LICENSE files, verbatim.
+UPSTREAM_NOTICES = {
+    "lyon_algorithms": ["Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT)"],
+    "lyon_extra": ["Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT)"],
+    "lyon_geom": ["Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT)"],
+    "lyon_path": ["Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT)"],
+    "taffy": ["Copyright (c) 2018 Visly Inc.", "Copyright (c) 2026 Taffy Authors (github.com/DioxusLabs/taffy, LICENSE)"],
+}
+
+
 def notices(pkg, taken):
+    if pkg["name"] in UPSTREAM_NOTICES:
+        return UPSTREAM_NOTICES[pkg["name"]]
     """The copyright lines of a crate's licence files (the file of the
     licence taken first), else its lib.rs header, else its authors."""
     crate = Path(pkg["manifest_path"]).parent
@@ -335,12 +348,14 @@ def notices(pkg, taken):
             break
     if lines:
         return lines[:6]
+    # The crate's licence files carry no copyright line (nor do its
+    # repository's): its authors, as its Cargo.toml names them.
     authors = [re.sub(r"\s*<[^>]*>", "", a).strip() for a in pkg.get("authors") or []]
     authors = [a for a in authors if a]
     if authors:
-        return [f"the authors of {pkg['name']}: {', '.join(authors)}"]
+        return [f"the authors of {pkg['name']}: {', '.join(authors)} (no copyright line published)"]
     repo = pkg.get("repository") or pkg.get("homepage") or "crates.io"
-    return [f"the authors of {pkg['name']}, see {repo}"]
+    return [f"the authors of {pkg["name"]}, see {repo} (no copyright line published)"]
 
 
 def long_text(licence, packages):

@@ -21,7 +21,7 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | adler2 | 2.0.1 | MIT | 0BSD OR MIT OR Apache-2.0 | Copyright (C) Jonas Schievink <jonasschievink@gmail.com> |
 | aead | 0.5.2 | MIT | MIT OR Apache-2.0 | Copyright (c) 2019 The RustCrypto Project Developers; Copyright (c) 2019 MobileCoin, LLC |
 | aes | 0.8.4 | MIT | MIT OR Apache-2.0 | Copyright (c) 2018 Artyom Pavlov |
-| allocator-api2 | 0.2.21 | MIT | MIT OR Apache-2.0 | the authors of allocator-api2: Zakarum |
+| allocator-api2 | 0.2.21 | MIT | MIT OR Apache-2.0 | the authors of allocator-api2: Zakarum (no copyright line published) |
 | arrayvec | 0.7.8 | MIT | MIT OR Apache-2.0 | Copyright (c) Ulrik Sverdrup "bluss" 2015-2023 |
 | bitflags | 2.13.2 | MIT | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | block-buffer | 0.10.4 | MIT | MIT OR Apache-2.0 | Copyright (c) 2018-2019 The RustCrypto Project Developers |
@@ -42,10 +42,10 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | derive_more | 2.1.1 | MIT | MIT | Copyright (c) 2016 Jelte Fennema |
 | digest | 0.10.7 | MIT | MIT OR Apache-2.0 | Copyright (c) 2017 Artyom Pavlov |
 | dlib | 0.5.3 | MIT | MIT | Copyright (c) 2015 Victor Berger |
-| drm | 0.14.1 | MIT | MIT | the authors of drm: Tyler Slabinski, Victoria Brekenfeld |
-| drm-ffi | 0.9.1 | MIT | MIT | the authors of drm-ffi: Tyler Slabinski |
-| drm-fourcc | 2.2.0 | MIT | MIT | the authors of drm-fourcc: Daniel Franklin |
-| drm-sys | 0.8.1 | MIT | MIT | the authors of drm-sys: Tyler Slabinski |
+| drm | 0.14.1 | MIT | MIT | the authors of drm: Tyler Slabinski, Victoria Brekenfeld (no copyright line published) |
+| drm-ffi | 0.9.1 | MIT | MIT | the authors of drm-ffi: Tyler Slabinski (no copyright line published) |
+| drm-fourcc | 2.2.0 | MIT | MIT | the authors of drm-fourcc: Daniel Franklin (no copyright line published) |
+| drm-sys | 0.8.1 | MIT | MIT | the authors of drm-sys: Tyler Slabinski (no copyright line published) |
 | ed25519 | 2.2.3 | MIT | Apache-2.0 OR MIT | Copyright (c) 2018-2023 RustCrypto Developers |
 | ed25519-dalek | 2.2.0 | BSD-3-Clause | BSD-3-Clause | Copyright (c) 2017-2019 isis agora lovecruft. All rights reserved. |
 | equivalent | 1.0.3 | MIT | Apache-2.0 OR MIT | Copyright (c) 2016--2023 |
@@ -94,10 +94,10 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | linux-raw-sys | 0.9.4 | MIT | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Copyrights in the `linux-raw-sys` project are retained by their contributors.; copyright assignment is required to contribute to the `linux-raw-sys` |
 | litemap | 0.8.3 | Unicode-3.0 | Unicode-3.0 | Copyright © 2020-2024 Unicode, Inc.; © 1995-2016 International Business Machines Corporation and others. |
 | log | 0.4.34 | MIT | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
-| lyon_algorithms | 1.0.22 | MIT | MIT OR Apache-2.0 | the authors of lyon_algorithms: Nicolas Silva |
-| lyon_extra | 1.1.0 | MIT | MIT OR Apache-2.0 | the authors of lyon_extra: Nicolas Silva |
-| lyon_geom | 1.0.20 | MIT | MIT OR Apache-2.0 | the authors of lyon_geom: Nicolas Silva |
-| lyon_path | 1.0.19 | MIT | MIT OR Apache-2.0 | the authors of lyon_path: Nicolas Silva |
+| lyon_algorithms | 1.0.22 | MIT | MIT OR Apache-2.0 | Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT) |
+| lyon_extra | 1.1.0 | MIT | MIT OR Apache-2.0 | Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT) |
+| lyon_geom | 1.0.20 | MIT | MIT OR Apache-2.0 | Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT) |
+| lyon_path | 1.0.19 | MIT | MIT OR Apache-2.0 | Copyright (c) 2013 Nicolas Silva (github.com/nical/lyon, LICENSE-MIT) |
 | memchr | 2.8.3 | MIT | Unlicense OR MIT | Copyright (c) 2015 Andrew Gallant |
 | memmap2 | 0.9.12 | MIT | MIT OR Apache-2.0 | Copyright (c) 2020 Yevhenii Reizner; Copyright (c) 2015 Dan Burkert |
 | memoffset | 0.9.1 | MIT | MIT | Copyright (c) 2017 Gilad Naaman |
@@ -105,20 +105,20 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | num-bigint | 0.4.8 | MIT | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num-integer | 0.1.47 | MIT | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
 | num-traits | 0.2.19 | MIT | MIT OR Apache-2.0 | Copyright (c) 2014 The Rust Project Developers |
-| nusb | 0.2.8 | MIT | Apache-2.0 OR MIT | the authors of nusb: Kevin Mehall |
-| once_cell | 1.21.4 | MIT | MIT OR Apache-2.0 | the authors of once_cell: Aleksey Kladov |
+| nusb | 0.2.8 | MIT | Apache-2.0 OR MIT | the authors of nusb: Kevin Mehall (no copyright line published) |
+| once_cell | 1.21.4 | MIT | MIT OR Apache-2.0 | the authors of once_cell: Aleksey Kladov (no copyright line published) |
 | opaque-debug | 0.3.1 | MIT | MIT OR Apache-2.0 | Copyright (c) 2018-2024 The RustCrypto Project Developers |
 | openssl | 0.10.81 | Apache-2.0 | Apache-2.0 | Copyright 2011-2017 Google Inc. |
 | openssl-sys | 0.9.117 | MIT | MIT | Copyright (c) 2014 Alex Crichton |
 | parlance | 0.1.1 | MIT | Apache-2.0 OR MIT | Copyright 2020 the Parley Authors |
 | parley (vendor/) | 0.11.1 | MIT | Apache-2.0 OR MIT | Copyright 2020 the Parley Authors |
 | parley_data | 0.11.1 | MIT | Apache-2.0 OR MIT | Copyright 2020 the Parley Authors |
-| pin-project | 1.1.13 | MIT | Apache-2.0 OR MIT | the authors of pin-project, see https://github.com/taiki-e/pin-project |
+| pin-project | 1.1.13 | MIT | Apache-2.0 OR MIT | the authors of pin-project, see https://github.com/taiki-e/pin-project (no copyright line published) |
 | pin-weak | 1.1.0 | MIT | MIT | Copyright (c) 2020 Olivier Goffart <ogoffart@sixtyfps.io> |
 | poly1305 | 0.8.0 | MIT | Apache-2.0 OR MIT | Copyright (c) 2015-2019 RustCrypto Developers |
-| portable-atomic | 1.15.0 | MIT | Apache-2.0 OR MIT | the authors of portable-atomic, see https://github.com/taiki-e/portable-atomic |
+| portable-atomic | 1.15.0 | MIT | Apache-2.0 OR MIT | the authors of portable-atomic, see https://github.com/taiki-e/portable-atomic (no copyright line published) |
 | potential_utf | 0.1.6 | Unicode-3.0 | Unicode-3.0 | Copyright © 2020-2024 Unicode, Inc.; © 1995-2016 International Business Machines Corporation and others. |
-| prost | 0.14.4 | Apache-2.0 | Apache-2.0 | the authors of prost: Dan Burkert, Lucio Franco, Casper Meijn, Tokio Contributors |
+| prost | 0.14.4 | Apache-2.0 | Apache-2.0 | the authors of prost: Dan Burkert, Lucio Franco, Casper Meijn, Tokio Contributors (no copyright line published) |
 | pulldown-cmark | 0.13.5 | MIT | MIT | Copyright 2015 Google Inc. All rights reserved. |
 | qrcodegen | 1.8.0 | MIT | MIT | Copyright (c) Project Nayuki. (MIT License) |
 | rand_core | 0.6.4 | MIT | MIT OR Apache-2.0 | Copyright 2018 Developers of the Rand project; Copyright (c) 2014 The Rust Project Developers |
@@ -127,8 +127,8 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | rustix | 0.38.44 | MIT | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Copyrights in the `rustix` project are retained by their contributors.; copyright assignment is required to contribute to the `rustix` |
 | rustix | 1.1.5 | MIT | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Copyrights in the `rustix` project are retained by their contributors.; copyright assignment is required to contribute to the `rustix` |
 | scopeguard | 1.2.0 | MIT | MIT OR Apache-2.0 | Copyright (c) 2016-2019 Ulrik Sverdrup "bluss" and scopeguard developers |
-| serde | 1.0.229 | MIT | MIT OR Apache-2.0 | the authors of serde: Erick Tryzelaar, David Tolnay |
-| serde_core | 1.0.229 | MIT | MIT OR Apache-2.0 | the authors of serde_core: Erick Tryzelaar, David Tolnay |
+| serde | 1.0.229 | MIT | MIT OR Apache-2.0 | the authors of serde: Erick Tryzelaar, David Tolnay (no copyright line published) |
+| serde_core | 1.0.229 | MIT | MIT OR Apache-2.0 | the authors of serde_core: Erick Tryzelaar, David Tolnay (no copyright line published) |
 | serde_spanned | 1.1.2 | MIT | MIT OR Apache-2.0 | Copyright (c) Individual contributors |
 | sha1 | 0.10.7 | MIT | MIT OR Apache-2.0 | Copyright (c) 2006-2009 Graydon Hoare; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2016 Artyom Pavlov |
 | sha2 | 0.10.9 | MIT | MIT OR Apache-2.0 | Copyright (c) 2006-2009 Graydon Hoare; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2016 Artyom Pavlov |
@@ -143,8 +143,8 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | subtle | 2.6.1 | BSD-3-Clause | BSD-3-Clause | Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.; Copyright (c) 2016-2024 Isis Agora Lovecruft. All rights reserved. |
 | swash | 0.2.10 | MIT | Apache-2.0 OR MIT | Copyright (c) 2020 Chad Brokaw |
 | sys-locale | 0.3.2 | MIT | MIT OR Apache-2.0 | Copyright (c) 2021 1Password |
-| taffy | 0.10.1 | MIT | MIT | the authors of taffy: Alice Cecile, Johnathan Kelley, Nico Burns |
-| thiserror | 2.0.21 | MIT | MIT OR Apache-2.0 | the authors of thiserror: David Tolnay |
+| taffy | 0.10.1 | MIT | MIT | Copyright (c) 2018 Visly Inc.; Copyright (c) 2026 Taffy Authors (github.com/DioxusLabs/taffy, LICENSE) |
+| thiserror | 2.0.21 | MIT | MIT OR Apache-2.0 | the authors of thiserror: David Tolnay (no copyright line published) |
 | tinystr | 0.8.5 | Unicode-3.0 | Unicode-3.0 | Copyright © 2020-2024 Unicode, Inc.; © 1995-2016 International Business Machines Corporation and others. |
 | toml | 0.9.12+spec-1.1.0 | MIT | MIT OR Apache-2.0 | Copyright (c) Individual contributors |
 | toml_datetime | 0.7.5+spec-1.1.0 | MIT | MIT OR Apache-2.0 | Copyright (c) Individual contributors |
@@ -156,8 +156,8 @@ Targets: armv5te-unknown-linux-gnueabi, aarch64-unknown-linux-gnu, x86_64-unknow
 | universal-hash | 0.5.1 | MIT | MIT OR Apache-2.0 | Copyright (c) 2019-2020 RustCrypto Developers |
 | utf8_iter | 1.0.4 | MIT | Apache-2.0 OR MIT | Copyright Mozilla Foundation |
 | vtable | 0.5.0 | MIT | MIT OR Apache-2.0 | Copyright © SixtyFPS GmbH <info@slint.dev> |
-| winnow | 0.7.15 | MIT | MIT | the authors of winnow, see https://github.com/winnow-rs/winnow |
-| winnow | 1.0.4 | MIT | MIT | the authors of winnow, see https://github.com/winnow-rs/winnow |
+| winnow | 0.7.15 | MIT | MIT | the authors of winnow, see https://github.com/winnow-rs/winnow (no copyright line published) |
+| winnow | 1.0.4 | MIT | MIT | the authors of winnow, see https://github.com/winnow-rs/winnow (no copyright line published) |
 | writeable | 0.6.4 | Unicode-3.0 | Unicode-3.0 | Copyright © 2020-2024 Unicode, Inc.; © 1995-2016 International Business Machines Corporation and others. |
 | x25519-dalek | 2.0.1 | BSD-3-Clause | BSD-3-Clause | Copyright (c) 2017-2021 isis agora lovecruft. All rights reserved.; Copyright (c) 2019-2021 DebugSteven. All rights reserved. |
 | yazi | 0.2.1 | MIT | Apache-2.0 OR MIT | Copyright (c) 2020 Chad Brokaw |
