@@ -3,8 +3,13 @@ DESCRIPTION = "CarPlay and Android Auto, wired and wireless, for small Linux \
 boards: hardware video decoding through ffmpeg's v4l2-request, its own \
 screens in Slint, ALSA audio. Runs as the user lehu from lehu.service."
 HOMEPAGE = "https://github.com/mbt28/lehu"
-LICENSE = "GPL-3.0-or-later"
-LIC_FILES_CHKSUM = "file://LICENSE;md5=1ebbd3e34237af26da5dc08a4e440464"
+# LEHU's own code is GPL-3.0-or-later; the binary links Slint (GPL-3.0-only)
+# and the crates THIRD-PARTY.md lists, and embeds Open Sans (OFL-1.1).
+LICENSE = "GPL-3.0-or-later & GPL-3.0-only & MIT & Apache-2.0 & BSD-3-Clause & OFL-1.1"
+LIC_FILES_CHKSUM = " \
+    file://LICENSE;md5=1ebbd3e34237af26da5dc08a4e440464 \
+    file://crates/lehu-ui/ui/fonts/OFL.txt;md5=095e5d442401993e61b13d6b9fcf8393 \
+"
 
 # The repository, at a revision the image pins (SRCREV in a bbappend or
 # site.conf); a local checkout can stand in for it through LEHU_GIT_URI.
@@ -43,6 +48,9 @@ do_install() {
 	install -D -m 0644 ${S}/packaging/common/99-lehu.rules ${D}${nonarch_base_libdir}/udev/rules.d/99-lehu.rules
 	install -D -m 0644 ${S}/packaging/common/lehu.service ${D}${systemd_system_unitdir}/lehu.service
 	sed -i 's,/usr/bin/lehu,${bindir}/lehu,' ${D}${systemd_system_unitdir}/lehu.service
+	# The notices the binary's licences ask for, with the package's docs.
+	install -d ${D}${docdir}/lehu
+	install -m 0644 ${S}/NOTICE ${S}/THIRD-PARTY.md ${S}/crates/lehu-ui/ui/fonts/OFL.txt ${D}${docdir}/lehu/
 }
 
 USERADD_PACKAGES = "${PN}"

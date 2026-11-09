@@ -3,6 +3,10 @@
 //! the protocol the phone judges whole: a missing view area, an icon, an
 //! audio format set it dislikes, and it tears the session down right after
 //! RECORD without a word.
+//!
+//! The info plist follows LIVI's cp/stack/getInfo.ts and livi-cp/src/info.rs
+//! (Lasse Heitgres, GPL-3.0), through FastCarPlay's cp_av.cpp; changed for
+//! LEHU.
 
 use lehu_core::settings::NightMode;
 

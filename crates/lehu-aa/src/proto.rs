@@ -1,8 +1,10 @@
 //! The protobuf bodies the head unit builds and parses, written by hand
 //! for the messages it uses rather than generated from the whole protocol:
 //! prost's derive gives the encoding, the field numbers come from the
-//! vendored definitions (aasdk's reverse-engineered GAL protocol, through
-//! LIVI; see NOTICE). Builders encode into a caller's buffer and fail
+//! vendored definitions (aasdk's reverse-engineered GAL protocol as LIVI's
+//! aap_protobuf and livi-aa-proto carry it; see NOTICE), and `ping_config`
+//! follows LIVI's livi-aa/src/session.rs (Lasse Heitgres, GPL-3.0).
+//! Builders encode into a caller's buffer and fail
 //! rather than grow it, so the outgoing path allocates nothing; parsers
 //! take a slice and reject what does not decode.
 //!

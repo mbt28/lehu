@@ -92,19 +92,30 @@ real-time priority, BlueZ and hostapd) is in
 LEHU stands on the work of other open-source projects. Thank you to their
 authors and contributors.
 
-- **[LIVI](https://github.com/f-io/LIVI)**: most of LEHU's CarPlay and
-  Android Auto protocol code comes from LIVI, a Rust CarPlay and Android
-  Auto host. That includes the session handling, now playing and route
-  guidance, album art over iAP2, CarPlay Ultra's MFi 4 authentication and
-  vehicle state, and the hardware decoder glue. LEHU would not exist in
-  this form without it. Many thanks to the LIVI project.
+- **[FastCarPlay](https://github.com/niellun/FastCarPlay)** by Niellun and
+  contributors, and its F1C200s port: LEHU is its rewrite in Rust and keeps
+  its designs for the protocols, the audio mixer, the video path and the
+  screens.
+- **[LIVI](https://github.com/f-io/LIVI)** by Lasse Heitgres, a Rust
+  CarPlay and Android Auto host: LEHU's CarPlay stack follows LIVI's file
+  by file, as FastCarPlay's native backend did before it: the pairing, the
+  control channel, the info plist, iAP2 and usbmux, now playing and route
+  guidance, album art, CarPlay Ultra's MFi 4 authentication and vehicle
+  state. On the Android Auto side the accessory switch, the opening of its
+  pipe and the status definitions are LIVI's. LEHU would not exist in this
+  form without it. Many thanks to the LIVI project.
 - **[aasdk](https://github.com/f1xpl/aasdk)**: the reverse engineering of
-  the Android Auto protocol that LIVI and FastCarPlay build on.
-- **[Slint](https://slint.dev)** for the UI toolkit, the **Linebender**
-  project's fontique and parley for text, and **Open Sans** for the font.
+  the Android Auto protocol that LIVI and FastCarPlay build on, and the
+  head-unit certificate phones accept.
+- **[Slint](https://slint.dev)** for the UI toolkit (GPL-3.0), the
+  **Linebender** project's fontique and parley for text, and **Open Sans**
+  (SIL Open Font License 1.1) for the font.
 
-[NOTICE](NOTICE) lists in detail what comes from where.
+[NOTICE](NOTICE) names the files each of these reached;
+[THIRD-PARTY.md](THIRD-PARTY.md) lists every crate in the binary with its
+licence and copyright notices.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE). The binary links Slint under
+GPL-3.0-only, so binaries are distributed under GPL version 3.

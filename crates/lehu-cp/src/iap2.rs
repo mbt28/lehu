@@ -9,6 +9,11 @@
 //! (the phone retransmitting) is acknowledged and not delivered twice, and
 //! our own last data packet is sent again when its acknowledgement is
 //! overdue, up to the negotiated count.
+//!
+//! The link packet, link synchronisation and CSM codecs follow LIVI's
+//! iap2/link_layer.py and iap2-link (Lasse Heitgres, GPL-3.0), through
+//! FastCarPlay's cp_iap2.cpp and cp_iap2_link.cpp; the retransmission and
+//! duplicate handling are LEHU's.
 
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};

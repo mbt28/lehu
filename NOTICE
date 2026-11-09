@@ -1,54 +1,111 @@
 LEHU, a lightweight embedded head unit.
 Copyright (C) 2026 Mehmet Tekbas (mbt28).
 
-Licensed under the GNU General Public License, version 3 or later (LICENSE).
+Licensed under the GNU General Public License, version 3 or later
+(LICENSE). The lehu binary links Slint, which LEHU takes under the GNU
+General Public License version 3 only, so a binary as a whole is
+distributed under version 3 of the licence. THIRD-PARTY.md lists every
+crate compiled into the binary with its licence and copyright notices;
+scripts/third-party.py writes it from Cargo.lock.
 
 LEHU descends from FastCarPlay, a C++ CarPlay and Android Auto receiver:
   https://github.com/niellun/FastCarPlay  (Niellun and contributors, GPL-3.0)
-  https://github.com/mbt28/FastCarPlay    (the F1C200s port, GPL-3.0)
+  https://github.com/mbt28/FastCarPlay    (the F1C200s port, by LEHU's author)
 Its designs for the protocols, the audio mixer, the video path and the
-screens were carried over into Rust.
+screens were carried over into Rust. The port's native CarPlay and Android
+Auto backends were written after LIVI's, file by file, and LEHU's ports of
+them keep that descent; the list below names the LIVI files.
 
-Session handling, device arbitration and several protocol behaviours
-follow LIVI, a Rust CarPlay and Android Auto host:
-  https://github.com/f-io/LIVI  (GPL-3.0)
+LIVI, a Rust CarPlay and Android Auto host, Copyright (C) 2025 Lasse
+Heitgres, GPL-3.0-or-later:
+  https://github.com/f-io/LIVI
+Files are named as they were when the code was taken: the TypeScript and
+Python of its Electron era (src/main/services/projection/driver/, until
+August 2026) and the Rust crates of its helper (native/livi-helperd/crates/)
+since. Each LEHU file below says the same in its header. Everything was
+rewritten in Rust and changed for LEHU.
+
+CarPlay, crates/lehu-cp/src:
+  av.rs, control.rs, info.rs: cp/stack/cpStack.ts, screenStream.ts,
+    audioStream.ts, timingServer.ts, micUplink.ts, getInfo.ts;
+    livi-cp/src/stack.rs, info.rs.
+  pairing.rs: cp/stack/pairSetup.ts, pairVerify.ts, authSetup.ts,
+    mfiSigner.ts, identity.ts, pairings.ts; livi-cp/src/pair_setup.rs.
+  srp.rs: cp/stack/srp.ts.
+  tlv8.rs: cp/stack/tlv8.ts; livi-cp/src/tlv8.rs.
+  cipher.rs: cp/stack/controlCipher.ts; livi-cp/src/control_cipher.rs.
+  crypto.rs: cp/stack/crypto.ts; livi-cp/src/crypto.rs (and its tests).
+  plist.rs, the binary form: cp/stack/bplist.ts; livi-cp/src/bplist.rs.
+  rtsp.rs: cp/stack/rtspMessage.ts.
+  hid.rs, the report descriptors: cp/stack/hid.ts; livi-cp/src/hid.rs.
+  nalu.rs, the configuration record detection: cp/stack/nalu.ts.
+  iap2.rs: cp/iap2/link_layer.py; iap2-link.
+  carplay_msg.rs, the identification and the route guidance display
+    component: cp/iap2/control_session_message/*.py; bt/cp_handler.py.
+  usbmux.rs: cp/iap2/muxd.py.
+  media.rs: cp/iap2/control_session_message/now_playing.py and
+    route_guidance.py; iap2-csm; the manoeuvre table of
+    shared/utils/translateNavigation.ts.
+  file.rs: cp/iap2/file_transfer.py and LIVI's file transfer receiver.
+  mfi4.rs with mfi4/, opack.rs, vehicle.rs, ui_sync.rs, ultra.rs
+    (CarPlay Ultra): livi-cp/src/mfi4/, opack.rs, vehicle_state.rs,
+    ui_sync.rs, info.rs, stack.rs: the MFi 4 mutual authentication (its
+    message and parameter ids, the SIGMA-I key derivation and channels,
+    the compressed certificate layout and the DER rebuilt from it, the
+    tunneled pair-setup and the pair-verify binding), the OPACK codec,
+    the vehicle state protocol and its route sharing accessory, the UI
+    sync messages, the display panel carrying the plug-in, the start and
+    identification parameters. The key material and certificate tests
+    use values computed with LIVI's code.
+  scripts/ultra-theme.py: livi-core/src/theme_catalog.rs.
+Most of these reached LEHU through FastCarPlay's src/protocol/cp, whose
+files name the LIVI file each mirrors.
+
+Android Auto, crates/lehu-aa/src:
+  aoap.rs, the switch: livi-aa/src/usb.rs.
+  transport.rs, opening the accessory's pipe: livi-session-io/src/usb.rs.
+  proto.rs: ping_config from livi-aa/src/session.rs; the message
+    definitions are LIVI's aap_protobuf (later livi-aa-proto), vendored by
+    FastCarPlay.
+  aaw.rs: the wireless setup definitions of aap_protobuf/aaw (later
+    wireless_setup.proto).
+  status.rs: livi-aa-stack/src/channels/media_info.rs, navigation.rs,
+    nav_maneuver.rs.
+  frame.rs: the frame flag classes of aa/stack/constants.ts, through
+    FastCarPlay's aa_const.h.
+The rest of the crate is a port of FastCarPlay's src/protocol/aa.
+
+Elsewhere:
+  lehu/src/host.rs, the Linked Phones ordering, and the presence states
+    of crates/lehu-core/src/devices.rs: livi-core/src/devices.rs,
+    livi-core-proto/src/state.rs.
+  Device arbitration and several protocol behaviours (the 5 s TCP
+    keepalive, the exit-button answer, a superseded session) follow
+    LIVI's as behaviour, not code.
+
+aasdk, Copyright (C) 2018 f1x.studio (Michal Szwaj), GPL-3.0-or-later:
+  https://github.com/f1xpl/aasdk
+The Android Auto (GAL) protocol as aasdk reverse engineered it: the
+message ids and the protobuf field numbers of the messages the head unit
+uses (through LIVI's definitions and FastCarPlay), and the head-unit
+client certificate and key in crates/lehu-aa/src/cert.rs, which aasdk
+published (src/Messenger/Cryptor.cpp) and phones accept.
+
+In LIVI's tree but not LIVI's: crates/lehu-video/csrc/decoder.c,
+crates/lehu-drm/src/display.rs and crates/lehu-input/src/evdev.rs share
+code with native/livi-ui/app/src/kms/ on LIVI's F1C200s branch, which
+LEHU's author wrote and contributed there (ported from FastCarPlay's
+V4l2DrmDecoder and camera); so does the fontique change below.
 
 vendor/fontique is fontique 0.11.1 (Apache-2.0 OR MIT, the Linebender
-project) with a three-line change taken from LIVI for targets without
-64-bit atomics. vendor/parley is parley 0.11.1 (Apache-2.0 OR MIT, the
-Linebender project) with its dictionary segmenters left out to spare 3 MB
-of tables. The screens embed Open Sans Regular (Apache-2.0).
+project) with two changes, marked in the files: the collection's version
+counter cast for targets without 64-bit atomics, and a generic family
+fontconfig cannot match left empty. vendor/parley is parley 0.11.1
+(Apache-2.0 OR MIT, the Linebender project) with its dictionary
+segmenters left out to spare 3 MB of tables. vendor/README.md describes
+both.
 
-crates/lehu-video/csrc/decoder.c (the ffmpeg v4l2-request decoder handing
-out dma-bufs) follows LIVI's decoder.c, itself ported from FastCarPlay's
-V4l2DrmDecoder; both GPL-3.0.
-
-crates/lehu-aa speaks the Android Auto (GAL) protocol as reverse engineered
-by aasdk (f1x.studio, GPL-3.0) and carried on by LIVI: the message ids,
-the protobuf field numbers of the messages the head unit uses, and the
-head-unit client certificate aasdk published, which phones accept, come
-from there through FastCarPlay's native backend.
-
-Now playing and route guidance take their message ids, parameter ids,
-the route guidance display component and the manoeuvre tables from LIVI:
-its iAP2 messages (crates/lehu-cp/src/media.rs) and its Android Auto
-media playback and navigation status definitions
-(crates/lehu-aa/src/status.rs), GPL-3.0.
-
-The album art over iAP2 file transfer (crates/lehu-cp/src/file.rs) takes
-the artwork's transfer id attribute, the file transfer session and its
-control codes from LIVI's iAP2 messages and file transfer receiver, and
-the Android Auto album art field from its media metadata definition,
-GPL-3.0.
-
-CarPlay Ultra (crates/lehu-cp/src/mfi4.rs with mfi4/, opack.rs,
-vehicle.rs, ui_sync.rs and ultra.rs) follows LIVI's: the MFi 4 mutual
-authentication (its message and parameter ids, the SIGMA-I key
-derivation and channels, the compressed certificate layout and the DER
-rebuilt from it, the tunneled pair-setup and the pair-verify binding),
-the OPACK codec, the vehicle state protocol and its route sharing
-accessory, the UI sync messages, the display panel carrying the plug-in,
-the start and identification parameters for mutual authentication and
-the theme, and the theme catalog query in scripts/ultra-theme.py,
-GPL-3.0. The key material and certificate tests use values computed
-with LIVI's code.
+The screens embed Open Sans Regular 3.003, Copyright 2020 The Open Sans
+Project Authors (https://github.com/googlefonts/opensans), licensed under
+the SIL Open Font License 1.1: crates/lehu-ui/ui/fonts/OFL.txt. Its
+glyphs are rasterised into the binary at build time.

@@ -2,6 +2,10 @@
 //! and of the iAP tunnel: `[2-byte length LE][ciphertext][16-byte tag]`,
 //! the length being the associated data and the nonce a per-direction
 //! counter. Separate keys each way.
+//!
+//! After LIVI's cp/stack/controlCipher.ts and livi-cp/src/control_cipher.rs
+//! (Lasse Heitgres, GPL-3.0), through FastCarPlay's cp_control_cipher.cpp;
+//! changed for LEHU.
 
 use crate::crypto::{ChaChaStream, TAG_LEN, nonce64};
 

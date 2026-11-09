@@ -3,6 +3,10 @@
 //! password the setup code "3939" (the phone never asks the driver for a
 //! code; the SRP is a formality the long-term keys ride on). Once per
 //! phone, so the big-number work is plain `num-bigint`.
+//!
+//! The accessory's steps follow LIVI's cp/stack/srp.ts (Lasse Heitgres,
+//! GPL-3.0), through FastCarPlay's cp_srp.cpp; the test vectors are LEHU's
+//! own.
 
 use num_bigint::BigUint;
 use num_traits::Zero;

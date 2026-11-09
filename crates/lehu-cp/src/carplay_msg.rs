@@ -8,6 +8,11 @@
 //!
 //! Parameter values: integers big-endian, strings UTF-8 with a trailing
 //! NUL, booleans one byte, a group's value its own parameter body.
+//!
+//! The message ids and the identification follow LIVI's
+//! iap2/control_session_message/*.py and bt/cp_handler.py
+//! build_identification (Lasse Heitgres, GPL-3.0), through FastCarPlay's
+//! cp_carplay_msg.cpp; changed for LEHU.
 
 use crate::iap2::{pack_csm, pack_params, parse_csm};
 use crate::media::{

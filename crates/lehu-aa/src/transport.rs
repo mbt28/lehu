@@ -11,6 +11,10 @@
 //! `musb_hdrc.use_dma=0`: the sunxi MUSB's DMA silently dropped bulk OUT
 //! and was three times slower than PIO.) Only that clean timeout is
 //! retried; any other error, or a partial write, is a dead link.
+//!
+//! Opening the accessory's pipe (`bulk_pair`, the claim retry) follows
+//! LIVI's livi-session-io/src/usb.rs (Lasse Heitgres, GPL-3.0); the rest
+//! is FastCarPlay's aa_usb_transport.cpp, changed for LEHU.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};

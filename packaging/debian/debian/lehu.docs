@@ -1,2 +1,4 @@
 NOTICE
+THIRD-PARTY.md
+crates/lehu-ui/ui/fonts/OFL.txt
 packaging/debian/README.md

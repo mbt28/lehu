@@ -9,8 +9,9 @@
 //! endpoint, reporting how the join went (WifiConnectionStatus) and pinging
 //! the link meanwhile.
 //!
-//! The ids and field numbers come from the vendored definitions (aasdk's
-//! aaw package, LIVI's wireless_setup.proto; see NOTICE); the bytes of the
+//! The ids and field numbers come from LIVI's wireless setup definitions
+//! (aap_protobuf/aaw, later wireless_setup.proto; Lasse Heitgres, GPL-3.0;
+//! see NOTICE), vendored by FastCarPlay; aasdk has none. The bytes of the
 //! three messages the head unit sends are what FastCarPlay sent and phones
 //! accepted. Builders encode into a caller's buffer, which keeps its
 //! capacity across frames.

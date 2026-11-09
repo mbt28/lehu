@@ -4,8 +4,9 @@
 things. Three lines in `src/collection/mod.rs`: the collection's version
 counter is a `u64`, and the ARM926 (ARMv5TE) has no 64-bit atomics, so on
 such targets fontique's own `AtomicCounter` is an `AtomicU32` and the
-comparisons cast. The fix is LIVI's (`native/vendor/fontique` on its
-F1C200s branch); the Buildroot `slint-cpp` package carries the same patch.
+comparisons cast. The fix is LEHU's author's, made first for LIVI's
+F1C200s branch (`native/vendor/fontique`) and for the Buildroot
+`slint-cpp` package, which carries the same patch.
 And in `src/backend/fontconfig.rs`, a generic family fontconfig cannot
 match is left empty instead of unwrapping `NoMatch`: a board with
 fontconfig but no fonts panicked at start, and LEHU draws with the glyphs

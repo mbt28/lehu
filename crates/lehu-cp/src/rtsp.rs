@@ -2,6 +2,9 @@
 //! optional body sized by Content-Length. Requests are cut out of a stream
 //! buffer as they complete; a partial one waits for more bytes. The
 //! encrypted framing around it lives in `cipher`.
+//!
+//! After LIVI's cp/stack/rtspMessage.ts (Lasse Heitgres, GPL-3.0), through
+//! FastCarPlay's cp_rtsp.cpp; changed for LEHU.
 
 use std::fmt::Write as _;
 

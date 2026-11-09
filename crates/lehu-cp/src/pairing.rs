@@ -7,6 +7,11 @@
 //!
 //! Every proof is compared in constant time; every TLV is read, never
 //! indexed.
+//!
+//! After LIVI's cp/stack/pairSetup.ts, pairVerify.ts, authSetup.ts,
+//! mfiSigner.ts, identity.ts and pairings.ts (Lasse Heitgres, GPL-3.0),
+//! through FastCarPlay's cp_pair_setup.cpp, cp_pair_verify.cpp,
+//! cp_auth_setup.cpp and cp_identity.cpp; merged and changed for LEHU.
 
 use std::fs;
 use std::io;

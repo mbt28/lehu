@@ -265,6 +265,7 @@ impl Inner {
         if self.shared.is_none() {
             self.shared = Some(Arc::new(Shared {
                 data: Mutex::new(self.data.clone()),
+                // LEHU: AtomicCounter is 32-bit where there are no 64-bit atomics.
                 version: AtomicCounter::new(self.shared_version as _),
             }));
         }
@@ -568,6 +569,7 @@ impl Inner {
         #[cfg(feature = "std")]
         if let Some(shared) = &self.shared {
             let version = shared.version.load(Ordering::Acquire);
+            // LEHU: the counter is widened where it is 32-bit.
             if self.shared_version != u64::from(version) {
                 // This is an ugly deep copy, but the assumption is that
                 // modifications to font collections are fairly rare.

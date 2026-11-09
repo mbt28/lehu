@@ -1,6 +1,9 @@
 //! TLV8, the pairing messages' encoding: `[type][length][value]`, a value
 //! over 255 bytes split into consecutive items of the same type and joined
 //! again on decode.
+//!
+//! After LIVI's cp/stack/tlv8.ts and livi-cp/src/tlv8.rs (Lasse Heitgres,
+//! GPL-3.0), through FastCarPlay's cp_tlv8.cpp; changed for LEHU.
 
 /// Decoded items, type to value. A handful per message: a small vector
 /// searched linearly beats a map here.

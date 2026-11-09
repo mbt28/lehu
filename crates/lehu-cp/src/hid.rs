@@ -2,6 +2,10 @@
 //! sends for them through the event channel: a two-contact touchscreen, a
 //! knob with four buttons and a wheel, the media keys and the telephony
 //! keys. The uuids match the `hidDevices` entries of the info plist.
+//!
+//! The report descriptors and the device uuids are LIVI's: cp/stack/hid.ts
+//! and livi-cp/src/hid.rs (Lasse Heitgres, GPL-3.0), through FastCarPlay's
+//! cp_av.cpp.
 
 pub const TOUCH_UUID: &str = "2a2a2a2a";
 pub const KNOB_UUID: &str = "2a2a2a2b";

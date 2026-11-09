@@ -10,6 +10,13 @@
 //! the buffer they landed in, or straight inside the access unit handed
 //! to the decoder; audio is decrypted in place and handed to the mixer's
 //! sink still encoded.
+//!
+//! The AV protocol here (the SETUP features, `/feedback`, the Siri and UI
+//! requests, the screen header, the timing ports) follows LIVI's cp/stack:
+//! cpStack.ts, screenStream.ts, audioStream.ts, timingServer.ts and
+//! micUplink.ts (Lasse Heitgres, GPL-3.0), through FastCarPlay's
+//! cp_av.cpp; the threads, the zero-copy paths and the call handling are
+//! LEHU's.
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, UdpSocket};

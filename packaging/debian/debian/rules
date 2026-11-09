@@ -39,9 +39,10 @@ override_dh_auto_install:
 	install -D -m 0644 config/lehu.toml debian/lehu/usr/share/doc/lehu/lehu.toml.example
 	if command -v visudo >/dev/null; then visudo -cqf debian/lehu/etc/sudoers.d/lehu; fi
 
-# The settings example stays readable where the README points.
+# The settings example stays readable where the README points, and the
+# licence texts where their licences want them.
 override_dh_compress:
-	dh_compress -X.example
+	dh_compress -X.example -XTHIRD-PARTY.md -XOFL.txt
 
 # The release profile strips the binary: there is nothing for dwz, and no
 # debug symbols package.

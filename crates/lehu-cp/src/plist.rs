@@ -7,6 +7,10 @@
 //! sorted, every key object before every value object, and a trailer of
 //! exactly 32 bytes. The phone's parser is strict about all three (a
 //! lenient layout made it tear the session down after RECORD).
+//!
+//! The binary form follows LIVI's cp/stack/bplist.ts and
+//! livi-cp/src/bplist.rs (Lasse Heitgres, GPL-3.0), through FastCarPlay's
+//! cp_plist.cpp; the XML form is LEHU's.
 
 use std::fmt::Write as _;
 

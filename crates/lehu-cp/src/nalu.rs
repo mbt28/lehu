@@ -2,6 +2,10 @@
 //! units each behind a 4-byte big-endian length; the codec configuration is
 //! an `avcC` or `hvcC` record (sometimes inside an `avc1`/`hvc1` sample
 //! entry, sometimes bare). The decoder wants `00 00 00 01` start codes.
+//!
+//! The configuration record detection (`looks_like_avcc`, the fourcc scan)
+//! is LIVI's cp/stack/nalu.ts (Lasse Heitgres, GPL-3.0), through
+//! FastCarPlay's cp_nalu.cpp; the in-place reframing is FastCarPlay's own.
 
 const START: [u8; 4] = [0, 0, 0, 1];
 

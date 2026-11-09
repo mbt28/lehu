@@ -8,6 +8,11 @@
 //! Only the usbmux interface (1 in configuration 6) is claimed; the NCM
 //! interfaces stay with the kernel's cdc_ncm, which brings up the network
 //! link the CarPlay session itself runs over.
+//!
+//! The multiplexer follows LIVI's cp/iap2/muxd.py (Lasse Heitgres,
+//! GPL-3.0), through FastCarPlay's cp_usbmux.cpp, which replaced it in
+//! C++; the queued reads, the resync and the in-order reassembly are
+//! LEHU's.
 
 use std::collections::VecDeque;
 use std::fs;

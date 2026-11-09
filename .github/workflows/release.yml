@@ -58,6 +58,13 @@ jobs:
           rustup set profile minimal
           rustup default stable
 
+      # THIRD-PARTY.md is written from Cargo.lock and committed; a lock
+      # bumped without it fails here.
+      - name: Third-party licences are current
+        run: |
+          cargo fetch --locked
+          python3 -I scripts/third-party.py --check
+
       - name: Source package
         run: packaging/debian/build-source.sh ${{ matrix.suite }} dist
 

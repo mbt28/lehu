@@ -3,6 +3,10 @@
 //! sealed byte, AES-128-CTR and SHA-1 for the MFiSAP. The stream AEAD keeps
 //! its key schedule and works in place: the receive paths decrypt where the
 //! bytes landed and allocate nothing per packet.
+//!
+//! The set of primitives and the tests follow LIVI's cp/stack/crypto.ts
+//! and livi-cp/src/crypto.rs (Lasse Heitgres, GPL-3.0); the bodies are
+//! thin wrappers over the RustCrypto crates.
 
 use chacha20poly1305::aead::AeadInPlace;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, Tag};

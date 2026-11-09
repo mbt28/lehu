@@ -6,6 +6,10 @@
 //! The main loop calls `switch_to_accessory` for a device that appeared
 //! and is neither a hub nor Apple's; the session is started on the
 //! accessory that appears in its place.
+//!
+//! The switch itself (the protocol query, the strings, `vendor_out`)
+//! follows LIVI's livi-aa/src/usb.rs (Lasse Heitgres, GPL-3.0); the
+//! interface filter is FastCarPlay's aoap.cpp.
 
 use std::fs;
 use std::os::fd::OwnedFd;

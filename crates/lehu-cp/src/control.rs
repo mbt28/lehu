@@ -2,6 +2,10 @@
 //! pairing, then sealed frames for everything after, routed to the pairing
 //! responders, the MFiSAP and the AV session. Bytes in, bytes out, so the
 //! transport is any stream; here a TCP socket served on its own thread.
+//!
+//! The handshake routing is a slice of LIVI's cpStack.ts and
+//! livi-cp/src/stack.rs (Lasse Heitgres, GPL-3.0), through FastCarPlay's
+//! cp_control_channel.cpp; changed for LEHU.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, SocketAddrV6, TcpStream};

@@ -408,7 +408,8 @@ impl AppHost {
     }
 
     /// Copy the registry into the screen's rows: the session's phone first,
-    /// then the ones on a link, then the rest by last seen.
+    /// then the ones on a link, then the rest by last seen. The ordering is
+    /// LIVI's (livi-core/src/devices.rs, Lasse Heitgres, GPL-3.0).
     pub fn set_devices(&mut self, registry: &Registry) {
         self.devices_gen = registry.generation();
         let mut all: Vec<_> = registry.all().iter().collect();

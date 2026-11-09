@@ -682,8 +682,8 @@ impl SystemFonts {
 
             // We enable the "trim" option here which ignores later fonts if
             // they provide no new Unicode coverage.
-            // A fontconfig with no fonts answers NoMatch: the family is
-            // left empty (the embedded glyphs draw the text) rather than
+            // LEHU: a fontconfig with no fonts answers NoMatch; the family
+            // is left empty (the embedded glyphs draw the text) rather than
             // panicking.
             let Ok(font_set) = config.font_sort(&pattern, true) else {
                 continue;

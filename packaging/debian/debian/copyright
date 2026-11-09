@@ -2,26 +2,50 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: LEHU
 Upstream-Contact: Mehmet Tekbas <btekbas@gmail.com>
 Source: https://github.com/mbt28/lehu
-Comment: NOTICE names the projects LEHU derives from (FastCarPlay, LIVI,
- aasdk). The cargo-vendor component holds the Rust crates of Cargo.lock as
- published on crates.io; crates that no Linux build compiles are left as
- empty stubs.
+Comment: LEHU is a Rust rewrite of FastCarPlay (Niellun and contributors; the
+ F1C200s port by Mehmet Tekbas), and its CarPlay and Android Auto code
+ follows LIVI's (Lasse Heitgres); NOTICE names the files. The lehu binary
+ links Slint under GPL-3.0-only, so a binary as a whole is under GPL
+ version 3. THIRD-PARTY.md lists every crate compiled into it with its
+ licence and copyright notices. The cargo-vendor component holds the Rust
+ crates of Cargo.lock as published on crates.io; crates that no Linux build
+ compiles are left as empty stubs.
 
 Files: *
 Copyright: 2026 Mehmet Tekbas
+           2025-2026 Lasse Heitgres
+           Niellun and FastCarPlay contributors
 License: GPL-3.0-or-later
+
+Files: crates/lehu-aa/src/cert.rs
+Copyright: 2018 f1x.studio (Michal Szwaj)
+           2026 Mehmet Tekbas
+License: GPL-3.0-or-later
+Comment: The head-unit client certificate and key are aasdk's
+ (src/Messenger/Cryptor.cpp, https://github.com/f1xpl/aasdk).
+
+Files: crates/lehu-ui/ui/fonts/font.ttf
+Copyright: 2020 The Open Sans Project Authors (https://github.com/googlefonts/opensans)
+License: OFL-1.1
 
 Files: vendor/fontique/* vendor/parley/*
 Copyright: the Linebender project contributors
 License: Apache-2.0 or MIT
-Comment: fontique 0.11.1 and parley 0.11.1, changed as NOTICE describes.
+Comment: fontique 0.11.1 and parley 0.11.1, changed as vendor/README.md
+ describes.
 
 Files: cargo-vendor/*
-Copyright: the authors of each crate, as named in its Cargo.toml
+Copyright: the authors of each crate, as named in its Cargo.toml and in
+ THIRD-PARTY.md
 License: various
- Each crate states its license in its Cargo.toml and license files: MIT,
- Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0 or CC0-1.0, alone or in
- combination, all compatible with the GPL version 3.
+ Each crate states its licence in its Cargo.toml and licence files: MIT,
+ Apache-2.0 (some with the LLVM exception), BSD-1-Clause, BSD-2-Clause,
+ BSD-3-Clause, BSL-1.0, ISC, Zlib, 0BSD, Unlicense, CC0-1.0, Unicode-3.0
+ or LGPL-2.1-or-later, alone or as alternatives, and Slint's crates
+ GPL-3.0-only; all compatible with the GNU GPL version 3.
+ THIRD-PARTY.md, in the source and in /usr/share/doc/lehu, carries the
+ copyright notices and the licence texts of the crates linked into the
+ binary.
 
 License: GPL-3.0-or-later
  This program is free software: you can redistribute it and/or modify it
@@ -31,6 +55,15 @@ License: GPL-3.0-or-later
  .
  On Debian systems, the full text of the GNU General Public License
  version 3 can be found in /usr/share/common-licenses/GPL-3.
+
+License: OFL-1.1
+ This Font Software is licensed under the SIL Open Font License,
+ Version 1.1.
+ .
+ On Debian systems, the full text of the SIL Open Font License version 1.1
+ can be found in /usr/share/common-licenses/OFL-1.1; the copy that comes
+ with the font is crates/lehu-ui/ui/fonts/OFL.txt, installed as
+ /usr/share/doc/lehu/OFL.txt.
 
 License: Apache-2.0 or MIT
  Licensed under either of the Apache License, Version 2.0, or the MIT
