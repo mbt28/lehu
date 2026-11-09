@@ -20,3 +20,25 @@ Description: lightweight car head unit for CarPlay and Android Auto
  its own screens for settings, phones and media, and control by touch or by
  a rotary knob.
 
+Package: lehu
+Architecture: arm64
+Version: 0.2.0-1+trixie
+Priority: optional
+Section: misc
+Maintainer: Mehmet Tekbas <btekbas@gmail.com>
+Installed-Size: 4960
+Depends: libasound2t64 (>= 1.0.17), libavcodec61 (>= 8:7.1.5), libavutil59 (>= 8:7.1.5), libc6 (>= 2.39), libgcc-s1 (>= 4.2), libopus0 (>= 1.1), libssl3t64 (>= 3.0.0), adduser, sudo
+Recommends: bluez, hostapd
+Filename: pool/trixie/main/l/lehu/lehu_0.2.0-1+trixie_arm64.deb
+Size: 1816772
+MD5sum: ddb56f723b0d792caf8c2437c1a67bfd
+SHA1: 0505bf6b2aa9134ff3004cff360128ac50e5bd45
+SHA256: 473aa9f734cb6071d053bf98e41e60bebd21708cc0fce9b97bbcda3ce8efdd71
+SHA512: 85c82a92bd3ac950fe5f0c3c2cbbdde0233de0c20cfa31d87e0d31cadb93044e1ae6b65a350ba19cd74b02c458dfc7de32d77f6402cd1c3f398f8781b8a6969d
+Homepage: https://github.com/mbt28/lehu
+Description: lightweight car head unit for CarPlay and Android Auto
+ LEHU turns a Raspberry Pi with a touchscreen into a car head unit: Apple
+ CarPlay and Android Auto, wired and wireless, with hardware video decoding,
+ its own screens for settings, phones and media, and control by touch or by
+ a rotary knob.
+

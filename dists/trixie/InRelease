@@ -4,31 +4,31 @@ Hash: SHA512
 Architectures: arm64
 Codename: trixie
 Components: main
-Date: Sat, 07 Nov 2026 20:08:54 +0000
+Date: Mon, 09 Nov 2026 21:27:24 +0000
 Description: LEHU for Raspberry Pi OS (trixie)
 Label: LEHU
 Origin: LEHU
 Suite: trixie
 MD5Sum:
- 2c7be12682f73b628db93f529a23bf27              179 Release
- 8eaf471b2fd338dc57fafd5819d32c00             1095 main/binary-arm64/Packages
- d0e382efc64e25b19e2f3667e5cd842b              723 main/binary-arm64/Packages.gz
+ 006899993e258c658ae4815c4a257ce6              179 Release
+ f9b9078d423100807be51f8181c86c13             2190 main/binary-arm64/Packages
+ e8d81e88dcc91f031368f198084b300b              933 main/binary-arm64/Packages.gz
 SHA1:
- 416d3ac596976f5ee370f52b433708d4a8a301f1              179 Release
- b1ea934e9f56555fdb0fc58a1acac257b6b65d79             1095 main/binary-arm64/Packages
- 68ebd2dc7601ecac8f71d06e539acf303375e8f2              723 main/binary-arm64/Packages.gz
+ aec7046309a6cbc99a917560cde55f68c22dc419              179 Release
+ 789bfe1beedecab4e469a850f0d958835ca312ba             2190 main/binary-arm64/Packages
+ dcee8ea320cb1e48e18261f20ac1b5a45c627bee              933 main/binary-arm64/Packages.gz
 SHA256:
- c05431a2ceaf5cbb7ae5a528474f371be0575b8e43a0060f472edf5a2fac7c41              179 Release
- 6891dfaaf70d7571958ddf99c945e704770400a66df9411e3beca669b35cef64             1095 main/binary-arm64/Packages
- 2901bb4725ca8a45b6af71cafd5c73195c04265c4bf0c8ef4f0945aab88f2d77              723 main/binary-arm64/Packages.gz
+ 94d6fc5140d9afa1219fbe3100f280c15bb64cbe4b9fcfeb40e09c98749383c8              179 Release
+ 47d8e36274235302d405963f6a3a2de60262b534ea97cadd464357872bc2de2f             2190 main/binary-arm64/Packages
+ 3dfd215046a88e53aaacb850362012439a3e8783b5a17a13d2bca9efefa41ae0              933 main/binary-arm64/Packages.gz
 SHA512:
- fb5465448ba356b4c2995d3a3e1a2b45c66271cec0ad1a686515f55d32894705c93d759675bb6ff2c3b981332fbdc2924462fb9655dfac45975a637bc5de780f              179 Release
- 1abaf8922fe9481ef4b9195ba866d9b11eb8c3014ac9b948b0f9b0d7755ed0b923facfce6331c9cce0bdd137327a12a4cc939d2cf3c8740776503ba7db25a4e7             1095 main/binary-arm64/Packages
- e9d14982131b7a41f5b8707ad32861011ceb714d3dfa9d6983d7a5a2acec59dee7c0248ea06867d50ea10237f639e0fd3293be1aa2f84e6f4b126c9cfaf72a02              723 main/binary-arm64/Packages.gz
+ 7c55e2aad8e8cbb098e0699963754a2189fb5059aa4712dfc906931e8ad708ebb2d9dbcb8f865f5bded2668a693108de96e44b607cd9af740d467c9e4b155802              179 Release
+ 6943b7e9c698449a09d93681105992dafd40725b7038f66cf23ac63361c2a649f5a6a4049842b5cf68c8d222df63b6016f2a7f480ed80f3d2f8467f3e41b994d             2190 main/binary-arm64/Packages
+ 4b40616802be94e2ea391d3e150d1becb0e63ebe9ab0558cca47d7ef8a9414751a7a02bad63c5da367a1cdd4b5c35c2e8b02e0394bedd54ecc536344464d6676              933 main/binary-arm64/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRDtXls7Ytpklgpx2BdBnb+7OrFYQUCau+FVgAKCRBdBnb+7OrF
-YVPVAP9wlFsHY/AyKkkUFCXapDHmMBxJ2uJHbgNi82HH7ociOgEApzG2pk6glXgV
-4l5poVoqZoByYvZcCwy+cOwhEmbxxgY=
-=tSOk
+iHUEARYKAB0WIQRDtXls7Ytpklgpx2BdBnb+7OrFYQUCavI6vAAKCRBdBnb+7OrF
+YTfSAQC8yr3AAxABXUK9zSZmk5XoM510Fq9gmloMCHBvdMWoFQD+NHKxphw8Ah5s
+Sc9YAP9n7uaeitOHvFS5dW+n6HN8rAg=
+=1U+O
 -----END PGP SIGNATURE-----
