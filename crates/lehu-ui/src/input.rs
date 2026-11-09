@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Touch and keys from the input threads to the loop thread, where Slint
 //! wants them. The pointer is last-state atomics -- a position and whether
 //! it is down, plus a flag for a tap that fit between two ticks -- because

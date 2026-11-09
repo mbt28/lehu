@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The part of libdbus this crate uses, bound by hand and loaded with
 //! `dlopen` at run time rather than linked: the host that runs the tests has
 //! the runtime library but no development package, and an image built

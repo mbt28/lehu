@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! A `Host` for the tests: plain state the test sets, and a record of every
 //! call the screens make. Settings are the real ones: `persist` writes the
 //! user layer and rebuilds the settings in force from it, as the program

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Compiles the C helper that drives ffmpeg's v4l2-request hwaccel. The
 //! headers and libraries come from pkg-config: the Buildroot wrapper for the
 //! board (`scripts/env.sh` sets `PKG_CONFIG`), the system one for the host.

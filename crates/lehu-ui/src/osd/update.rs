@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Settings > System > Update (screen 14) and "Get from phone" (screen 15).
 //!
 //! The program has the update (see [`crate::host::Update`]); this shows it.

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Android Auto: the GAL frames and their reassembly, the hand-written
 //! protobuf messages, the session machine behind them in the clear and
 //! under TLS, and the Bluetooth handoff's framing.

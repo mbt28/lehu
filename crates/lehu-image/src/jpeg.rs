@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! JPEG: Huffman-coded baseline and progressive, 8-bit samples, one
 //! component (grey) or three (YCbCr, or RGB when an Adobe marker says so).
 //!

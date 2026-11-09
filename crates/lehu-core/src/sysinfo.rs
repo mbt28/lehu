@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What the system is and what it does, from `/proc`: read when asked, for
 //! the Info page, and never otherwise.
 

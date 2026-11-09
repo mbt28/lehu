@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Annex-B byte streams: what kind of NAL units an access unit carries, and
 //! a splitter that cuts a file into access units for playback tests.
 //!

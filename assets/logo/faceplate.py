@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 """Draws LEHU's faceplate logo: a single-DIN head unit of the early 2000s.
 
     python3 assets/logo/faceplate.py

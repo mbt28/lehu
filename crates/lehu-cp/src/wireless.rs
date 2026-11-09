@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The wireless bootstrap, the sibling of the wired trigger: the phone
 //! finds the head unit over Bluetooth (the iAP2 and CarPlay services in its
 //! SDP), opens the iAP2 channel, and over it asks for the identification

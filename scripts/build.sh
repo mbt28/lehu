@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 # Release build for the board. Extra arguments go to cargo.
 set -e
 cd "$(dirname "$0")/.."

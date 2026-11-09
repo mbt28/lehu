@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The dialog shows Bluetooth's prompt -- pairing has a deadline, so it
 //! wins -- or else our own question: a reboot or a shut down from the Power
 //! row, the camera key waiting to be learned, a phone about to be

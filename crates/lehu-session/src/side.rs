@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What a session tells the loop in words: the phone's now playing, its
 //! album art and its route guidance. Strings do not travel in
 //! [`Event`](crate::Event) (it is `Copy` and fixed-size so the queues never

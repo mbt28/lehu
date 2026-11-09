@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The program's heap on a 64 MB board meant to run without swap: glibc's
 //! allocator set up before any thread starts, given back what it holds
 //! free when a session's video or the camera ends, and a line in the log

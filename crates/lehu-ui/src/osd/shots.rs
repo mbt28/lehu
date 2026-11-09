@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Every screen drawn into a PPM file, to look at rather than to assert:
 //! `LEHU_SHOTS=<dir> cargo test -p lehu-ui shots -- --ignored`.
 

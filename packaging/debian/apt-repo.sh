@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 # Add packages to LEHU's apt repository and write its signed index.
 #
 #   packaging/debian/apt-repo.sh REPO DEB...

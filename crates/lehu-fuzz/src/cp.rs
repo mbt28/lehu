@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! CarPlay: what the phone sends over usbmux, iAP2 and the control and AV
 //! channels, and the pair records lockdown reads from disk.
 

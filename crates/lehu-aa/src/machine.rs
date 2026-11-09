@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The GAL session as a state machine, transport-agnostic and driven by
 //! the session's threads: the process thread feeds it frames, the write
 //! thread feeds it the loop's commands and the clock, and both take what

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Finds the three C libraries this crate speaks to and compiles the AAC
 //! helper. Everything comes from pkg-config: the Buildroot wrapper for the
 //! board (`scripts/env.sh` sets `PKG_CONFIG`), the system one for the host.

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What the phone's Wi-Fi link does: the AP's operating channel and the
 //! stations on it, asked of the kernel over nl80211 (generic netlink, no
 //! privilege needed to read), and the interface's byte counters from sysfs.

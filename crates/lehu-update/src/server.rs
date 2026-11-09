@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The page on the access point: a small HTTP/1.1 server, one connection
 //! at a time, each answered and closed.
 //!

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Navigation keys the screens understand, independent of where they come
 //! from (a Bluetooth keyboard or remote today). Kept free of evdev and Slint
 //! so the key reader and the screens can share it.

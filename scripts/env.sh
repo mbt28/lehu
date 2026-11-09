@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 # The Buildroot host tools: the ARM toolchain, and Rust with the armv5te std.
 # Usage:
 #   export BR=/path/to/buildroot/output/host

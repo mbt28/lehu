@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! One consumed stream: the segment being played, the queue behind it and
 //! the interpolation state that carries across segment and period
 //! boundaries.

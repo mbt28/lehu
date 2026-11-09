@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Program state -> Bridge properties, on change only. Every property the
 //! screens show from outside is compared against what was last pushed; an
 //! unchanged tick sets nothing and the renderer stays idle.

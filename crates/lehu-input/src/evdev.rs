@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The kernel's evdev interface through `libc`: the event layout, the codes
 //! this crate acts on and the ioctls it needs. Nothing here interprets an
 //! event; `touch` and `keys` do.

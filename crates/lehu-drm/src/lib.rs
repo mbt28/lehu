@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The panel: one connector and its CRTC driven with atomic commits, and
 //! two planes always the same way round, as FastCarPlay's display had them.
 //!

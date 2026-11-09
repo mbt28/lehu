@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The main loop: one `poll()` the whole program waits in.
 //!
 //! The loop owns the display, the screens and, in time, the session state.

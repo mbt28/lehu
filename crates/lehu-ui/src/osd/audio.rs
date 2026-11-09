@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Settings > Audio (screen 6): each stream's level under the volume, in
 //! steps of 10 % and applied as it is turned (the host's `persist` hands
 //! the levels to the mixer at once); the music buffer (`pick`); and the

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Mehmet Tekbas */
 /*
  * H.264 and HEVC on a V4L2 stateless decoder (cedrus on the Allwinner
  * F1C200s) through ffmpeg's v4l2-request hwaccel. Pictures come back as DRM

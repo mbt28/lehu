@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! LEHU, a lightweight embedded head unit: the command line, then the main
 //! loop in `run`.
 

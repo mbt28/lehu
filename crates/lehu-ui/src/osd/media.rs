@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Now playing and the navigation card. The Home tile and the Media page
 //! (screen 11) show what the host says the phone plays; the position runs
 //! on from the last position the phone gave, redrawn once a second while

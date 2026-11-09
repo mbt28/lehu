@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The input thread: every device and the hotplug watch in one `poll`, which
 //! sleeps until an event, a repeat or a retry is due, or the main thread
 //! wakes it for a route change.

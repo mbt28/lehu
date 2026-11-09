@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Settings: TOML, in three layers.
 //!
 //! 1. The defaults compiled in (`Settings::default()`, documented in

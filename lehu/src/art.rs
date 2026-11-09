@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The album art, decoded off the loop: the session's compressed art goes
 //! to a thread of its own, which decodes it to the Media page's size
 //! (`lehu_ui::ART_SIZE`) and hands the picture back with a wake. A newer

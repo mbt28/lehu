@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Text from outside the UI -- a phone's name in the status line, a Wi-Fi
 //! name, what BlueZ reports -- reduced to the glyphs the build embedded.
 //!

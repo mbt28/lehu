@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What the head unit reads from its own files, which a torn write, a bad
 //! image or a hand edit can leave as anything: the settings layers, the
 //! FastCarPlay importer, the known-device registry and the CarPlay

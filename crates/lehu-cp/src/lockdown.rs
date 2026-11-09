@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! lockdownd, the phone's service broker, over a mux connection: pair the
 //! head unit with the phone the first time (the driver taps Trust), start
 //! a session under TLS, and start `com.apple.carkit.service`, the iAP2

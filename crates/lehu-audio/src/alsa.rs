@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! alsa-lib behind a safe face: the PCM for playback and capture, and the
 //! simple mixer for the volume control. Declared here rather than through
 //! a binding crate: the library is on the image, the handful of calls is

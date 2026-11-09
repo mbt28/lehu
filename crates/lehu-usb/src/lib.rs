@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Which phones are on the USB bus, and when they come and go.
 //!
 //! The protocol crates open and drive a device themselves; this crate only

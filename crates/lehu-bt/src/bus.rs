@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! One private connection to the system bus, driven by the manager's own
 //! `poll()`: libdbus hands us its descriptors and timeouts, we hand it the
 //! events. Nothing libdbus calls back into reaches the manager's state:

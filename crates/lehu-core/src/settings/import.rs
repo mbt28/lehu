@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! FastCarPlay's `settings.txt` and `usersettings.txt`, read once into a
 //! LEHU user file: flat `key = value` lines, `#` comments, a few renamed
 //! keys and two integers that became words. Only the keys those files set

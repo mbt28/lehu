@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Plays an Annex-B file on the board's panel the way a phone's stream
 //! arrives: one access unit at a time, paced, through the bounded queue and
 //! the hardware decoder. For the samples in `sample/`: `test.h264` as it

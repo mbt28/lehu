@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The running session: two threads around the machine and the transport,
 //! and for a wireless phone the thread that waits for it first.
 //!

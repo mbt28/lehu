@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! One phone session as the main loop sees it, whichever protocol speaks it.
 //!
 //! A protocol crate (CarPlay, Android Auto) runs its link on its own threads

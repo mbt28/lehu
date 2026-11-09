@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 fn main() {
     // Glyphs are rendered at build time for the software renderer, so the
     // board needs no font files and no fontconfig (one with no fonts is

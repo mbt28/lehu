@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What can go wrong opening the display. Showing a picture never returns
 //! an error: `Show` says what became of it.
 

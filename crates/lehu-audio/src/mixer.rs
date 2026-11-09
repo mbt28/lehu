@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The playback thread: one thread owns the PCM and mixes the two queues
 //! (main = buffered media, aux = voice and prompts) in software, once per
 //! period.

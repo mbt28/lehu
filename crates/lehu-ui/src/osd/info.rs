@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Settings > System > Info (screen 18): what the system is, and once a
 //! second while it shows, what it does. Nothing is read off this page.
 

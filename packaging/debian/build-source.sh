@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 # Make LEHU's Debian source package from the commit checked out.
 #
 #   packaging/debian/build-source.sh SUITE [OUTDIR]

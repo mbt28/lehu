@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! AAC-LC through the C helper (`csrc/aac.c`) on libavcodec's fixed-point
 //! decoder. Without ffmpeg's headers on the host the stub below takes its
 //! place and every open fails.

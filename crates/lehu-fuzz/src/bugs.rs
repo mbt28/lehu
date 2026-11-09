@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What the targets found, one test each with the input that triggers it.
 //! They state the behaviour wanted and fail today, so they are ignored;
 //! `cargo test -p lehu-fuzz -- --ignored` runs them. A fix turns one

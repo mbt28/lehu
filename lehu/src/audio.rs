@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The program's audio: one mixer and one volume for its lifetime, and a
 //! sink per phone session that turns what the protocol receives into the
 //! mixer's segments and runs the microphone when the phone asks.

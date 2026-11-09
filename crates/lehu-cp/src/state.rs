@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The session's clocks as pure state, so they are tested with a clock of
 //! the test's choosing: the wired start's resend schedule with its one USB
 //! reset, and the silence watch over a live control connection.

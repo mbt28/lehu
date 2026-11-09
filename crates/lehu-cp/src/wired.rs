@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The wired trigger, on its own thread: the chain from a plugged iPhone
 //! to a phone that connects to our control port.
 //!

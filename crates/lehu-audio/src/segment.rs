@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! One segment of PCM as a protocol hands it over: S16 interleaved samples
 //! at a stated rate and channel count, filled in place, carried through
 //! the queue by value and reused.

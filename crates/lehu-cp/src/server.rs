@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The control server: accepts the phone's connections to the control
 //! port and gives each its thread. Two at once at most (the phone's
 //! reconnection overlapping its old connection); more are refused.

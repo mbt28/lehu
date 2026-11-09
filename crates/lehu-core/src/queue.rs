@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Bounded queues between threads.
 //!
 //! A producer on the wire must never block or allocate: it pushes and is

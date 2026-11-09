@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The system's commands LEHU runs: the user's hooks as LEHU itself, and
 //! the ones that need root (Reboot, Power off, the clock, the access
 //! point's restart) through `sudo -n` when LEHU is not root.

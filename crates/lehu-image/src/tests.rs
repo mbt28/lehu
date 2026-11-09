@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Pictures decoded here against the same pictures decoded by two
 //! established decoders (zune-jpeg, png; test-only): the fixtures were
 //! written by PIL, the PNGs of every colour type by the png crate.

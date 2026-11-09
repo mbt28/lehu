@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The Apple authentication coprocessor (MFi 2.0C or 3.0) on an i2c bus:
 //! identify it, read its certificate, have it sign a digest. The one piece
 //! of CarPlay-specific hardware, behind `pairing::MfiSigner`.

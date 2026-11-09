@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Now playing and the route guidance as the screens show them: the
 //! session's side channel turned into the Media page's fields and the
 //! navigation card's words. Integers only; runs when the phone sent

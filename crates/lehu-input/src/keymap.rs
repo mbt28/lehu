@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! What each evdev key means here: the navigation keys of the screens, the
 //! phone's buttons, the volume keys, and the character a key types in the
 //! US layout. Pure tables, used by `keys` and by the device probe.

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Mehmet Tekbas */
 /*
  * The V4L2 ioctls the camera needs, as plain calls. Written in C so the
  * kernel's own header lays out the structures: v4l2_buffer carries a

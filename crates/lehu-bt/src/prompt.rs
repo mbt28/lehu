@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The dialog the screens show for Bluetooth, and its texts.
 
 use crate::device::{six_digits, spaced};

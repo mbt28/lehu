@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The USB network link the phone brings up in configuration 6: the
 //! kernel's cdc_ncm binds it and gives it a link-local IPv6 address, which
 //! is what the phone is told to connect back to. A head unit has no

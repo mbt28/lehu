@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The one phone session, as the loop drives it: which protocol runs, what
 //! is in front (the phone's video or the screens), the decoder that lives
 //! exactly as long as the session's video, and what the loop hands on from

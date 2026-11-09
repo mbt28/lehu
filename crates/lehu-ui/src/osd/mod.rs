@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The controller behind the screens: what FastCarPlay's slint_osd did.
 //!
 //! It owns the RGB565 frame Slint renders into and hands the rows that

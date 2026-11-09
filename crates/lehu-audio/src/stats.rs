@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The mixer's line every 5 s while the device is open, in the format
 //! FastCarPlay printed so the two binaries compare on the same log:
 //!

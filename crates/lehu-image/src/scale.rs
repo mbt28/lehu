@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Rows to the shown size: an area-weighted box filter (each pixel out
 //! the mean of the input it covers, a pixel cut by its edge counted by the
 //! part inside) fed one decoded row at a time, then a bilinear stretch for

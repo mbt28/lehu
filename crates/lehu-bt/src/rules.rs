@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The agent's rules as pure state, so they are tested with a clock of the
 //! test's choosing: which device the user is pairing right now (the only
 //! input device the agent says yes to), and what each kind of request from

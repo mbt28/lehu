@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Which decoded pictures are on the plane, waiting for it, or free to go
 //! back to the decoder. Pure bookkeeping over numbered slots, so it is
 //! tested with a fake display and fake slots.

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The wireless half composed: one thread that takes the Bluetooth
 //! connections to the Android Auto service and gives each its handoff,
 //! takes the phone's TCP connection and starts the GAL session over it,

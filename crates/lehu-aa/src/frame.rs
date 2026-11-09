@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The GAL framing: a four-byte header (channel, flags, u16BE payload size),
 //! a u32BE total on a first fragment that is not also the last, then the
 //! payload, encrypted or not as the flags say. There is no magic to resync

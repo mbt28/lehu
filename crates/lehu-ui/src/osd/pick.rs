@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Rows picked in place (`Bridge.pick`), built for the knob: on Settings,
 //! Night (day, night, auto), Power (reboot or power off, each asked first,
 //! or cancel: a knob has no Back) and Volume, whose level the knob turns;

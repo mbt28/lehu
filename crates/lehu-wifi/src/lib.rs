@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The head unit's Wi-Fi access point, as configured by the system: we read
 //! it, we do not run it.
 //!

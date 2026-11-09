@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The playback devices there are, from the kernel's own lists in
 //! `/proc/asound` (`cards` for each card's id and name, `pcm` for its
 //! devices): no ALSA call, no device opened, so a PCM the mixer holds is

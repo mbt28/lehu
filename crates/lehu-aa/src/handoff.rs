@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The Bluetooth handoff: one accepted RFCOMM connection, the wireless
 //! setup conversation on it, and the credentials handed over. The
 //! conversation is a small state machine driven with the clock passed in,

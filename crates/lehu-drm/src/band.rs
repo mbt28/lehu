@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Rectangles on the panel and the window the overlay plane covers. Pure
 //! arithmetic, so it is tested without a device.
 

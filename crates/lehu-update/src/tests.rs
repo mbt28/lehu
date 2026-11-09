@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The update against a stand-in installer (a shell script) and a folder of
 //! its own, the page's server over loopback.
 

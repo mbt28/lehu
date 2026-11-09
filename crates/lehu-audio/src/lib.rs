@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The phone's audio: PCM segments in, the sound card out, with the
 //! behaviour FastCarPlay's mixer earned on the board, and the pieces around
 //! it.

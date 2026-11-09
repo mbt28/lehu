@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! The Wireless screen's fields -- the access point's name and passphrase,
 //! the Bluetooth name -- each edited full screen with the on-screen
 //! keyboard. The buffer is owned here; the UI only displays it. WPA2 fixes

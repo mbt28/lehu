@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Bluetooth's state -> the Bridge, gated on the manager's generation: an
 //! idle screen pays one load per tick. The device lists are synced in place
 //! by id (`rows`); the manager's prompt feeds the dialog.

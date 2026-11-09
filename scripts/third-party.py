@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mehmet Tekbas
 """Writes THIRD-PARTY.md: every crate compiled into the lehu binary, the
 licence LEHU takes it under, its copyright notices, and the licence texts,
 so that a binary can carry what those licences ask for.

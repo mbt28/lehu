@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
 //! Holding the picture after a dropped frame until a keyframe arrives.
 //!
 //! A dropped frame breaks the chain of references: every frame after the
