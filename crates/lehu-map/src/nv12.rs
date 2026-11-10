@@ -360,25 +360,45 @@ fn thick(
         return;
     }
     let (y_val, cb_val, cr_val) = ycc(colour);
-    // Within r of the segment p-q: by the ends, or across the middle.
+    // Within r of the segment p-q: by the ends, or across the middle. In
+    // i64 (no 128-bit library calls a pixel): the segments are cut to at
+    // most `PIECE`, so no square overflows.
     let near = |p: (i64, i64), q: (i64, i64), c: (i64, i64)| {
-        let (dx, dy) = (i128::from(q.0 - p.0), i128::from(q.1 - p.1));
-        let (cx, cy) = (i128::from(c.0 - p.0), i128::from(c.1 - p.1));
-        let r2 = i128::from(r) * i128::from(r);
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let (cx, cy) = (c.0 - p.0, c.1 - p.1);
+        let r2 = r * r;
         let len2 = dx * dx + dy * dy;
         let dot = cx * dx + cy * dy;
         if dot <= 0 || len2 == 0 {
             return cx * cx + cy * cy <= r2;
         }
         if dot >= len2 {
-            let (ex, ey) = (i128::from(c.0 - q.0), i128::from(c.1 - q.1));
+            let (ex, ey) = (c.0 - q.0, c.1 - q.1);
             return ex * ex + ey * ey <= r2;
         }
         let cross = cx * dy - cy * dx;
         cross * cross <= r2 * len2
     };
+    // The segments, the long ones cut (1/16 px: 256 pixels a piece).
+    const PIECE: i64 = 256 * 16;
+    let mut pieces = Vec::with_capacity(points.len());
     for pair in points.windows(2) {
         let (p, q) = (pair[0], pair[1]);
+        // Wholly outside the clip: neither drawn nor cut.
+        if ((p.0.max(q.0) + r) >> 4) < cl
+            || ((p.0.min(q.0) - r) >> 4) >= cr
+            || ((p.1.max(q.1) + r) >> 4) < ct
+            || ((p.1.min(q.1) - r) >> 4) >= cb
+        {
+            continue;
+        }
+        let n = (q.0 - p.0).abs().max((q.1 - p.1).abs()) / PIECE + 1;
+        for k in 0..n {
+            let at = |k: i64| (p.0 + (q.0 - p.0) * k / n, p.1 + (q.1 - p.1) * k / n);
+            pieces.push((at(k), at(k + 1)));
+        }
+    }
+    for (p, q) in pieces {
         // The segment's box, widened by r, in pixels, inside the clip.
         let x0 = ((p.0.min(q.0) - r) >> 4).max(cl);
         let x1 = (((p.0.max(q.0) + r) >> 4) + 1).min(cr);
@@ -428,6 +448,10 @@ pub struct Grid<'a> {
 /// 1/65536 grid pixels. Nearest sample. Written 64 columns at a time, so
 /// the grid's reads stay in the cache, and a row's bytes at once, so the
 /// output (write-combined memory) is written in bursts.
+///
+/// The loop runs once a pixel, five frames a second, on a CPU without a
+/// divide instruction: 32-bit fixed point (a grid of up to 128 tiles a
+/// side fits), and the tiles found by shifting, never by dividing.
 #[allow(clippy::too_many_arguments)]
 pub fn rotate(
     grid: &Grid<'_>,
@@ -441,34 +465,50 @@ pub fn rotate(
     down: (i64, i64),
 ) {
     const BLOCK: usize = 64;
+    debug_assert_eq!(grid.side, 256, "the tiles are found by shifting");
     let (w, h) = (width as usize, height as usize);
-    let side = grid.side as i64;
-    let (gw, gh) = (grid.cols as i64 * side, grid.rows as i64 * side);
+    let (gw, gh) = ((grid.cols * 256) as u32, (grid.rows * 256) as u32);
+    let cols = grid.cols;
     let mut row = [0u8; BLOCK];
-    // Where (u, v) samples, in 1/65536 grid pixels.
+    // Where (u, v) samples, in 1/65536 grid pixels; i32 from here on.
     let at = |u: i64, v: i64| {
         (
-            origin.0 + (u - ax) * across.0 + (v - ay) * down.0,
-            origin.1 + (u - ax) * across.1 + (v - ay) * down.1,
+            (origin.0 + (u - ax) * across.0 + (v - ay) * down.0) as i32,
+            (origin.1 + (u - ax) * across.1 + (v - ay) * down.1) as i32,
         )
+    };
+    let (ux, uy) = (across.0 as i32, across.1 as i32);
+    // The luma at grid pixel (gx, gy), unsigned so one compare each way
+    // also sends negatives to land.
+    let luma = |gx: u32, gy: u32| -> u8 {
+        if gx >= gw || gy >= gh {
+            return grid.land.0;
+        }
+        match grid.tiles[(gy >> 8) as usize * cols + (gx >> 8) as usize] {
+            Some(t) => t[(((gy & 255) << 8) | (gx & 255)) as usize],
+            None => grid.land.0,
+        }
+    };
+    let pair = |gx: u32, gy: u32| -> [u8; 2] {
+        if gx >= gw || gy >= gh {
+            return [grid.land.1, grid.land.2];
+        }
+        match grid.tiles[(gy >> 8) as usize * cols + (gx >> 8) as usize] {
+            Some(t) => {
+                let at = 65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
+                [t[at], t[at + 1]]
+            }
+            None => [grid.land.1, grid.land.2],
+        }
     };
     for c0 in (0..w).step_by(BLOCK) {
         let n = BLOCK.min(w - c0);
         for v in 0..h {
             let (mut x, mut y) = at(c0 as i64, v as i64);
             for o in row.iter_mut().take(n) {
-                let (gx, gy) = (x >> 16, y >> 16);
-                *o = if gx >= 0 && gy >= 0 && gx < gw && gy < gh {
-                    let (tx, ty) = ((gx / side) as usize, (gy / side) as usize);
-                    match grid.tiles[ty * grid.cols + tx] {
-                        Some(t) => t[(gy % side) as usize * grid.side + (gx % side) as usize],
-                        None => grid.land.0,
-                    }
-                } else {
-                    grid.land.0
-                };
-                x += across.0;
-                y += across.1;
+                *o = luma((x >> 16) as u32, (y >> 16) as u32);
+                x = x.wrapping_add(ux);
+                y = y.wrapping_add(uy);
             }
             let o = v * pitch + c0;
             if let Some(out) = dst.get_mut(o..o + n) {
@@ -480,28 +520,12 @@ pub fn rotate(
         for cv in 0..h / 2 {
             let (mut x, mut y) = at(c0 as i64, 2 * cv as i64);
             // To the block's middle: half a pixel right and down.
-            x += (across.0 + down.0) / 2;
-            y += (across.1 + down.1) / 2;
-            for pair in row[..n].as_chunks_mut::<2>().0 {
-                let (gx, gy) = (x >> 16, y >> 16);
-                let (cb, cr) = if gx >= 0 && gy >= 0 && gx < gw && gy < gh {
-                    let (tx, ty) = ((gx / side) as usize, (gy / side) as usize);
-                    match grid.tiles[ty * grid.cols + tx] {
-                        Some(t) => {
-                            let at = grid.side * grid.side
-                                + ((gy % side) as usize / 2) * grid.side
-                                + ((gx % side) as usize / 2) * 2;
-                            (t[at], t[at + 1])
-                        }
-                        None => (grid.land.1, grid.land.2),
-                    }
-                } else {
-                    (grid.land.1, grid.land.2)
-                };
-                pair[0] = cb;
-                pair[1] = cr;
-                x += 2 * across.0;
-                y += 2 * across.1;
+            x = x.wrapping_add(((across.0 + down.0) / 2) as i32);
+            y = y.wrapping_add(((across.1 + down.1) / 2) as i32);
+            for p in row[..n].as_chunks_mut::<2>().0 {
+                *p = pair((x >> 16) as u32, (y >> 16) as u32);
+                x = x.wrapping_add(2 * ux);
+                y = y.wrapping_add(2 * uy);
             }
             let o = chroma + cv * pitch + c0;
             if let Some(out) = dst.get_mut(o..o + (n & !1)) {
