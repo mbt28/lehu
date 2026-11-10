@@ -17,13 +17,6 @@ Copyright: 2026 Mehmet Tekbas
            Niellun and FastCarPlay contributors
 License: GPL-3.0-or-later
 
-Files: crates/lehu-aa/src/cert.rs
-Copyright: 2018 f1x.studio (Michal Szwaj)
-           2026 Mehmet Tekbas
-License: GPL-3.0-or-later
-Comment: The head-unit client certificate and key are aasdk's
- (src/Messenger/Cryptor.cpp, https://github.com/f1xpl/aasdk).
-
 Files: crates/lehu-ui/ui/fonts/font.ttf
 Copyright: 2020 The Open Sans Project Authors (https://github.com/googlefonts/opensans)
 License: OFL-1.1

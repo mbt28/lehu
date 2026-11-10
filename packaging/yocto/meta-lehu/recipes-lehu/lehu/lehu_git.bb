@@ -5,7 +5,7 @@ screens in Slint, ALSA audio. Runs as the user lehu from lehu.service."
 HOMEPAGE = "https://github.com/mbt28/lehu"
 # LEHU's own code is GPL-3.0-or-later; the binary links Slint (GPL-3.0-only)
 # and the crates THIRD-PARTY.md lists, and embeds Open Sans (OFL-1.1).
-LICENSE = "GPL-3.0-or-later & GPL-3.0-only & MIT & Apache-2.0 & BSD-3-Clause & OFL-1.1"
+LICENSE = "GPL-3.0-or-later & GPL-3.0-only & MIT & Apache-2.0 & BSD-3-Clause & ISC & Zlib & Unicode-3.0 & OFL-1.1"
 LIC_FILES_CHKSUM = " \
     file://LICENSE;md5=1ebbd3e34237af26da5dc08a4e440464 \
     file://crates/lehu-ui/ui/fonts/OFL.txt;md5=095e5d442401993e61b13d6b9fcf8393 \

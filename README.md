@@ -102,7 +102,8 @@ authors and contributors.
   control channel, the info plist, iAP2 and usbmux, now playing and route
   guidance, album art, CarPlay Ultra's MFi 4 authentication and vehicle
   state. On the Android Auto side the accessory switch, the opening of its
-  pipe and the status definitions are LIVI's. LEHU would not exist in this
+  pipe, the message and status definitions and the head-unit certificate
+  are LIVI's. LEHU would not exist in this
   form without it. Many thanks to the LIVI project.
 - **[Slint](https://slint.dev)** for the UI toolkit (GPL-3.0), the
   **Linebender** project's fontique and parley for text, and **Open Sans**
@@ -116,3 +117,10 @@ licence and copyright notices.
 
 GPL-3.0-or-later. See [LICENSE](LICENSE). The binary links Slint under
 GPL-3.0-only, so binaries are distributed under GPL version 3.
+
+## Trademarks
+
+Apple and Apple CarPlay are trademarks of Apple Inc., registered in the
+U.S. and other countries. Google and Android Auto are trademarks of Google
+LLC. LEHU is an independent project, not affiliated with, endorsed by or
+sponsored by Apple or Google.

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
-// Copyright (C) 2018 f1x.studio (Michal Szwaj) (aasdk, https://github.com/f1xpl/aasdk)
+// Copyright (C) 2025-2026 Lasse Heitgres (LIVI, https://github.com/f-io/LIVI)
 //! The head unit's client certificate for the GAL TLS handshake.
 //!
 //! This is the standard Android Auto head-unit client certificate, signed
-//! by the "Google Automotive Link" CA: the canonical open-source one first
-//! published by aasdk (f1x.studio) and still shipped by LIVI
-//! (github.com/f-io/LIVI) in 2026; phones accept it during the handshake.
+//! by the "Google Automotive Link" CA, as LIVI ships it
+//! (livi-aa/src/cert.rs); phones accept it during the handshake.
 //! Should Google ever revoke it, the handshake will still complete but the
 //! phone will drop the link before service discovery.
 

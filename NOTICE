@@ -63,6 +63,7 @@ files name the LIVI file each mirrors.
 
 Android Auto, crates/lehu-aa/src:
   aoap.rs, the switch: livi-aa/src/usb.rs.
+  cert.rs, the head-unit client certificate and key: livi-aa/src/cert.rs.
   transport.rs, opening the accessory's pipe: livi-session-io/src/usb.rs.
   proto.rs: ping_config from livi-aa/src/session.rs; the message
     definitions are LIVI's aap_protobuf (later livi-aa-proto), vendored by
@@ -82,14 +83,6 @@ Elsewhere:
   Device arbitration and several protocol behaviours (the 5 s TCP
     keepalive, the exit-button answer, a superseded session) follow
     LIVI's as behaviour, not code.
-
-aasdk, Copyright (C) 2018 f1x.studio (Michal Szwaj), GPL-3.0-or-later:
-  https://github.com/f1xpl/aasdk
-The Android Auto (GAL) protocol as aasdk reverse engineered it: the
-message ids and the protobuf field numbers of the messages the head unit
-uses (through LIVI's definitions and FastCarPlay), and the head-unit
-client certificate and key in crates/lehu-aa/src/cert.rs, which aasdk
-published (src/Messenger/Cryptor.cpp) and phones accept.
 
 In LIVI's tree but not LIVI's: crates/lehu-video/csrc/decoder.c,
 crates/lehu-drm/src/display.rs and crates/lehu-input/src/evdev.rs share
