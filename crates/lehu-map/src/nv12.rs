@@ -203,6 +203,10 @@ fn up2(
 const ARROW_R: f64 = 15.0;
 const ARROW_EDGE: f64 = 3.0;
 
+/// How far from its middle the dot or the arrow can reach, in pixels, with
+/// a pixel to spare.
+pub const MARKER_REACH: i64 = 23;
+
 /// Draw the heading arrow centred at (`cx`, `cy`), pointing along
 /// `heading` (any length, x right, y down), on an NV12 canvas as `dot`
 /// does: a blue arrowhead with a white edge.

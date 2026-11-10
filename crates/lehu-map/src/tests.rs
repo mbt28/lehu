@@ -596,3 +596,67 @@ fn the_arrow_points_along_the_heading() {
     assert_eq!(still[32 * pitch + 32], blue);
     assert_eq!(still[32 * pitch + 32 - 12], white, "the dot's ring");
 }
+
+#[test]
+fn a_markers_patch_comes_back_as_the_map_under_it() {
+    let dir = temp("patch");
+    std::fs::write(dir.join("map.toml"), META).unwrap();
+    write_png(&dir.join("3/1/2.png"), [255, 0, 0]);
+    write_png(&dir.join("3/2/2.png"), [0, 0, 255]);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
+    let layout = Layout {
+        zoom: 3,
+        tx: 0,
+        ty: 2,
+        cols: 4,
+        rows: 2,
+    };
+    let pitch = 4 * 256 + 32;
+    let chroma = pitch * 512;
+    let size = (1024, 512);
+    let mut clean = vec![0u8; chroma + pitch * 256];
+    tiles.compose(&layout, &mut clean, pitch, chroma);
+    // Arrows across tile edges, and one half off the canvas.
+    for (at, heading) in [
+        ((511, 255), (700, -700)),
+        ((256, 300), (0, 1024)),
+        ((3, 509), (-1024, 0)),
+    ] {
+        let mut canvas = clean.clone();
+        nv12::arrow(&mut canvas, pitch, chroma, size, at, heading);
+        assert_ne!(canvas, clean);
+        let r = nv12::MARKER_REACH;
+        tiles.compose_rect(
+            &layout,
+            &mut canvas,
+            pitch,
+            chroma,
+            (at.0 - r, at.1 - r, at.0 + r, at.1 + r),
+        );
+        assert!(canvas == clean, "at {at:?}: the patch left a trace");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn no_marker_reaches_past_its_patch() {
+    let (w, h, pitch) = (128u32, 128u32, 128usize);
+    let chroma = pitch * h as usize;
+    let r = nv12::MARKER_REACH;
+    for step in 0..32 {
+        let a = f64::from(step) * std::f64::consts::PI / 16.0;
+        let heading = ((a.cos() * 1024.0) as i32, (a.sin() * 1024.0) as i32);
+        let mut canvas = vec![0u8; chroma + pitch * h as usize / 2];
+        nv12::arrow(&mut canvas, pitch, chroma, (w, h), (64, 64), heading);
+        for y in 0..h as i64 {
+            for x in 0..w as i64 {
+                if canvas[y as usize * pitch + x as usize] != 0 {
+                    assert!(
+                        (x - 64).abs() < r && (y - 64).abs() < r,
+                        "{heading:?} at {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+}

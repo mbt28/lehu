@@ -196,6 +196,13 @@ impl Drop for Viewer {
     }
 }
 
+/// What a canvas holds: its tiles, and the marker drawn on them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Held {
+    layout: Layout,
+    marker: Option<Marker>,
+}
+
 fn run(
     shared: &Shared,
     display: &Display,
@@ -207,24 +214,23 @@ fn run(
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
     // may still be reading after an early flip event).
-    let mut held: Vec<Option<Layout>> = vec![None; canvases.len()];
+    let mut held: Vec<Option<Held>> = vec![None; canvases.len()];
     let mut recent: [Option<usize>; 2] = [None, None];
     let mut shown: Option<View> = None;
     // Where the view was going, and the canvas to have ready for where it
     // leaves the one shown.
     let mut heading = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
-    // The position the canvases show.
+    // Where we are, as the canvases should show it.
     let mut position: Option<Marker> = None;
     loop {
         let want = {
             let mut inner = shared.lock();
             loop {
                 if inner.position != position {
-                    // Every canvas shows the old one: all composed afresh.
+                    // The marker moved: shown again, on a canvas brought up
+                    // to date.
                     position = inner.position;
-                    held.fill(None);
-                    ahead = None;
                     shown = None;
                 }
                 if inner.stop || shown != Some(inner.want) || ahead.is_some() {
@@ -256,7 +262,7 @@ fn run(
                     &layout,
                     position,
                 ) {
-                    log::info!(
+                    log::debug!(
                         "map: zoom {} at {},{} ready ahead in {} ms (canvas {i})",
                         layout.zoom,
                         layout.tx,
@@ -275,14 +281,39 @@ fn run(
                 (0, 0)
             };
         }
-        // A canvas that already holds the window, the one shown first:
-        // scrolling back over an edge flips back, with no copy.
+        let free = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)));
+        // A canvas that already holds the window and the marker, the one
+        // shown first: scrolling back over an edge flips back, with no copy.
         let placed = recent
             .iter()
             .flatten()
             .copied()
             .chain(0..canvases.len())
-            .find_map(|i| held[i]?.window(&want, panel).map(|w| (i, w)));
+            .find_map(|i| {
+                let h = held[i]?;
+                (h.marker == position).then_some(())?;
+                h.layout.window(&want, panel).map(|w| (i, w))
+            })
+            // Else the free canvas, if it holds the window: only the
+            // marker brought up to date, a patch where it was and is.
+            .or_else(|| {
+                let i = free?;
+                let h = held[i]?;
+                let w = h.layout.window(&want, panel)?;
+                let canvas = &mut canvases[i];
+                let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
+                let size = (canvas.width(), canvas.height());
+                if let Some(old) = h.marker {
+                    let rect = marker_rect(&h.layout, old);
+                    tiles.compose_rect(&h.layout, canvas.pixels(), pitch, chroma, rect);
+                }
+                draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, position);
+                held[i] = Some(Held {
+                    layout: h.layout,
+                    marker: position,
+                });
+                Some((i, w))
+            });
         let (index, (x, y)) = match placed {
             Some(p) => p,
             None => {
@@ -300,8 +331,7 @@ fn run(
                     log::error!("map: no canvas free to compose into");
                     break;
                 };
-                // At info while the decode is being measured on the board.
-                log::info!(
+                log::debug!(
                     "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software, {} enlarged",
                     layout.zoom,
                     layout.tx,
@@ -332,8 +362,8 @@ fn run(
                 // Ready the canvas the view is heading for, unless one
                 // already holds it.
                 ahead = held[index]
-                    .and_then(|l| l.ahead(&want, heading, panel))
-                    .filter(|next| !held.contains(&Some(*next)));
+                    .and_then(|h| h.layout.ahead(&want, heading, panel))
+                    .filter(|next| !held.iter().flatten().any(|h| h.layout == *next));
             }
             Show::Busy => thread::sleep(BUSY_WAIT),
             Show::Failed => {
@@ -345,13 +375,40 @@ fn run(
     canvases
 }
 
+/// The marker on a canvas: the dot, or the arrow along its heading.
+fn draw_marker(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    layout: &Layout,
+    marker: Option<Marker>,
+) {
+    match marker {
+        Some(Marker::Dot(x, y)) => nv12::dot(dst, pitch, chroma, size, layout.pixel((x, y))),
+        Some(Marker::Arrow(x, y, heading)) => {
+            nv12::arrow(dst, pitch, chroma, size, layout.pixel((x, y)), heading);
+        }
+        None => {}
+    }
+}
+
+/// The part of a canvas a marker covers, in its pixels: left, top, right,
+/// bottom.
+fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
+    let (Marker::Dot(x, y) | Marker::Arrow(x, y, _)) = marker;
+    let (cx, cy) = layout.pixel((x, y));
+    let r = nv12::MARKER_REACH;
+    (cx - r, cy - r, cx + r, cy + r)
+}
+
 /// Compose `layout` into a canvas that is neither on scanout nor just
-/// replaced, with the dot at `position`, and say which; None when there is
-/// none such.
+/// replaced, with the marker at `position`, and say which; None when there
+/// is none such.
 fn compose_free(
     tiles: &mut Tiles,
     canvases: &mut [Canvas],
-    held: &mut [Option<Layout>],
+    held: &mut [Option<Held>],
     recent: &[Option<usize>; 2],
     layout: &Layout,
     position: Option<Marker>,
@@ -362,16 +419,10 @@ fn compose_free(
     let size = (canvas.width(), canvas.height());
     held[index] = None;
     tiles.compose(layout, canvas.pixels(), pitch, chroma);
-    match position {
-        Some(Marker::Dot(x, y)) => {
-            nv12::dot(canvas.pixels(), pitch, chroma, size, layout.pixel((x, y)));
-        }
-        Some(Marker::Arrow(x, y, heading)) => {
-            let at = layout.pixel((x, y));
-            nv12::arrow(canvas.pixels(), pitch, chroma, size, at, heading);
-        }
-        None => {}
-    }
-    held[index] = Some(*layout);
+    draw_marker(canvas.pixels(), pitch, chroma, size, layout, position);
+    held[index] = Some(Held {
+        layout: *layout,
+        marker: position,
+    });
     Some(index)
 }

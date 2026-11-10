@@ -255,6 +255,69 @@ impl Tiles {
     }
 }
 
+impl Tiles {
+    /// Compose only the part `(left, top, right, bottom)` of `layout`'s
+    /// canvas (its pixels; clipped to it, widened to even), as `compose`
+    /// does the whole: to take a marker off again.
+    pub fn compose_rect(
+        &mut self,
+        layout: &Layout,
+        dst: &mut [u8],
+        pitch: usize,
+        chroma: usize,
+        (left, top, right, bottom): (i64, i64, i64, i64),
+    ) {
+        let side = SIDE as i64;
+        let (w, h) = (i64::from(layout.cols) * side, i64::from(layout.rows) * side);
+        let (x0, y0) = (left.max(0) & !1, top.max(0) & !1);
+        let (x1, y1) = ((right.min(w) + 1) & !1, (bottom.min(h) + 1) & !1);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let (luma, croma) = dst.split_at_mut(chroma.min(dst.len()));
+        for r in (y0 / side)..=((y1 - 1) / side) {
+            for c in (x0 / side)..=((x1 - 1) / side) {
+                let (tx, ty) = (layout.tx + c, layout.ty + r);
+                let slot = inside(layout.zoom, tx, ty).then(|| self.slot((layout.zoom, tx, ty)));
+                let pixels = slot.and_then(|i| self.entries[i].pixels.as_deref());
+                // The part of this tile inside the rectangle, in its pixels.
+                let (ax, bx) = (
+                    (x0 - c * side).max(0) as usize,
+                    (x1 - c * side).min(side) as usize,
+                );
+                let (ay, by) = (
+                    (y0 - r * side).max(0) as usize,
+                    (y1 - r * side).min(side) as usize,
+                );
+                let at = |row: usize| row * pitch + c as usize * SIDE + ax;
+                for y in ay..by {
+                    let o = at(r as usize * SIDE + y);
+                    let Some(out) = luma.get_mut(o..o + (bx - ax)) else {
+                        return;
+                    };
+                    match pixels {
+                        Some(p) => out.copy_from_slice(&p[y * SIDE + ax..y * SIDE + bx]),
+                        None => out.copy_from_slice(&self.land_y[ax..bx]),
+                    }
+                }
+                for y in (ay / 2)..(by / 2) {
+                    let o = at(r as usize * SIDE / 2 + y);
+                    let Some(out) = croma.get_mut(o..o + (bx - ax)) else {
+                        return;
+                    };
+                    match pixels {
+                        Some(p) => {
+                            let p = &p[SIDE * SIDE..];
+                            out.copy_from_slice(&p[y * SIDE + ax..y * SIDE + bx]);
+                        }
+                        None => out.copy_from_slice(&self.land_c[ax..bx]),
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A layout's tiles, column and row, the middle first: what the panel
 /// shows.
 fn order(layout: &Layout) -> Vec<(u32, u32)> {
