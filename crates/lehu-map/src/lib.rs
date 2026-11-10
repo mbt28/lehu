@@ -6,7 +6,8 @@
 //! The tiles are drawn on a PC (`scripts/map-tiles.py`) into
 //! `<dir>/<z>/<x>/<y>.jpg`, 256 x 256, with `<dir>/map.toml` describing the
 //! set. Here they are only decoded and copied: the board has no FPU, and a
-//! JPEG is what its video engine can decode in hardware later.
+//! JPEG is what its video engine decodes in hardware, in about a
+//! millisecond a tile (software takes a quarter of a second).
 //!
 //! The picture is a canvas larger than the panel, composed from whole
 //! tiles, of which the video plane shows a panel-sized window. Scrolling
@@ -16,6 +17,8 @@
 //! input never wait for a decode. Coordinates are integers: world pixels
 //! at zoom 22.
 
+mod hw;
+mod nv12;
 mod tiles;
 mod tileset;
 mod view;

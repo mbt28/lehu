@@ -2449,8 +2449,10 @@ dependencies = [
 name = "lehu-map"
 version = "0.2.0"
 dependencies = [
+ "cc",
  "lehu-drm",
  "lehu-image",
+ "libc",
  "log",
  "png",
  "serde",

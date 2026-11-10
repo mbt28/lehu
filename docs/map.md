@@ -32,7 +32,9 @@ The script writes `maps/<z>/<x>/<y>.jpg` (256 x 256 baseline JPEGs) and
 Copy the `maps` directory to the head unit as `map.dir`
 (`/var/lib/lehu/maps` by default), readable by LEHU's user. A whole
 country takes a while on a PC: Luxembourg, zoom 8 to 16, is 41,000 tiles,
-240 MB and five minutes on four cores.
+240 MB and five minutes on four cores. Most of that is the last two zoom
+levels (zoom 8 to 14 is 26 MB), so mind the space on the card: the system
+updater needs room of its own there.
 
 The tiles are drawn by the script, never fetched from OpenStreetMap's tile
 servers: their usage policy forbids offline use. The drawing is plain so
@@ -49,8 +51,14 @@ Everything runs on a thread of its own, so the screens and the input never
 wait for a decode. The phone's decoder makes way while the map is shown,
 since both need video memory.
 
-The F1C200s's video engine can decode JPEG in hardware; until that is
-available, the tiles are decoded in software.
+The canvas is NV12, the video plane's own format, so the display's scaler
+does the colour conversion. Tiles are decoded by the video engine when the
+kernel's cedrus driver has JPEG support (about a millisecond a tile on the
+F1C200s), then copied out of its tiled layout. A tile the engine refuses,
+such as a progressive or 4:4:4 JPEG, or any tile on a system without the
+engine, is decoded in software, which on the F1C200s takes about a quarter
+of a second. `scripts/map-tiles.py` writes baseline 4:2:0 tiles, which the
+engine takes.
 
 ## Licence
 

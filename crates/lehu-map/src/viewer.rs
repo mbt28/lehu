@@ -15,11 +15,16 @@ use std::time::{Duration, Instant};
 
 use lehu_drm::{Canvas, Display, Show};
 
+use crate::hw::HwJpeg;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View};
 
 const CANVASES: usize = 3;
+
+/// The largest tile file the video engine is handed (its input buffer);
+/// a larger one decodes in software. Tiles are 5 to 30 KB.
+const HW_INPUT: u32 = 256 * 1024;
 
 /// A flip is still pending: look again this much later.
 const BUSY_WAIT: Duration = Duration::from_millis(4);
@@ -51,7 +56,8 @@ pub struct Viewer {
 
 impl Viewer {
     /// The canvases are made here, so a lack of video memory is said at
-    /// once. The decoder's frames are held off the plane until `stop`.
+    /// once, and the video engine's JPEG decoder opened when there is one.
+    /// The phone decoder's frames are held off the plane until `stop`.
     pub fn start(display: Arc<Display>, set: TileSet, view: View) -> Result<Self, String> {
         let panel = (display.width(), display.height());
         // Enough whole tiles that the panel fits at any offset, and a tile
@@ -61,7 +67,7 @@ impl Viewer {
         let (w, h) = (cols * TILE as u32, rows * TILE as u32);
         let mut canvases = Vec::with_capacity(CANVASES);
         for _ in 0..CANVASES {
-            match display.canvas(w, h) {
+            match display.canvas(w, h, true) {
                 Ok(c) => canvases.push(c),
                 Err(e) => {
                     for c in canvases {
@@ -71,13 +77,31 @@ impl Viewer {
                 }
             }
         }
-        let bpp = canvases[0].bytes_per_pixel() as usize;
+        let hw = if set.is_jpeg() {
+            match HwJpeg::open(TILE as u32, HW_INPUT) {
+                Ok((hw, path)) => {
+                    log::info!("map: tiles decode on the video engine ({path})");
+                    Some(hw)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    log::info!("map: no hardware JPEG decoder; tiles decode in software");
+                    None
+                }
+                Err(e) => {
+                    log::warn!(
+                        "map: the hardware JPEG decoder would not start ({e}); tiles decode in software"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         log::info!(
-            "map: {} zoom {}-{}, canvases {w}x{h} at {} bytes a pixel",
+            "map: {} zoom {}-{}, NV12 canvases {w}x{h}",
             set.name,
             set.min_zoom,
             set.max_zoom,
-            bpp
         );
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
@@ -91,7 +115,7 @@ impl Viewer {
         let thread = {
             let shared = Arc::clone(&shared);
             let display = Arc::clone(&display);
-            let tiles = Tiles::new(set, bpp);
+            let tiles = Tiles::new(set, hw);
             thread::Builder::new()
                 .name("map".into())
                 .spawn(move || run(&shared, &display, tiles, canvases, panel, (cols, rows)))
@@ -184,18 +208,19 @@ fn run(
                 let index = next;
                 next = (next + 1) % canvases.len();
                 let started = Instant::now();
-                let decoded = tiles.decoded;
+                let (decoded, software) = (tiles.decoded, tiles.software);
                 let canvas = &mut canvases[index];
-                let pitch = canvas.pitch();
-                tiles.compose(&layout, canvas.pixels(), pitch);
+                let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
+                tiles.compose(&layout, canvas.pixels(), pitch, chroma);
                 // At info while the decode is being measured on the board.
                 log::info!(
-                    "map: zoom {} at {},{} composed in {} ms, {} decoded",
+                    "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software",
                     layout.zoom,
                     layout.tx,
                     layout.ty,
                     started.elapsed().as_millis(),
-                    tiles.decoded - decoded
+                    tiles.decoded - decoded,
+                    tiles.software - software
                 );
                 current = Some((index, layout));
                 match layout.window(&want, panel) {

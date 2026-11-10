@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::hw::untile;
+use crate::nv12::{self, ycc};
 use crate::tiles::{LAND, Tiles};
 use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View, WORLD_Z};
@@ -177,9 +179,10 @@ fn write_png(path: &Path, rgb: [u8; 3]) {
     w.write_image_data(&data).unwrap();
 }
 
-fn rgb565(rgb: [u8; 3]) -> [u8; 2] {
-    let v = (u16::from(rgb[0] >> 3) << 11) | (u16::from(rgb[1] >> 2) << 5) | u16::from(rgb[2] >> 3);
-    v.to_le_bytes()
+/// The luma and the chroma pair at pixel (`x`, `y`) of an NV12 canvas.
+fn nv12_at(canvas: &[u8], pitch: usize, chroma: usize, x: usize, y: usize) -> (u8, u8, u8) {
+    let c = chroma + (y / 2) * pitch + (x & !1);
+    (canvas[y * pitch + x], canvas[c], canvas[c + 1])
 }
 
 #[test]
@@ -191,7 +194,7 @@ fn a_canvas_is_composed_from_the_tiles_with_land_where_there_are_none() {
     std::fs::create_dir_all(dir.join("3/3")).unwrap();
     std::fs::write(dir.join("3/3/2.png"), b"not a picture").unwrap();
     let set = TileSet::open(&dir).unwrap();
-    let mut tiles = Tiles::new(set, 2);
+    let mut tiles = Tiles::new(set, None);
     // Columns 0..4 of row 2 at zoom 3: none, red, blue, broken; then
     // the row below, all missing.
     let layout = Layout {
@@ -201,29 +204,92 @@ fn a_canvas_is_composed_from_the_tiles_with_land_where_there_are_none() {
         cols: 4,
         rows: 2,
     };
-    let pitch = 4 * 256 * 2 + 64; // a pitch wider than the rows
-    let mut canvas = vec![0u8; pitch * 512];
-    tiles.compose(&layout, &mut canvas, pitch);
-    let at = |x: usize, y: usize| [canvas[y * pitch + 2 * x], canvas[y * pitch + 2 * x + 1]];
-    assert_eq!(at(10, 10), rgb565(LAND));
-    assert_eq!(at(256 + 100, 255), rgb565([255, 0, 0]));
-    assert_eq!(at(512 + 255, 0), rgb565([0, 0, 255]));
-    assert_eq!(at(768 + 3, 3), rgb565(LAND));
-    assert_eq!(at(300, 300), rgb565(LAND));
-    // The padding past the rows is never written.
+    let pitch = 4 * 256 + 64; // a pitch wider than the rows
+    let chroma = pitch * 512;
+    let mut canvas = vec![0u8; chroma + pitch * 256];
+    tiles.compose(&layout, &mut canvas, pitch, chroma);
+    let at = |x, y| nv12_at(&canvas, pitch, chroma, x, y);
+    assert_eq!(at(10, 10), ycc(LAND));
+    assert_eq!(at(256 + 100, 255), ycc([255, 0, 0]));
+    assert_eq!(at(512 + 255, 0), ycc([0, 0, 255]));
+    assert_eq!(at(768 + 3, 3), ycc(LAND));
+    assert_eq!(at(300, 300), ycc(LAND));
+    assert_eq!(at(1023, 511), ycc(LAND));
+    // The padding past the rows is never written, in either plane.
     assert_eq!(canvas[pitch - 1], 0);
-    assert_eq!((tiles.decoded, tiles.failed), (2, 1));
+    assert_eq!(canvas[chroma + pitch - 1], 0);
+    assert_eq!((tiles.decoded, tiles.software, tiles.failed), (2, 2, 1));
     // Composed again, nothing is decoded or looked for twice.
-    tiles.compose(&layout, &mut canvas, pitch);
+    tiles.compose(&layout, &mut canvas, pitch, chroma);
     assert_eq!((tiles.decoded, tiles.failed), (2, 1));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_engines_tiled_picture_comes_out_linear_in_the_limited_range() {
+    // A 64 x 64 picture: each pixel's luma its column + row, its chroma
+    // pairs (column, row) of the half-height plane, laid out in 32 x 32
+    // tiles the way the engine writes them.
+    let side = 64;
+    let luma = side * side;
+    let mut tiled = vec![0u8; luma * 3 / 2];
+    let put = |buf: &mut [u8], base: usize, x: usize, y: usize, v: u8| {
+        let at = base + ((y / 32) * (side / 32) + x / 32) * 1024 + (y % 32) * 32 + x % 32;
+        buf[at] = v;
+    };
+    for y in 0..side {
+        for x in 0..side {
+            put(&mut tiled, 0, x, y, (x + y) as u8);
+        }
+    }
+    for y in 0..side / 2 {
+        for x in 0..side {
+            put(
+                &mut tiled,
+                luma,
+                x,
+                y,
+                if x % 2 == 0 { x as u8 } else { 255 - y as u8 },
+            );
+        }
+    }
+    let mut out = vec![0u8; luma * 3 / 2];
+    untile(&tiled, side, luma, &mut out);
+    for (x, y) in [(0, 0), (31, 0), (32, 0), (5, 33), (63, 63)] {
+        assert_eq!(
+            out[y * side + x],
+            nv12::FULL_TO_LIMITED_Y[x + y],
+            "luma at {x},{y}"
+        );
+    }
+    for (x, y) in [(0, 0), (33, 0), (40, 31), (62, 31)] {
+        let want = if x % 2 == 0 { x as u8 } else { 255 - y as u8 };
+        assert_eq!(
+            out[luma + y * side + x],
+            nv12::FULL_TO_LIMITED_C[usize::from(want)]
+        );
+    }
+    // Full-range black, white and neutral chroma.
+    assert_eq!(nv12::FULL_TO_LIMITED_Y[0], 16);
+    assert_eq!(nv12::FULL_TO_LIMITED_Y[255], 235);
+    assert_eq!(nv12::FULL_TO_LIMITED_C[0], 16);
+    assert_eq!(nv12::FULL_TO_LIMITED_C[128], 128);
+    assert_eq!(nv12::FULL_TO_LIMITED_C[255], 240);
+}
+
+#[test]
+fn colours_convert_to_the_limited_range() {
+    assert_eq!(ycc([0, 0, 0]), (16, 128, 128));
+    assert_eq!(ycc([255, 255, 255]), (235, 128, 128));
+    let (_, cb, cr) = ycc([255, 0, 0]);
+    assert!(cr > 230 && cb < 110);
 }
 
 #[test]
 fn tiles_outside_the_world_are_land() {
     let dir = temp("edge");
     std::fs::write(dir.join("map.toml"), META).unwrap();
-    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), 4);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
     let layout = Layout {
         zoom: 2,
         tx: -1,
@@ -231,10 +297,12 @@ fn tiles_outside_the_world_are_land() {
         cols: 2,
         rows: 2,
     };
-    let pitch = 2 * 256 * 4;
-    let mut canvas = vec![0u8; pitch * 512];
-    tiles.compose(&layout, &mut canvas, pitch);
-    assert_eq!(&canvas[..4], &[LAND[2], LAND[1], LAND[0], 0xff]);
+    let pitch = 2 * 256;
+    let chroma = pitch * 512;
+    let mut canvas = vec![0u8; chroma + pitch * 256];
+    tiles.compose(&layout, &mut canvas, pitch, chroma);
+    assert_eq!(nv12_at(&canvas, pitch, chroma, 0, 0), ycc(LAND));
+    assert_eq!(nv12_at(&canvas, pitch, chroma, 511, 511), ycc(LAND));
     assert_eq!((tiles.decoded, tiles.failed), (0, 0));
     let _ = std::fs::remove_dir_all(&dir);
 }

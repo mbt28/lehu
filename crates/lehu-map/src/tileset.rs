@@ -44,6 +44,11 @@ pub struct TileSet {
 }
 
 impl TileSet {
+    /// The tiles are JPEG files (else PNG).
+    pub fn is_jpeg(&self) -> bool {
+        self.ext == "jpg"
+    }
+
     /// Read `<dir>/map.toml`. The error says what is wrong, for the screen.
     pub fn open(dir: &Path) -> Result<Self, String> {
         let path = dir.join("map.toml");

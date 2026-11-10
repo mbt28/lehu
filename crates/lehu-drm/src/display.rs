@@ -148,7 +148,11 @@ impl Dumb {
         bpp: u32,
     ) -> Result<Self, Error> {
         let fd = card.as_fd();
-        let created = drm_ffi::mode::dumbbuffer::create(fd, width, height, bpp * 8, 0)
+        // NV12: the luma's rows, then the interleaved chroma's at half the
+        // height, in one buffer of one-byte "pixels".
+        let nv12 = format == DrmFourcc::Nv12;
+        let rows = if nv12 { height + height / 2 } else { height };
+        let created = drm_ffi::mode::dumbbuffer::create(fd, width, rows, bpp * 8, 0)
             .map_err(|e| Error::Io("CREATE_DUMB", e))?;
         let handle = created.handle;
         let destroy = || {
@@ -191,15 +195,36 @@ impl Dumb {
             destroy();
             return Err(Error::Io("mmap dumb", e));
         };
-        // SAFETY: `size` bytes just mapped, ours alone. Black to begin with.
-        unsafe { std::ptr::write_bytes(map.as_ptr(), 0, size) };
-        let planar = Planar {
-            size: (width, height),
-            format,
-            modifier: None,
-            pitches: [created.pitch, 0, 0, 0],
-            handles: [control::from_u32(handle), None, None, None],
-            offsets: [0; 4],
+        let luma = created.pitch as usize * height as usize;
+        // SAFETY: `size` bytes just mapped, ours alone. Black to begin with:
+        // in NV12 that is luma 16 and neutral chroma, not zeros (green).
+        unsafe {
+            if nv12 && luma <= size {
+                std::ptr::write_bytes(map.as_ptr(), 16, luma);
+                std::ptr::write_bytes(map.as_ptr().add(luma), 128, size - luma);
+            } else {
+                std::ptr::write_bytes(map.as_ptr(), 0, size);
+            }
+        }
+        let gem = control::from_u32(handle);
+        let planar = if nv12 {
+            Planar {
+                size: (width, height),
+                format,
+                modifier: None,
+                pitches: [created.pitch, created.pitch, 0, 0],
+                handles: [gem, gem, None, None],
+                offsets: [0, luma as u32, 0, 0],
+            }
+        } else {
+            Planar {
+                size: (width, height),
+                format,
+                modifier: None,
+                pitches: [created.pitch, 0, 0, 0],
+                handles: [gem, None, None, None],
+                offsets: [0; 4],
+            }
         };
         match card.add_planar_framebuffer(&planar, FbCmd2Flags::empty()) {
             Ok(fb) => Ok(Self {
@@ -1112,7 +1137,20 @@ pub struct Canvas {
     dumb: Dumb,
     width: u32,
     height: u32,
-    bpp: u32,
+    format: CanvasFormat,
+}
+
+/// A canvas's pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanvasFormat {
+    /// RGB565, two bytes a pixel, little-endian.
+    Rgb565,
+    /// XRGB8888, four bytes a pixel, little-endian (B, G, R, X).
+    Xrgb8888,
+    /// NV12, limited range: `height` rows of luma, then `height / 2` rows
+    /// of Cb, Cr pairs, all `pitch` apart. The window moves in steps of
+    /// two pixels.
+    Nv12,
 }
 
 impl Canvas {
@@ -1124,14 +1162,21 @@ impl Canvas {
         self.height
     }
 
-    /// Bytes a pixel: 2 for RGB565, 4 for XRGB8888.
-    pub fn bytes_per_pixel(&self) -> u32 {
-        self.bpp
+    pub fn format(&self) -> CanvasFormat {
+        self.format
     }
 
-    /// Bytes from one row to the next.
+    /// Bytes from one row to the next (of either plane, in NV12).
     pub fn pitch(&self) -> usize {
         self.dumb.pitch as usize
+    }
+
+    /// Where the chroma rows begin, in NV12; the buffer's end otherwise.
+    pub fn chroma_offset(&self) -> usize {
+        match self.format {
+            CanvasFormat::Nv12 => self.pitch() * self.height as usize,
+            _ => self.dumb.size,
+        }
     }
 
     /// The whole buffer, rows `pitch` apart.
@@ -1143,20 +1188,30 @@ impl Canvas {
 }
 
 impl Display {
-    /// A canvas of `width` x `height` for the video plane, in the plane's
-    /// RGB format (RGB565 when it takes it, else XRGB8888), black.
-    pub fn canvas(&self, width: u32, height: u32) -> Result<Canvas, Error> {
-        let (format, bpp) = if self.video_rgb565 {
-            (DrmFourcc::Rgb565, 2)
+    /// A canvas of `width` x `height` for the video plane, black: NV12 when
+    /// asked for (the video plane always takes it; `width` and `height`
+    /// even), else in the plane's RGB format (RGB565 when it takes it,
+    /// else XRGB8888).
+    pub fn canvas(&self, width: u32, height: u32, nv12: bool) -> Result<Canvas, Error> {
+        let (format, fourcc, bpp) = if nv12 {
+            if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                return Err(Error::Io(
+                    "canvas",
+                    io::Error::other("NV12 wants an even size"),
+                ));
+            }
+            (CanvasFormat::Nv12, DrmFourcc::Nv12, 1)
+        } else if self.video_rgb565 {
+            (CanvasFormat::Rgb565, DrmFourcc::Rgb565, 2)
         } else {
-            (DrmFourcc::Xrgb8888, 4)
+            (CanvasFormat::Xrgb8888, DrmFourcc::Xrgb8888, 4)
         };
-        let dumb = Dumb::create(&self.card, width, height, format, bpp)?;
+        let dumb = Dumb::create(&self.card, width, height, fourcc, bpp)?;
         Ok(Canvas {
             dumb,
             width,
             height,
-            bpp,
+            format,
         })
     }
 
@@ -1166,6 +1221,11 @@ impl Display {
     /// `Busy`, and the canvas stays on scanout until a later picture
     /// replaces it (keep the last three shown alive).
     pub fn show_canvas(&self, canvas: &Canvas, x: u32, y: u32) -> Show {
+        // NV12's chroma is shared by two by two pixels: an even window.
+        let (x, y) = match canvas.format {
+            CanvasFormat::Nv12 => (x & !1, y & !1),
+            _ => (x, y),
+        };
         if x.saturating_add(self.width) > canvas.width
             || y.saturating_add(self.height) > canvas.height
         {
