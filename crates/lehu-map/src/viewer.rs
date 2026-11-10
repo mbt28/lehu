@@ -10,6 +10,9 @@
 //! sun4i CRTC may still be reading after an early flip event.
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+
+/// The route to draw: world pixels at `WORLD_Z`.
+pub type Route = Arc<[(i64, i64)]>;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -43,6 +46,8 @@ struct Inner {
     want: View,
     /// Where we are.
     position: Option<Marker>,
+    /// The route, drawn under the marker.
+    route: Option<Route>,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -119,6 +124,7 @@ impl Viewer {
             inner: Mutex::new(Inner {
                 want: view,
                 position: None,
+                route: None,
                 stop: false,
                 shown: false,
             }),
@@ -146,6 +152,20 @@ impl Viewer {
         let mut inner = self.shared.lock();
         if inner.want != view {
             inner.want = view;
+            self.shared.wake.notify_one();
+        }
+    }
+
+    /// Draw this route (or none) under the marker.
+    pub fn set_route(&self, route: Option<Route>) {
+        let mut inner = self.shared.lock();
+        let same = match (&inner.route, &route) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            inner.route = route;
             self.shared.wake.notify_one();
         }
     }
@@ -221,12 +241,25 @@ fn run(
     // leaves the one shown.
     let mut heading = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
-    // Where we are, as the canvases should show it.
+    // Where we are, as the canvases should show it, and the route.
     let mut position: Option<Marker> = None;
+    let mut route: Option<Route> = None;
     loop {
         let want = {
             let mut inner = shared.lock();
             loop {
+                let new_route = match (&inner.route, &route) {
+                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    (None, None) => false,
+                    _ => true,
+                };
+                if new_route {
+                    // Every canvas has the old one: all composed afresh.
+                    route = inner.route.clone();
+                    held.fill(None);
+                    ahead = None;
+                    shown = None;
+                }
                 if inner.position != position {
                     // The marker moved: shown again, on a canvas brought up
                     // to date.
@@ -261,6 +294,7 @@ fn run(
                     &recent,
                     &layout,
                     position,
+                    route.as_deref(),
                 ) {
                     log::debug!(
                         "map: zoom {} at {},{} ready ahead in {} ms (canvas {i})",
@@ -306,6 +340,9 @@ fn run(
                 if let Some(old) = h.marker {
                     let rect = marker_rect(&h.layout, old);
                     tiles.compose_rect(&h.layout, canvas.pixels(), pitch, chroma, rect);
+                    if let Some(line) = route.as_deref() {
+                        draw_route(canvas.pixels(), pitch, chroma, size, &h.layout, rect, line);
+                    }
                 }
                 draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, position);
                 held[i] = Some(Held {
@@ -327,6 +364,7 @@ fn run(
                     &recent,
                     &layout,
                     position,
+                    route.as_deref(),
                 ) else {
                     log::error!("map: no canvas free to compose into");
                     break;
@@ -393,6 +431,20 @@ fn draw_marker(
     }
 }
 
+/// The route on a canvas, only inside `clip` (its pixels).
+fn draw_route(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    layout: &Layout,
+    clip: (i64, i64, i64, i64),
+    line: &[(i64, i64)],
+) {
+    let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
+    nv12::route(dst, pitch, chroma, size, clip, &points);
+}
+
 /// The part of a canvas a marker covers, in its pixels: left, top, right,
 /// bottom.
 fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
@@ -412,6 +464,7 @@ fn compose_free(
     recent: &[Option<usize>; 2],
     layout: &Layout,
     position: Option<Marker>,
+    route: Option<&[(i64, i64)]>,
 ) -> Option<usize> {
     let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
     let canvas = &mut canvases[index];
@@ -419,6 +472,10 @@ fn compose_free(
     let size = (canvas.width(), canvas.height());
     held[index] = None;
     tiles.compose(layout, canvas.pixels(), pitch, chroma);
+    if let Some(line) = route {
+        let whole = (0, 0, i64::from(size.0), i64::from(size.1));
+        draw_route(canvas.pixels(), pitch, chroma, size, layout, whole, line);
+    }
     draw_marker(canvas.pixels(), pitch, chroma, size, layout, position);
     held[index] = Some(Held {
         layout: *layout,

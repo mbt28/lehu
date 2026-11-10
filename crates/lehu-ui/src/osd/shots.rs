@@ -475,4 +475,22 @@ fn shots() {
         s.goto(SETTINGS);
         s.save(&format!("40-nav-arrow-{i}"));
     }
+
+    // ── the map's bar: plain, and guiding (the map itself is on the video
+    // plane, so black here) ──
+    let mut s = Shot::new(base_host());
+    s.goto(MAP);
+    s.save("70-map-bar");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Left,
+        maneuver: "Turn left".into(),
+        distance: "350 m".into(),
+        road: "Avenue de la Porte-Neuve".into(),
+        eta: "4 min".into(),
+        eta_note: "3.6 km".into(),
+    });
+    s.goto(MAP);
+    s.save("71-map-guiding");
 }

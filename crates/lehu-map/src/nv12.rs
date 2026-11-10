@@ -309,3 +309,102 @@ fn fill(
         }
     }
 }
+
+/// The route line: its fill and edge, and their half widths in 1/16 px.
+const ROUTE: [u8; 3] = [66, 133, 244];
+const ROUTE_EDGE: [u8; 3] = [24, 82, 190];
+const ROUTE_R: i64 = 4 * 16;
+const ROUTE_EDGE_R: i64 = 6 * 16;
+
+/// Draw the route through `points` (canvas pixels times 16) on an NV12
+/// canvas, only inside `clip` (left, top, right, bottom, in pixels): a
+/// line with a darker edge, round where it turns.
+pub fn route(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    clip: (i64, i64, i64, i64),
+    points: &[(i64, i64)],
+) {
+    thick(
+        dst,
+        pitch,
+        chroma,
+        size,
+        clip,
+        points,
+        ROUTE_EDGE_R,
+        ROUTE_EDGE,
+    );
+    thick(dst, pitch, chroma, size, clip, points, ROUTE_R, ROUTE);
+}
+
+/// Every pixel (by its middle) and chroma pair (by its block's) within
+/// `r` of the line through `points`, inside `clip`, set to `colour`.
+#[allow(clippy::too_many_arguments)]
+fn thick(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (width, height): (u32, u32),
+    clip: (i64, i64, i64, i64),
+    points: &[(i64, i64)],
+    r: i64,
+    colour: [u8; 3],
+) {
+    let (w, h) = (i64::from(width), i64::from(height));
+    let (cl, ct) = (clip.0.max(0), clip.1.max(0));
+    let (cr, cb) = (clip.2.min(w), clip.3.min(h));
+    if cl >= cr || ct >= cb {
+        return;
+    }
+    let (y_val, cb_val, cr_val) = ycc(colour);
+    // Within r of the segment p-q: by the ends, or across the middle.
+    let near = |p: (i64, i64), q: (i64, i64), c: (i64, i64)| {
+        let (dx, dy) = (i128::from(q.0 - p.0), i128::from(q.1 - p.1));
+        let (cx, cy) = (i128::from(c.0 - p.0), i128::from(c.1 - p.1));
+        let r2 = i128::from(r) * i128::from(r);
+        let len2 = dx * dx + dy * dy;
+        let dot = cx * dx + cy * dy;
+        if dot <= 0 || len2 == 0 {
+            return cx * cx + cy * cy <= r2;
+        }
+        if dot >= len2 {
+            let (ex, ey) = (i128::from(c.0 - q.0), i128::from(c.1 - q.1));
+            return ex * ex + ey * ey <= r2;
+        }
+        let cross = cx * dy - cy * dx;
+        cross * cross <= r2 * len2
+    };
+    for pair in points.windows(2) {
+        let (p, q) = (pair[0], pair[1]);
+        // The segment's box, widened by r, in pixels, inside the clip.
+        let x0 = ((p.0.min(q.0) - r) >> 4).max(cl);
+        let x1 = (((p.0.max(q.0) + r) >> 4) + 1).min(cr);
+        let y0 = ((p.1.min(q.1) - r) >> 4).max(ct);
+        let y1 = (((p.1.max(q.1) + r) >> 4) + 1).min(cb);
+        if x0 >= x1 || y0 >= y1 {
+            continue;
+        }
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if near(p, q, (x * 16 + 8, y * 16 + 8))
+                    && let Some(v) = dst.get_mut(y as usize * pitch + x as usize)
+                {
+                    *v = y_val;
+                }
+            }
+        }
+        for by in (y0 / 2)..((y1 + 1) / 2) {
+            for bx in (x0 / 2)..((x1 + 1) / 2) {
+                if near(p, q, (bx * 32 + 16, by * 32 + 16)) {
+                    let at = chroma + by as usize * pitch + 2 * bx as usize;
+                    if let Some(v) = dst.get_mut(at..at + 2) {
+                        v.copy_from_slice(&[cb_val, cr_val]);
+                    }
+                }
+            }
+        }
+    }
+}

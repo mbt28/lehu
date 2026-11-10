@@ -2814,3 +2814,35 @@ fn the_map_runs_while_its_screen_is_up_and_moves_with_the_finger() {
     assert_eq!(screen(&osd), HOME);
     assert!(osd.host().has(&Call::SetMapRunning(false)));
 }
+
+#[test]
+fn guiding_the_map_bar_shows_the_next_turn_and_grows() {
+    use crate::host::{NavArrow, NavCard};
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Left,
+        maneuver: "Turn left".into(),
+        distance: "350 m".into(),
+        road: "Boulevard Royal".into(),
+        eta: "4 min".into(),
+        eta_note: "3.6 km".into(),
+    });
+    tick(&mut osd);
+    let bridge = osd.ui.global::<Bridge<'_>>();
+    assert!(bridge.get_map_guiding());
+    assert_eq!(bridge.get_map_arrow(), NavArrow::Left.id());
+    assert_eq!(prop!(osd, get_map_distance), "350 m");
+    assert_eq!(prop!(osd, get_map_road), "Boulevard Royal");
+    assert_eq!(prop!(osd, get_map_eta_note), "3.6 km");
+    // One window over the map still: the taller bar.
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.x, bar.y, bar.width, bar.height), (0, 396, 800, 84));
+    // Guidance over: the bar as it was.
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_guiding());
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.y, bar.height), (416, 64));
+}

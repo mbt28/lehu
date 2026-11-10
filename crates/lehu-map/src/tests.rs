@@ -660,3 +660,56 @@ fn no_marker_reaches_past_its_patch() {
         }
     }
 }
+
+const GUIDED: &str = r#"<gpx>
+<wpt lat="49.6000" lon="6.1310"><name>Rue &amp; Co</name><type>left</type></wpt>
+<wpt lat="49.6010" lon="6.1310"><name></name><type>arrive</type></wpt>
+<trk><trkseg>
+<trkpt lat="49.6000" lon="6.1300"><time>2027-01-15T08:00:00Z</time></trkpt>
+<trkpt lat="49.6000" lon="6.1310"><time>2027-01-15T08:00:10Z</time></trkpt>
+<trkpt lat="49.6010" lon="6.1310"><time>2027-01-15T08:00:20Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+
+#[test]
+fn a_drive_with_turns_says_the_next_one_and_how_far() {
+    use crate::Turn;
+    let track = crate::Track::parse_gpx(GUIDED).unwrap();
+    let turns: Vec<_> = track
+        .maneuvers()
+        .iter()
+        .map(|m| (m.turn, m.road.as_str()))
+        .collect();
+    assert_eq!(turns, [(Turn::Left, "Rue & Co"), (Turn::Arrive, "")]);
+    // 0.001 degrees of longitude at 49.6 N is about 72 m; of latitude 111 m.
+    let a = track.ahead(0).unwrap();
+    assert_eq!(a.maneuver.turn, Turn::Left);
+    assert!((70..=74).contains(&a.metres), "{}", a.metres);
+    assert!((180..=186).contains(&a.left_metres), "{}", a.left_metres);
+    assert_eq!(a.left_ms, 20_000);
+    let b = track.ahead(5_000).unwrap();
+    assert!((35..=37).contains(&b.metres), "{}", b.metres);
+    // Past the turn: the arrival is next.
+    let c = track.ahead(15_000).unwrap();
+    assert_eq!(c.maneuver.turn, Turn::Arrive);
+    assert!((54..=57).contains(&c.metres), "{}", c.metres);
+    // A track without waypoints guides nowhere.
+    assert!(crate::Track::parse_gpx(GPX).unwrap().ahead(0).is_none());
+}
+
+#[test]
+fn the_route_line_has_its_width_and_keeps_to_its_clip() {
+    let (w, h, pitch) = (64u32, 32u32, 64usize);
+    let chroma = pitch * h as usize;
+    let mut canvas = vec![0u8; chroma + pitch * h as usize / 2];
+    // Across the canvas at y = 16, in sixteenths.
+    let line = [(0, 16 * 16), (64 * 16, 16 * 16)];
+    nv12::route(&mut canvas, pitch, chroma, (w, h), (0, 0, 32, 32), &line);
+    let (fill, _, _) = ycc([66, 133, 244]);
+    let (edge, _, _) = ycc([24, 82, 190]);
+    let at = |x: usize, y: usize| canvas[y * pitch + x];
+    assert_eq!(at(10, 16), fill);
+    assert_eq!(at(10, 13), fill);
+    assert_eq!(at(10, 11), edge);
+    assert_eq!(at(10, 8), 0, "past the edge");
+    assert_eq!(at(40, 16), 0, "outside the clip");
+}

@@ -10,7 +10,10 @@ by car over the extract's roads: one-way streets and roundabouts are kept
 to, motorways are fast and residential streets slow (a road's maxspeed
 where it has one). The track has a point every second of the drive, timed
 at those speeds, slowing for sharp turns, so LEHU can replay it as a
-drive (map.fake-track) until there is a real position. It needs pyosmium
+drive (map.fake-track) until there is a real position. The turns come as
+waypoints before the track, in order: each at its junction, its <type> the
+manoeuvre (left, slight-right, u-turn, roundabout-2, arrive...) and its
+<name> the road it leads onto. It needs pyosmium
 (python3 -m venv v && v/bin/pip install osmium).
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0.
@@ -69,7 +72,9 @@ class Roads(osmium.SimpleHandler):
     def __init__(self):
         super().__init__()
         self.where = {}  # node id -> (lat, lon)
-        self.edges = {}  # node id -> [(next node, seconds, metres)]
+        self.edges = {}  # node id -> [(next node, seconds, metres, way)]
+        self.ways = []  # (name, roundabout) by way index
+        self.near = {}  # node id -> the nodes next to it on any road
 
     def way(self, w):
         tags = w.tags
@@ -86,6 +91,9 @@ class Roads(osmium.SimpleHandler):
         elif oneway == "-1":
             forward = False
         kmh = max(5.0, maxspeed(tags, cls))
+        way = len(self.ways)
+        name = tags.get("name") or tags.get("ref") or ""
+        self.ways.append((name, tags.get("junction") in ("roundabout", "circular")))
         nodes = []
         for n in w.nodes:
             if not n.location.valid():
@@ -97,9 +105,11 @@ class Roads(osmium.SimpleHandler):
             d = metres(pa, pb)
             s = d / (kmh / 3.6)
             if forward:
-                self.edges.setdefault(a, []).append((b, s, d))
+                self.edges.setdefault(a, []).append((b, s, d, way))
             if backward:
-                self.edges.setdefault(b, []).append((a, s, d))
+                self.edges.setdefault(b, []).append((a, s, d, way))
+            self.near.setdefault(a, set()).add(b)
+            self.near.setdefault(b, set()).add(a)
 
 
 def nearest(roads, p):
@@ -130,7 +140,7 @@ def fastest(roads, a, b):
         if n in done:
             continue
         done.add(n)
-        for m, s, _ in roads.edges.get(n, ()):
+        for m, s, _, _ in roads.edges.get(n, ()):
             u = t + s
             if u < cost.get(m, float("inf")):
                 cost[m] = u
@@ -153,12 +163,94 @@ def speeds(roads, path):
 
     out = []
     for i, (a, b) in enumerate(zip(path, path[1:])):
-        s = next(s for m, s, _ in roads.edges[a] if m == b)
+        s = next(s for m, s, _, _ in roads.edges[a] if m == b)
         d = metres(pts[i], pts[i + 1])
         v = d / s if s > 0 else 1.0
         if sharp(i) or sharp(i + 1):
             v = min(v, TURN_SPEED / 3.6)
         out.append(max(v, 1.0))
+    return out
+
+
+def step_way(roads, a, b):
+    """The fastest way from node a to the next node b."""
+    return min((e for e in roads.edges[a] if e[0] == b), key=lambda e: e[1])[3]
+
+
+def heading_near(roads, path, i, back):
+    """The bearing at node path[i], over about 15 m of the path behind it
+    (back) or ahead of it."""
+    here = roads.where[path[i]]
+    j, run = i, 0.0
+    while run < 15:
+        k = j - 1 if back else j + 1
+        if k < 0 or k >= len(path):
+            break
+        run += metres(roads.where[path[j]], roads.where[path[k]])
+        j = k
+    if j == i:
+        return None
+    there = roads.where[path[j]]
+    return bearing(there, here) if back else bearing(here, there)
+
+
+def kind_of(turn):
+    """A turn's manoeuvre, from its angle in degrees (right positive)."""
+    a = abs(turn)
+    if a < 20:
+        return "straight"
+    side = "right" if turn > 0 else "left"
+    if a < 45:
+        return "slight-" + side
+    if a < 135:
+        return side
+    if a < 170:
+        return "sharp-" + side
+    return "u-turn"
+
+
+def maneuvers(roads, path):
+    """The turns along the path: (node index, kind, road onto), the
+    arrival last."""
+    ways = [step_way(roads, a, b) for a, b in zip(path, path[1:])]
+    out = []
+    i = 1
+    while i < len(path) - 1:
+        before, after = roads.ways[ways[i - 1]], roads.ways[ways[i]]
+        if after[1] and not before[1]:
+            # Into a roundabout: count the ways out of it up to the one we
+            # take, and name the road after it.
+            j = i
+            exits = 0
+            while j < len(ways) and roads.ways[ways[j]][1]:
+                # path[j] is the next node on the ring, or where we leave it.
+                j += 1
+                leaving = j >= len(ways) or not roads.ways[ways[j]][1]
+                ring = {path[j - 1], path[j + 1] if j + 1 < len(path) else None}
+                others = [m for m, _, _, w in roads.edges.get(path[j], ())
+                          if not roads.ways[w][1] and m not in ring]
+                if leaving or others:
+                    exits += 1
+            onto = roads.ways[ways[j]][0] if j < len(ways) else ""
+            out.append((i, f"roundabout-{max(1, exits)}", onto))
+            i = j + 1
+            continue
+        turn_in = heading_near(roads, path, i, True)
+        turn_out = heading_near(roads, path, i, False)
+        if turn_in is None or turn_out is None:
+            i += 1
+            continue
+        turn = (turn_out - turn_in + 180) % 360 - 180
+        kind = kind_of(turn)
+        junction = len(roads.near.get(path[i], ())) > 2
+        renamed = after[0] != before[0]
+        if (renamed and junction) or (junction and kind != "straight" and abs(turn) >= 45):
+            if kind == "straight" and not after[0]:
+                i += 1
+                continue
+            out.append((i, kind, after[0]))
+        i += 1
+    out.append((len(path) - 1, "arrive", ""))
     return out
 
 
@@ -210,17 +302,26 @@ def main():
             sys.exit(f"no road route from {roads.where[x]} to {roads.where[y]}")
         path += leg[1:]
     pts, secs, dist = track(roads, path, 1_800_000_000)
+    turns = maneuvers(roads, path)
     with open(a.out + ".tmp", "w") as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         f.write('<gpx version="1.1" creator="LEHU scripts/route-gpx.py" '
                 'xmlns="http://www.topografix.com/GPX/1/1">\n')
-        f.write(f"<trk><name>{a.name}</name><trkseg>\n")
+        from xml.sax.saxutils import escape
+        for i, kind, onto in turns:
+            lat, lon = roads.where[path[i]]
+            f.write(f'<wpt lat="{lat:.7f}" lon="{lon:.7f}"><name>{escape(onto)}</name>'
+                    f"<type>{kind}</type></wpt>\n")
+        f.write(f"<trk><name>{escape(a.name)}</name><trkseg>\n")
         for lat, lon, t in pts:
             stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t)))
             f.write(f'<trkpt lat="{lat:.7f}" lon="{lon:.7f}"><time>{stamp}Z</time></trkpt>\n')
         f.write("</trkseg></trk>\n</gpx>\n")
     os.replace(a.out + ".tmp", a.out)
-    print(f"{dist / 1000:.1f} km in {secs / 60:.1f} min, {len(pts)} points: {a.out}", flush=True)
+    print(f"{dist / 1000:.1f} km in {secs / 60:.1f} min, {len(pts)} points, "
+          f"{len(turns)} turns: {a.out}", flush=True)
+    for i, kind, onto in turns:
+        print(f"  {kind:14} {onto}", flush=True)
 
 
 if __name__ == "__main__":

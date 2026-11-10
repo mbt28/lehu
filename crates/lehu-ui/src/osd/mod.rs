@@ -28,7 +28,7 @@ use slint::platform::{Key, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, ModelRc, SharedString, VecModel};
 use toml::Value;
 
-use crate::host::{AudioOutput, CameraRequest, Host};
+use crate::host::{AudioOutput, CameraRequest, Host, NavCard};
 use crate::input::{Input, KEY_QUEUE, KeyEvent};
 use crate::{
     AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DeviceRow, MapBar, NavCardBox, VolumeBar,
@@ -396,6 +396,7 @@ struct State<H> {
     p_map_note: Last,
     p_map_label: Last,
     p_map_position: Option<bool>,
+    p_map_guidance: Option<NavCard>,
 
     // ── Settings > Audio ────────────────────────────────────────────────
     p_levels: Option<[u32; 4]>,
@@ -561,6 +562,7 @@ impl<H: Host> State<H> {
             p_map_note: Last::default(),
             p_map_label: Last::default(),
             p_map_position: None,
+            p_map_guidance: None,
             p_levels: None,
             outputs: Vec::new(),
             outputs_seen: false,

@@ -66,5 +66,17 @@ impl<H: Host> State<H> {
             self.p_map_position = Some(has);
             bridge.set_map_has_position(has);
         }
+        let guidance = self.host.map_guidance();
+        if self.p_map_guidance.as_ref() != guidance {
+            self.p_map_guidance = guidance.cloned();
+            let g = guidance.cloned().unwrap_or_default();
+            bridge.set_map_guiding(guidance.is_some());
+            bridge.set_map_arrow(g.arrow.id());
+            bridge.set_map_maneuver(SharedString::from(g.maneuver.as_str()));
+            bridge.set_map_distance(SharedString::from(g.distance.as_str()));
+            bridge.set_map_road(SharedString::from(g.road.as_str()));
+            bridge.set_map_eta(SharedString::from(g.eta.as_str()));
+            bridge.set_map_eta_note(SharedString::from(g.eta_note.as_str()));
+        }
     }
 }

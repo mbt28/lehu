@@ -13,7 +13,7 @@ later.
 | Arrow keys | move it a quarter of the screen |
 | Knob, or the - and + keys of the bar | zoom out and in |
 | Enter | zoom in |
-| The bar's Me key | centre on where we are |
+| The bar's Me key | centre on where we are, and follow it |
 | Back, or the bar's Back key | leave the map |
 
 LEHU opens the map where it was left, or on where we are when it knows.
@@ -30,6 +30,23 @@ fake-position = "49.6116, 6.1300"
 
 The map then opens on it and shows it as a blue dot, and the bar gets a Me
 key that centres the map on it again.
+
+A recorded drive can stand in for a moving position: `map.fake-track`
+names a GPX file, which LEHU follows in real time, from the start again at
+its end. The position is a blue arrow along the road, and the map follows
+it until it is dragged; the Me key makes it follow again. When the GPX
+has the route's turns as waypoints, the map draws the route and guides
+along it: the bar shows the next turn, its distance and the road it leads
+onto, and the time and distance left.
+
+`scripts/route-gpx.py` makes such a drive from the same extract as the
+tiles: the fastest car route between two points, keeping to one-way
+streets, timed at each road's speed, with its turns.
+
+```sh
+v/bin/python scripts/route-gpx.py luxembourg-latest.osm.pbf \
+    49.6045,6.1300 49.6188,6.1440 drive.gpx --name "Gare to Kirchberg"
+```
 
 ## Making a map
 

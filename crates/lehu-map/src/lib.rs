@@ -26,9 +26,9 @@ mod view;
 mod viewer;
 
 pub use tileset::TileSet;
-pub use track::{Fix, Track};
+pub use track::{Ahead, Fix, Maneuver, Track, Turn};
 pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
-pub use viewer::{Marker, Viewer};
+pub use viewer::{Marker, Route, Viewer};
 
 #[cfg(test)]
 mod tests;

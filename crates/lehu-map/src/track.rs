@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Mehmet Tekbas
 //! A recorded drive, replayed as the position until there is a real one: a
 //! GPX track (scripts/route-gpx.py writes one), its points timed, followed
-//! in real time and from the start again at its end.
+//! in real time and from the start again at its end. Its waypoints, when
+//! it has them, are the route's turns, so the drive is also a route to be
+//! guided along.
 
 use crate::view::world_from_degrees;
 
@@ -17,11 +19,68 @@ pub struct Fix {
     pub heading: (i32, i32),
 }
 
-/// The drive: points in world pixels at `WORLD_Z`, each with its time in
-/// milliseconds from the first.
+/// What to do at a turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turn {
+    Straight,
+    SlightLeft,
+    Left,
+    SharpLeft,
+    SlightRight,
+    Right,
+    SharpRight,
+    UTurn,
+    /// Into a roundabout, out at this exit.
+    Roundabout(u8),
+    Arrive,
+}
+
+impl Turn {
+    /// A waypoint's `<type>`, as scripts/route-gpx.py writes it.
+    fn parse(text: &str) -> Option<Self> {
+        Some(match text.trim() {
+            "straight" => Self::Straight,
+            "slight-left" => Self::SlightLeft,
+            "left" => Self::Left,
+            "sharp-left" => Self::SharpLeft,
+            "slight-right" => Self::SlightRight,
+            "right" => Self::Right,
+            "sharp-right" => Self::SharpRight,
+            "u-turn" => Self::UTurn,
+            "arrive" => Self::Arrive,
+            other => Self::Roundabout(other.strip_prefix("roundabout-")?.parse().ok()?),
+        })
+    }
+}
+
+/// A turn on the route: what, onto which road, at which point of the track.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Maneuver {
+    pub turn: Turn,
+    pub road: String,
+    /// The track point it is at.
+    point: usize,
+}
+
+/// The next turn from where the drive is, and how far away things are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ahead<'a> {
+    pub maneuver: &'a Maneuver,
+    /// Metres to the turn.
+    pub metres: u32,
+    /// Metres and milliseconds to the end of the route.
+    pub left_metres: u32,
+    pub left_ms: u64,
+}
+
+/// The drive: points in world pixels at `WORLD_Z`, each with its time in
+/// milliseconds from the first, and the metres along the route to it; the
+/// turns, in order.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     points: Vec<(i64, i64, u64)>,
+    metres: Vec<f64>,
+    maneuvers: Vec<Maneuver>,
 }
 
 impl Track {
@@ -64,7 +123,56 @@ impl Track {
         if points[points.len() - 1].2 == 0 {
             return Err("the track takes no time".into());
         }
-        Ok(Self { points })
+        let mut metres = Vec::with_capacity(points.len());
+        let mut run = 0.0;
+        for (i, p) in points.iter().enumerate() {
+            if i > 0 {
+                run += ground(points[i - 1], *p);
+            }
+            metres.push(run);
+        }
+        let maneuvers = waypoints(text, &points)?;
+        Ok(Self {
+            points,
+            metres,
+            maneuvers,
+        })
+    }
+
+    /// The route as a line: its points, world pixels at `WORLD_Z`.
+    pub fn line(&self) -> Vec<(i64, i64)> {
+        self.points.iter().map(|p| (p.0, p.1)).collect()
+    }
+
+    /// The turns, in order.
+    pub fn maneuvers(&self) -> &[Maneuver] {
+        &self.maneuvers
+    }
+
+    /// The next turn `ms` after the drive started (as `at` has it), and
+    /// what is left of the route; None for a track without turns.
+    pub fn ahead(&self, ms: u64) -> Option<Ahead<'_>> {
+        let t = ms % self.duration().max(1);
+        let i = self
+            .points
+            .partition_point(|p| p.2 <= t)
+            .clamp(1, self.points.len() - 1);
+        let (at, bt) = (self.points[i - 1].2, self.points[i].2);
+        let f = if bt > at {
+            (t - at) as f64 / (bt - at) as f64
+        } else {
+            1.0
+        };
+        let here = self.metres[i - 1] + (self.metres[i] - self.metres[i - 1]) * f;
+        // The first turn not yet passed: its point is ahead of the step.
+        let maneuver = self.maneuvers.iter().find(|m| m.point >= i)?;
+        let end = self.metres[self.metres.len() - 1];
+        Some(Ahead {
+            maneuver,
+            metres: (self.metres[maneuver.point] - here).max(0.0) as u32,
+            left_metres: (end - here).max(0.0) as u32,
+            left_ms: self.duration() - t,
+        })
     }
 
     /// How long the drive takes, in milliseconds.
@@ -115,6 +223,71 @@ impl Track {
         }
         (0, 0)
     }
+}
+
+/// Metres on the ground between two points (world pixels at `WORLD_Z`):
+/// a Mercator pixel is the equator's length over the world's pixels,
+/// shrunk by the cosine of the latitude.
+fn ground(a: (i64, i64, u64), b: (i64, i64, u64)) -> f64 {
+    const EQUATOR: f64 = 40_075_016.686;
+    let size = 256.0 * f64::from(1u32 << crate::view::WORLD_Z);
+    let y = (a.1 + b.1) as f64 / 2.0;
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * y / size))
+        .sinh()
+        .atan();
+    let px = ((b.0 - a.0) as f64).hypot((b.1 - a.1) as f64);
+    px * EQUATOR / size * lat.cos()
+}
+
+/// The GPX's waypoints as the route's turns, each at the track point
+/// nearest it, in order along the track.
+fn waypoints(text: &str, points: &[(i64, i64, u64)]) -> Result<Vec<Maneuver>, String> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    let mut rest = text;
+    while let Some(at) = rest.find("<wpt") {
+        rest = &rest[at + 4..];
+        let end = rest.find("</wpt>").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let tag_end = body.find('>').ok_or("a <wpt> is cut short")?;
+        let (lat, lon) = (attr(&body[..tag_end], "lat"), attr(&body[..tag_end], "lon"));
+        let (Some(lat), Some(lon)) = (lat, lon) else {
+            return Err("a <wpt> without lat or lon".into());
+        };
+        let Some(turn) = element(body, "type").and_then(|t| Turn::parse(&t)) else {
+            continue;
+        };
+        let road = element(body, "name").unwrap_or_default();
+        let (x, y) = world_from_degrees(lat, lon)
+            .ok_or_else(|| format!("a <wpt> off the map: {lat}, {lon}"))?;
+        // The nearest track point from the last turn's on.
+        let point = (from..points.len())
+            .min_by_key(|&i| {
+                let (dx, dy) = (points[i].0 - x, points[i].1 - y);
+                i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
+            })
+            .unwrap_or(points.len() - 1);
+        from = point;
+        out.push(Maneuver { turn, road, point });
+    }
+    Ok(out)
+}
+
+/// An element's text, its entities read: `<name>Rue &amp; Co</name>`.
+fn element(body: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let start = body.find(&open)? + open.len();
+    let end = body[start..].find(&format!("</{name}>"))? + start;
+    Some(
+        body[start..end]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
+            .trim()
+            .to_string(),
+    )
 }
 
 /// An attribute's number in a tag's text: `name="1.5"`.

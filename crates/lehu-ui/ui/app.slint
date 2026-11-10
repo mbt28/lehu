@@ -230,6 +230,14 @@ export global Bridge {
     in property <string> map-note;
     in property <string> map-label;
     in property <bool> map-has-position;      // the bar's Me key is there
+    // The map's own guidance, on its bar: as the navigation card's.
+    in property <bool> map-guiding;
+    in property <int> map-arrow;              // NavArrow
+    in property <string> map-maneuver;
+    in property <string> map-distance;
+    in property <string> map-road;
+    in property <string> map-eta;
+    in property <string> map-eta-note;
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -1198,7 +1206,8 @@ export global CameraPanel {
 // The map's bar: Back, the zoom keys and the map's words. Over the map the
 // program shows exactly this rectangle of the overlay plane.
 export global MapBar {
-    out property <length> height: 64px;
+    // Taller while it guides: the next turn and the keys side by side.
+    out property <length> height: Bridge.map-guiding ? 84px : 64px;
     out property <length> x: 0px;
     out property <length> y: 480px - root.height;
     out property <length> width: 800px;
@@ -2299,7 +2308,86 @@ component ScreenMap inherits Rectangle {
         height: MapBar.height;
         background: Theme.bar;
         TouchArea { } // between the keys: not a drag
-        HorizontalLayout {
+        // Guiding: the next turn, as the navigation card shows it, then the
+        // keys and the attribution under them.
+        if Bridge.map-guiding: HorizontalLayout {
+            padding: 6px;
+            padding-left: 12px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 12px;
+                    background: Theme.ok;
+                    Icon {
+                        x: 8px;
+                        y: 8px;
+                        kind: "nav" + Bridge.map-arrow;
+                        view: 48;
+                        size: 48px;
+                        weight: 6px;
+                        ink: Theme.bg;
+                    }
+                }
+            }
+            Text {
+                text: Bridge.map-distance;
+                color: Theme.text;
+                font-size: 36px;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: Bridge.map-maneuver;
+                    color: Theme.text;
+                    font-size: 18px;
+                    overflow: elide;
+                }
+                Text {
+                    text: Bridge.map-road;
+                    color: Theme.dim;
+                    font-size: 18px;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: Bridge.map-eta;
+                    color: Theme.text;
+                    font-size: 22px;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    text: Bridge.map-eta-note;
+                    color: Theme.dim;
+                    font-size: 14px;
+                    horizontal-alignment: right;
+                }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 56px;
+                    OskKey { label: "-"; weight: 0; width: 56px; pressed => { Bridge.map-zoom(-1); } }
+                    OskKey { label: "+"; weight: 0; width: 56px; pressed => { Bridge.map-zoom(1); } }
+                    OskKey { label: "Me"; weight: 0; width: 56px; pressed => { Bridge.map-locate(); } }
+                    OskKey { label: "Back"; weight: 0; width: 72px; pressed => { Bridge.back(); } }
+                }
+                Text {
+                    text: "© OpenStreetMap contributors";
+                    color: Theme.dim;
+                    font-size: 11px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+        if !Bridge.map-guiding: HorizontalLayout {
             padding: 6px;
             spacing: 6px;
             OskKey { label: "Back"; weight: 0; width: 120px; pressed => { Bridge.back(); } }

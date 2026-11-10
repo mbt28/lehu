@@ -418,6 +418,11 @@ pub trait Host {
     fn map_has_position(&self) -> bool {
         false
     }
+    /// The map's own guidance along a route, for its bar; None when it is
+    /// not guiding.
+    fn map_guidance(&self) -> Option<&NavCard> {
+        None
+    }
     /// Over the map, while there is no picture: why, or that it loads.
     fn map_note(&self) -> &str {
         ""

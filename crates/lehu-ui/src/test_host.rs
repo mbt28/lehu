@@ -78,6 +78,8 @@ pub struct TestHost {
     pub camera_gen: u32,
     pub camera_failure: Option<String>,
     pub camera_request: CameraRequest,
+    /// The map's guidance along a route, when it guides.
+    pub map_guide: Option<NavCard>,
     pub learned_key: Option<u32>,
 
     pub bt_available: bool,
@@ -150,6 +152,7 @@ impl TestHost {
             camera_gen: 1,
             camera_failure: None,
             camera_request: CameraRequest::None,
+            map_guide: None,
             learned_key: None,
             bt_available: true,
             bt_gen: 1,
@@ -416,6 +419,10 @@ impl Host for TestHost {
 
     fn map_has_position(&self) -> bool {
         true
+    }
+
+    fn map_guidance(&self) -> Option<&NavCard> {
+        self.map_guide.as_ref()
     }
 
     fn map_label(&self) -> &str {

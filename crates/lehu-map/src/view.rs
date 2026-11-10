@@ -84,6 +84,14 @@ impl Layout {
         }
     }
 
+    /// A point (world pixels at `WORLD_Z`) in sixteenths of this canvas's
+    /// pixels.
+    pub fn sixteenth(&self, (x, y): (i64, i64)) -> (i64, i64) {
+        let s = i32::from(WORLD_Z - self.zoom.min(WORLD_Z)) - 4;
+        let at = |v: i64| if s >= 0 { v >> s } else { v << -s };
+        (at(x) - self.tx * TILE * 16, at(y) - self.ty * TILE * 16)
+    }
+
     /// A point (world pixels at `WORLD_Z`) in this canvas's pixels.
     pub fn pixel(&self, (x, y): (i64, i64)) -> (i64, i64) {
         let s = WORLD_Z - self.zoom.min(WORLD_Z);

@@ -11,14 +11,10 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
-use lehu_map::{Marker, TileSet, Track, View, Viewer};
-
-/// A replayed drive's position moves on this often: smooth enough at
-/// city speeds, and each move redraws a canvas (about 20 ms).
-const MAP_TRACK_STEP_MS: u64 = 200;
+use lehu_map::{Ahead, Marker, Route, TileSet, Track, Turn, View, Viewer};
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
+    NavArrow, NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
 };
 use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
@@ -26,6 +22,10 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use crate::audio::Audio;
+
+/// A replayed drive's position moves on this often: smooth at city speeds,
+/// and a move only patches the marker on the map (a millisecond or so).
+const MAP_TRACK_STEP_MS: u64 = 200;
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +196,10 @@ pub struct AppHost {
     map_track_shown: u64,
     /// The map keeps where we are in the middle, until it is dragged.
     map_follow: bool,
+    /// The replayed drive as a route, drawn on the map, and the guidance
+    /// along it for the map's bar.
+    map_route: Option<Route>,
+    map_guide: Option<NavCard>,
     map_note: String,
     map_label: String,
 }
@@ -281,6 +285,8 @@ impl AppHost {
             map_track_start: None,
             map_track_shown: 0,
             map_follow: true,
+            map_route: None,
+            map_guide: None,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -608,6 +614,8 @@ impl AppHost {
         };
         self.map_marker = self.map_position.map(|(x, y)| Marker::Dot(x, y));
         self.map_track = None;
+        self.map_route = None;
+        self.map_guide = None;
         if !m.fake_track.is_empty() {
             match std::fs::read_to_string(&m.fake_track)
                 .map_err(|e| e.to_string())
@@ -625,6 +633,10 @@ impl AppHost {
                     let fix = track.at(lehu_core::clock::now_ms() - start);
                     self.map_position = Some((fix.x, fix.y));
                     self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+                    self.map_route = Some(Route::from(track.line()));
+                    self.map_guide = track
+                        .ahead(lehu_core::clock::now_ms() - start)
+                        .map(|a| guidance(&a));
                     self.map_track = Some(track);
                 }
                 Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
@@ -653,6 +665,7 @@ impl AppHost {
         match Viewer::start(display, set.clone(), view) {
             Ok(viewer) => {
                 viewer.set_position(self.map_marker);
+                viewer.set_route(self.map_route.clone());
                 self.map = Some(viewer);
                 self.map_view = view;
                 self.map_set = Some(set);
@@ -694,6 +707,7 @@ impl AppHost {
         }
         self.map_track_shown = now;
         let fix = track.at(now - start);
+        self.map_guide = track.ahead(now - start).map(|a| guidance(&a));
         self.map_position = Some((fix.x, fix.y));
         self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
         viewer.set_position(self.map_marker);
@@ -996,6 +1010,10 @@ impl Host for AppHost {
         self.map_follow = true;
     }
 
+    fn map_guidance(&self) -> Option<&NavCard> {
+        self.map.as_ref().and(self.map_guide.as_ref())
+    }
+
     fn map_has_position(&self) -> bool {
         self.map_position.is_some()
     }
@@ -1240,5 +1258,90 @@ impl Host for AppHost {
             updater.outcome_seen();
         }
         self.sync_update();
+    }
+}
+
+/// The map's bar while it guides: the next turn, how far, onto what, and
+/// what is left of the route.
+fn guidance(a: &Ahead<'_>) -> NavCard {
+    let (arrow, maneuver) = match a.maneuver.turn {
+        Turn::Straight => (NavArrow::Straight, "Continue".to_string()),
+        Turn::SlightLeft => (NavArrow::SlightLeft, "Bear left".to_string()),
+        Turn::Left => (NavArrow::Left, "Turn left".to_string()),
+        Turn::SharpLeft => (NavArrow::SharpLeft, "Turn sharp left".to_string()),
+        Turn::SlightRight => (NavArrow::SlightRight, "Bear right".to_string()),
+        Turn::Right => (NavArrow::Right, "Turn right".to_string()),
+        Turn::SharpRight => (NavArrow::SharpRight, "Turn sharp right".to_string()),
+        Turn::UTurn => (NavArrow::UTurn, "Make a U-turn".to_string()),
+        Turn::Roundabout(n) => (
+            NavArrow::Roundabout,
+            format!("Take the {} exit", ordinal(n)),
+        ),
+        Turn::Arrive => (NavArrow::Arrive, "Arrive".to_string()),
+    };
+    let road = match a.maneuver.turn {
+        Turn::Arrive => "at the destination".to_string(),
+        _ => a.maneuver.road.clone(),
+    };
+    let minutes = a.left_ms.div_ceil(60_000).max(1);
+    NavCard {
+        active: true,
+        arrow,
+        maneuver,
+        distance: distance(a.metres),
+        road,
+        eta: format!("{minutes} min"),
+        eta_note: distance(a.left_metres),
+    }
+}
+
+/// A distance as a driver reads it: the nearest 10 m under 100 m, 50 m
+/// under a kilometre, a tenth of a kilometre under ten, then whole ones.
+fn distance(metres: u32) -> String {
+    match metres {
+        0..10 => "Now".to_string(),
+        10..95 => format!("{} m", (metres + 5) / 10 * 10),
+        95..975 => format!("{} m", (metres + 25) / 50 * 50),
+        975..9950 => {
+            let tenths = (metres + 50) / 100;
+            format!("{}.{} km", tenths / 10, tenths % 10)
+        }
+        _ => format!("{} km", (metres + 500) / 1000),
+    }
+}
+
+/// 1st, 2nd, 3rd, 4th...
+fn ordinal(n: u8) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::{distance, ordinal};
+
+    #[test]
+    fn distances_read_as_a_driver_reads_them() {
+        assert_eq!(distance(4), "Now");
+        assert_eq!(distance(44), "40 m");
+        assert_eq!(distance(46), "50 m");
+        assert_eq!(distance(330), "350 m");
+        assert_eq!(distance(94), "90 m");
+        assert_eq!(distance(960), "950 m");
+        assert_eq!(distance(990), "1.0 km");
+        assert_eq!(distance(9960), "10 km");
+        assert_eq!(distance(1240), "1.2 km");
+        assert_eq!(distance(1960), "2.0 km");
+        assert_eq!(distance(12_600), "13 km");
+        assert_eq!(ordinal(1), "1st");
+        assert_eq!(ordinal(2), "2nd");
+        assert_eq!(ordinal(12), "12th");
+        assert_eq!(ordinal(23), "23rd");
     }
 }
