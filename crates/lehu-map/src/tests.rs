@@ -474,3 +474,54 @@ fn an_enlarged_quarter_keeps_its_place_and_meets_its_neighbour() {
     assert!(row.windows(2).all(|p| p[1] >= p[0] && p[1] - p[0] <= 4));
     assert!(out[side * side..].iter().all(|&c| c == 128));
 }
+
+#[test]
+fn enlarging_matches_the_four_sample_rule_everywhere() {
+    // Every output sample against 9/3/3/1 sixteenths of its source samples,
+    // the edges clamped: all four quarters, luma and chroma, odd values.
+    let side = 64;
+    let src: Vec<u8> = (0..side * side * 3 / 2)
+        .map(|i| (i * 37 % 251) as u8)
+        .collect();
+    for q in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let mut out = vec![0u8; side * side * 3 / 2];
+        nv12::enlarge_quarter(&src, side, q, &mut out);
+        let check = |plane: &[u8], got: &[u8], sw: usize, n: usize, half: usize| {
+            let at = |x: usize, y: usize, c: usize| u32::from(plane[(y * sw + x) * n + c]);
+            for dy in 0..sw {
+                for dx in 0..sw {
+                    let (sx, sy) = (q.0 * half + dx / 2, q.1 * half + dy / 2);
+                    let nx = if dx % 2 == 0 {
+                        sx.saturating_sub(1)
+                    } else {
+                        (sx + 1).min(sw - 1)
+                    };
+                    let ny = if dy % 2 == 0 {
+                        sy.saturating_sub(1)
+                    } else {
+                        (sy + 1).min(sw - 1)
+                    };
+                    for c in 0..n {
+                        let v = 9 * at(sx, sy, c)
+                            + 3 * at(nx, sy, c)
+                            + 3 * at(sx, ny, c)
+                            + at(nx, ny, c);
+                        assert_eq!(
+                            u32::from(got[(dy * sw + dx) * n + c]),
+                            (v + 8) / 16,
+                            "{q:?} {dx},{dy}"
+                        );
+                    }
+                }
+            }
+        };
+        check(&src[..side * side], &out[..side * side], side, 1, side / 2);
+        check(
+            &src[side * side..],
+            &out[side * side..],
+            side / 2,
+            2,
+            side / 4,
+        );
+    }
+}

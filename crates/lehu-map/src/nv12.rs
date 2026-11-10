@@ -149,7 +149,8 @@ pub fn enlarge_quarter(src: &[u8], side: usize, (qx, qy): (usize, usize), dst: &
 /// plane of `sw` x `sh` samples, `n` bytes to a sample (each byte on its
 /// own), into `dst`, `2w` x `2h` samples. Each new sample is 3/4 of its
 /// nearest and 1/4 of the next each way; at the plane's edge the nearest
-/// stands in for the next.
+/// stands in for the next. Done a row at a time: the two source rows
+/// blended once (3:1), then the blend widened (3:1 again).
 fn up2(
     src: &[u8],
     (sw, sh): (usize, usize),
@@ -158,7 +159,12 @@ fn up2(
     (w, h): (usize, usize),
     dst: &mut [u8],
 ) {
-    let at = |x: usize, y: usize, c: usize| u32::from(src[(y * sw + x) * n + c]);
+    // The region's columns and one more each side (the plane's edge
+    // repeated where there is none).
+    let x0 = ox.saturating_sub(1);
+    let x1 = (ox + w + 1).min(sw);
+    let pad_left = usize::from(ox == 0);
+    let mut blend = vec![0u16; (w + 2) * n];
     let row = 2 * w * n;
     for dy in 0..2 * h {
         let sy = oy + dy / 2;
@@ -167,19 +173,27 @@ fn up2(
         } else {
             (sy + 1).min(sh - 1)
         };
+        let a = &src[(sy * sw + x0) * n..(sy * sw + x1) * n];
+        let b = &src[(ny * sw + x0) * n..(ny * sw + x1) * n];
+        // blend[k] is source column ox - 1 + k, in sixteenths / 4.
+        let at = pad_left * n;
+        for ((o, &p), &q) in blend[at..].iter_mut().zip(a).zip(b) {
+            *o = 3 * u16::from(p) + u16::from(q);
+        }
+        if pad_left == 1 {
+            blend.copy_within(n..2 * n, 0);
+        }
+        let filled = at + a.len();
+        if filled < blend.len() {
+            blend.copy_within(filled - n..filled, filled);
+        }
         let line = &mut dst[dy * row..(dy + 1) * row];
-        for dx in 0..2 * w {
-            let sx = ox + dx / 2;
-            let nx = if dx % 2 == 0 {
-                sx.saturating_sub(1)
-            } else {
-                (sx + 1).min(sw - 1)
-            };
+        for i in 0..w {
+            let (l, m, r) = (i * n, (i + 1) * n, (i + 2) * n);
             for c in 0..n {
-                // Sixteenths: 9 the nearest, 3 and 3 the next each way, 1
-                // the one across.
-                let v = 9 * at(sx, sy, c) + 3 * at(nx, sy, c) + 3 * at(sx, ny, c) + at(nx, ny, c);
-                line[dx * n + c] = ((v + 8) / 16) as u8;
+                let mid = 3 * u32::from(blend[m + c]);
+                line[2 * i * n + c] = ((mid + u32::from(blend[l + c]) + 8) / 16) as u8;
+                line[(2 * i + 1) * n + c] = ((mid + u32::from(blend[r + c]) + 8) / 16) as u8;
             }
         }
     }
