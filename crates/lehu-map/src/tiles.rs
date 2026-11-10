@@ -26,6 +26,10 @@ pub const LAND: [u8; 3] = [242, 239, 233];
 /// zoom back finds most of what it needs (96 KiB each).
 pub const CACHED: usize = 36;
 
+/// Tiles remembered as missing, besides: a few bytes each, kept apart so
+/// that a trip over empty land does not push decoded tiles out.
+const MISSING: usize = 256;
+
 type Key = (u8, i64, i64);
 
 struct Entry {
@@ -62,7 +66,7 @@ impl Tiles {
         Self {
             set,
             hw,
-            entries: Vec::with_capacity(CACHED),
+            entries: Vec::with_capacity(CACHED + MISSING),
             clock: 0,
             path: PathBuf::new(),
             file: Vec::new(),
@@ -86,18 +90,27 @@ impl Tiles {
                     used: 0,
                     pixels,
                 };
-                if self.entries.len() < CACHED {
-                    self.entries.push(entry);
-                    self.entries.len() - 1
+                let kept = self.entries.iter().filter(|e| e.pixels.is_some()).count();
+                let full = if entry.pixels.is_some() {
+                    kept >= CACHED
                 } else {
+                    self.entries.len() - kept >= MISSING
+                };
+                if full {
+                    // The least recently used of its own kind makes way.
+                    let has = entry.pixels.is_some();
                     let i = self
                         .entries
                         .iter()
                         .enumerate()
+                        .filter(|(_, e)| e.pixels.is_some() == has)
                         .min_by_key(|(_, e)| e.used)
                         .map_or(0, |(i, _)| i);
                     self.entries[i] = entry;
                     i
+                } else {
+                    self.entries.push(entry);
+                    self.entries.len() - 1
                 }
             }
         };

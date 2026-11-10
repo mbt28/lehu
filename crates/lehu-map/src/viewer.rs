@@ -4,10 +4,10 @@
 //!
 //! The loop hands over the view it wants; the thread shows the newest one
 //! and skips those it fell behind on. A view whose window still lies on
-//! the canvas shown costs one commit; otherwise the next canvas is composed
-//! around it and flipped to. Three canvases take turns, so the one written
-//! is never the one on scanout, nor the one the sun4i CRTC may still be
-//! reading after an early flip event.
+//! a canvas (the one shown, or one shown before) costs one commit;
+//! otherwise a canvas is composed around it and flipped to. There are
+//! three, and the one written is never the one on scanout, nor the one the
+//! sun4i CRTC may still be reading after an early flip event.
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -182,9 +182,11 @@ fn run(
     panel: (u32, u32),
     (cols, rows): (u32, u32),
 ) -> Vec<Canvas> {
-    // The canvas shown and what it holds; the next one to compose into.
-    let mut current: Option<(usize, Layout)> = None;
-    let mut next = 0;
+    // What each canvas holds, and the last two shown, newest first: those
+    // are never written (the one on scanout, and the one the sun4i CRTC
+    // may still be reading after an early flip event).
+    let mut held: Vec<Option<Layout>> = vec![None; canvases.len()];
+    let mut recent: [Option<usize>; 2] = [None, None];
     let mut shown: Option<View> = None;
     loop {
         let want = {
@@ -200,18 +202,29 @@ fn run(
             }
             inner.want
         };
-        let placed = current.and_then(|(i, l)| l.window(&want, panel).map(|w| (i, w)));
+        // A canvas that already holds the window, the one shown first:
+        // scrolling back over an edge flips back, with no copy.
+        let placed = recent
+            .iter()
+            .flatten()
+            .copied()
+            .chain(0..canvases.len())
+            .find_map(|i| held[i]?.window(&want, panel).map(|w| (i, w)));
         let (index, (x, y)) = match placed {
             Some(p) => p,
             None => {
                 let layout = Layout::around(&want, panel, cols, rows);
-                let index = next;
-                next = (next + 1) % canvases.len();
+                let Some(index) = (0..canvases.len()).find(|i| !recent.contains(&Some(*i))) else {
+                    log::error!("map: no canvas free to compose into");
+                    break;
+                };
                 let started = Instant::now();
                 let (decoded, software) = (tiles.decoded, tiles.software);
                 let canvas = &mut canvases[index];
                 let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
+                held[index] = None;
                 tiles.compose(&layout, canvas.pixels(), pitch, chroma);
+                held[index] = Some(layout);
                 // At info while the decode is being measured on the board.
                 log::info!(
                     "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software",
@@ -222,7 +235,6 @@ fn run(
                     tiles.decoded - decoded,
                     tiles.software - software
                 );
-                current = Some((index, layout));
                 match layout.window(&want, panel) {
                     Some(w) => (index, w),
                     None => {
@@ -237,6 +249,9 @@ fn run(
         match display.show_canvas(&canvases[index], x, y) {
             Show::Shown => {
                 shown = Some(want);
+                if recent[0] != Some(index) {
+                    recent = [Some(index), recent[0]];
+                }
                 shared.lock().shown = true;
             }
             Show::Busy => thread::sleep(BUSY_WAIT),
