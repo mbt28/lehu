@@ -713,3 +713,177 @@ fn the_route_line_has_its_width_and_keeps_to_its_clip() {
     assert_eq!(at(10, 8), 0, "past the edge");
     assert_eq!(at(40, 16), 0, "outside the clip");
 }
+
+/// Four 256 tiles in a 2 x 2 grid whose luma is (x + 3y) mod 251 of the
+/// grid pixel, the chroma pairs (tile number, 128).
+fn pattern_tiles() -> Vec<Vec<u8>> {
+    (0..4)
+        .map(|t| {
+            let (ox, oy) = ((t % 2) * 256, (t / 2) * 256);
+            let mut tile = vec![0u8; 256 * 256 * 3 / 2];
+            for y in 0..256 {
+                for x in 0..256 {
+                    tile[y * 256 + x] = ((ox + x + 3 * (oy + y)) % 251) as u8;
+                }
+            }
+            for pair in tile[256 * 256..].as_chunks_mut::<2>().0 {
+                pair.copy_from_slice(&[t as u8 * 10, 128]);
+            }
+            tile
+        })
+        .collect()
+}
+
+fn turned(up: (i64, i64)) -> Vec<u8> {
+    let tiles = pattern_tiles();
+    let grid = nv12::Grid {
+        tiles: tiles.iter().map(|t| Some(t.as_slice())).collect(),
+        cols: 2,
+        rows: 2,
+        side: 256,
+        land: (1, 2, 3),
+    };
+    let (w, h, pitch) = (64u32, 32u32, 64usize);
+    let chroma = pitch * h as usize;
+    let mut out = vec![0u8; chroma + pitch * h as usize / 2];
+    let across = (-up.1, up.0);
+    let down = (-up.0, -up.1);
+    nv12::rotate(
+        &grid,
+        &mut out,
+        pitch,
+        chroma,
+        (w, h),
+        (300 << 16, 200 << 16),
+        (32, 16),
+        across,
+        down,
+    );
+    out
+}
+
+#[test]
+fn heading_north_the_frame_is_the_map_as_it_lies() {
+    let out = turned((0, -65536));
+    let luma = |gx: i64, gy: i64| ((gx + 3 * gy) % 251) as u8;
+    for (u, v) in [(0, 0), (32, 16), (63, 31), (10, 25)] {
+        assert_eq!(
+            out[v * 64 + u],
+            luma(300 + u as i64 - 32, 200 + v as i64 - 16),
+            "at {u},{v}"
+        );
+    }
+    // Grid x 268..331, y 184..215: all in tile 1, whose chroma is 10.
+    assert_eq!(out[64 * 32], 10);
+    assert_eq!(out[64 * 32 + 62], 10);
+}
+
+#[test]
+fn heading_east_right_on_the_panel_is_south() {
+    let out = turned((65536, 0));
+    let luma = |gx: i64, gy: i64| ((gx + 3 * gy) % 251) as u8;
+    // Up the panel is east: (u, v) is (300 - (v - 16), 200 + (u - 32)).
+    for (u, v) in [(0, 0), (32, 16), (63, 31), (10, 25)] {
+        let (gx, gy) = (300 - (v as i64 - 16), 200 + (u as i64 - 32));
+        assert_eq!(out[v * 64 + u], luma(gx, gy), "at {u},{v}");
+    }
+}
+
+#[test]
+fn off_the_grid_the_frame_is_land() {
+    let tiles = pattern_tiles();
+    let grid = nv12::Grid {
+        tiles: vec![Some(tiles[0].as_slice()), None, None, None],
+        cols: 2,
+        rows: 2,
+        side: 256,
+        land: (7, 8, 9),
+    };
+    let mut out = vec![0u8; 64 * 32 * 3 / 2];
+    // Around grid (256, 256): three quarters missing tiles, and beyond.
+    nv12::rotate(
+        &grid,
+        &mut out,
+        64,
+        64 * 32,
+        (64, 32),
+        (256 << 16, 256 << 16),
+        (32, 16),
+        (65536, 0),
+        (0, 65536),
+    );
+    assert_eq!(out[16 * 64 + 40], 7, "a missing tile");
+    let mut far = vec![0u8; out.len()];
+    nv12::rotate(
+        &grid,
+        &mut far,
+        64,
+        64 * 32,
+        (64, 32),
+        (-5000 << 16, 0),
+        (32, 16),
+        (65536, 0),
+        (0, 65536),
+    );
+    assert!(far[..64 * 32].iter().all(|&v| v == 7));
+    assert!(far[64 * 32..].chunks(2).all(|p| p == [8, 9]));
+}
+
+/// A heading-up frame from a real tile set, as a picture to look at:
+/// `LEHU_MAP_DIR=<tiles> LEHU_SHOTS=<dir> cargo test -p lehu-map turned_shot -- --ignored`.
+#[test]
+#[ignore]
+fn turned_shot() {
+    use std::f64::consts::FRAC_1_SQRT_2;
+    let dir = std::env::var("LEHU_MAP_DIR").unwrap();
+    let shots = std::path::PathBuf::from(std::env::var("LEHU_SHOTS").unwrap());
+    let set = TileSet::open(Path::new(&dir)).unwrap();
+    let mut tiles = Tiles::new(set, None);
+    let (lat, lon) = (49.6116, 6.1300);
+    let (wx, wy) = crate::world_from_degrees(lat, lon).unwrap();
+    let zoom = 16u8;
+    let s = WORLD_Z - zoom;
+    let (px, py) = ((wx >> s) << 16, (wy >> s) << 16);
+    for (name, up) in [
+        ("north", (0.0f64, -1.0f64)),
+        ("east", (1.0, 0.0)),
+        ("south-west", (-FRAC_1_SQRT_2, FRAC_1_SQRT_2)),
+    ] {
+        let h = ((up.0 * 65536.0) as i64, (up.1 * 65536.0) as i64);
+        let (across, down) = ((-h.1, h.0), (-h.0, -h.1));
+        let (w, hgt) = (800u32, 480u32);
+        let anchor = (400i64, 331i64);
+        let tile = TILE << 16;
+        let (tx0, ty0) = ((px >> 16) / TILE - 3, (py >> 16) / TILE - 3);
+        let grid = tiles.grid(zoom, (tx0, ty0), 7, 7);
+        let pitch = w as usize;
+        let chroma = pitch * hgt as usize;
+        let mut out = vec![0u8; chroma + pitch * hgt as usize / 2];
+        let origin = (px - tx0 * tile, py - ty0 * tile);
+        nv12::rotate(
+            &grid,
+            &mut out,
+            pitch,
+            chroma,
+            (w, hgt),
+            origin,
+            anchor,
+            across,
+            down,
+        );
+        drop(grid);
+        nv12::arrow(&mut out, pitch, chroma, (w, hgt), anchor, (0, -1024));
+        // NV12 (limited range, BT.601) to a PPM.
+        let mut ppm = format!("P6\n{w} {hgt}\n255\n").into_bytes();
+        for y in 0..hgt as usize {
+            for x in 0..w as usize {
+                let yy = (i32::from(out[y * pitch + x]) - 16) * 298;
+                let c = chroma + (y / 2) * pitch + (x & !1);
+                let (u, v) = (i32::from(out[c]) - 128, i32::from(out[c + 1]) - 128);
+                let k = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
+                ppm.extend([k(yy + 409 * v), k(yy - 100 * u - 208 * v), k(yy + 516 * u)]);
+            }
+        }
+        std::fs::write(shots.join(format!("up-{name}.ppm")), ppm).unwrap();
+    }
+}

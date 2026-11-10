@@ -48,6 +48,9 @@ struct Inner {
     position: Option<Marker>,
     /// The route, drawn under the marker.
     route: Option<Route>,
+    /// Heading-up: the way that is up on the panel (x right, y down),
+    /// the view's point at the anchor; None for north-up.
+    heading: Option<(i32, i32)>,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -125,11 +128,27 @@ impl Viewer {
                 want: view,
                 position: None,
                 route: None,
+                heading: None,
                 stop: false,
                 shown: false,
             }),
             wake: Condvar::new(),
         });
+        // Heading-up frames: panel-sized, drawn whole each time. Without
+        // the memory for them the map stays north up.
+        let mut ups = Vec::with_capacity(CANVASES);
+        for _ in 0..CANVASES {
+            match display.canvas(panel.0, panel.1, true) {
+                Ok(c) => ups.push(c),
+                Err(e) => {
+                    log::warn!("map: no video memory to turn the map ({e}); north up only");
+                    for c in ups.drain(..) {
+                        display.free_canvas(c);
+                    }
+                    break;
+                }
+            }
+        }
         display.hold_video(true);
         let thread = {
             let shared = Arc::clone(&shared);
@@ -137,7 +156,7 @@ impl Viewer {
             let tiles = Tiles::new(set, hw);
             thread::Builder::new()
                 .name("map".into())
-                .spawn(move || run(&shared, &display, tiles, canvases, panel, (cols, rows)))
+                .spawn(move || run(&shared, &display, tiles, canvases, ups, panel, (cols, rows)))
                 .map_err(|e| format!("map thread: {e}"))?
         };
         Ok(Self {
@@ -152,6 +171,17 @@ impl Viewer {
         let mut inner = self.shared.lock();
         if inner.want != view {
             inner.want = view;
+            self.shared.wake.notify_one();
+        }
+    }
+
+    /// Turn the map so that `heading` points up, the view's point low on
+    /// the panel (more ahead than behind); None: north up, the view's point
+    /// in the middle.
+    pub fn set_heading(&self, heading: Option<(i32, i32)>) {
+        let mut inner = self.shared.lock();
+        if inner.heading != heading {
+            inner.heading = heading;
             self.shared.wake.notify_one();
         }
     }
@@ -223,14 +253,19 @@ struct Held {
     marker: Option<Marker>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     shared: &Shared,
     display: &Display,
     mut tiles: Tiles,
     mut canvases: Vec<Canvas>,
+    mut ups: Vec<Canvas>,
     panel: (u32, u32),
     (cols, rows): (u32, u32),
 ) -> Vec<Canvas> {
+    // The heading-up frames shown last, as `recent` is for the canvases.
+    let mut recent_up: [Option<usize>; 2] = [None, None];
+    let mut heading: Option<(i32, i32)> = None;
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
     // may still be reading after an early flip event).
@@ -239,7 +274,7 @@ fn run(
     let mut shown: Option<View> = None;
     // Where the view was going, and the canvas to have ready for where it
     // leaves the one shown.
-    let mut heading = (0i64, 0i64);
+    let mut heading_of_view = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
     // Where we are, as the canvases should show it, and the route.
     let mut position: Option<Marker> = None;
@@ -258,6 +293,10 @@ fn run(
                     route = inner.route.clone();
                     held.fill(None);
                     ahead = None;
+                    shown = None;
+                }
+                if inner.heading != heading {
+                    heading = inner.heading.filter(|_| !ups.is_empty());
                     shown = None;
                 }
                 if inner.position != position {
@@ -307,8 +346,48 @@ fn run(
             }
             continue;
         };
+        if let Some(up) = heading {
+            // Heading up: a whole frame, turned, into a free frame buffer.
+            ahead = None;
+            let Some(i) = (0..ups.len()).find(|i| !recent_up.contains(&Some(*i))) else {
+                break;
+            };
+            let started = Instant::now();
+            render_up(
+                &mut tiles,
+                &mut ups[i],
+                &want,
+                up,
+                position,
+                route.as_deref(),
+            );
+            log::debug!(
+                "map: zoom {} heading up in {} ms",
+                want.zoom,
+                started.elapsed().as_millis()
+            );
+            // A pending flip: the same frame again a moment later.
+            let mut tries = 0;
+            loop {
+                match display.show_canvas(&ups[i], 0, 0) {
+                    Show::Shown => {
+                        recent_up = [Some(i), recent_up[0]];
+                        shared.lock().shown = true;
+                    }
+                    Show::Busy if tries < 50 => {
+                        tries += 1;
+                        thread::sleep(BUSY_WAIT);
+                        continue;
+                    }
+                    Show::Busy | Show::Failed => {}
+                }
+                break;
+            }
+            shown = Some(want);
+            continue;
+        }
         if let Some(last) = shown {
-            heading = if last.zoom == want.zoom {
+            heading_of_view = if last.zoom == want.zoom {
                 let s = WORLD_Z - want.zoom.min(WORLD_Z);
                 ((want.x >> s) - (last.x >> s), (want.y >> s) - (last.y >> s))
             } else {
@@ -400,7 +479,7 @@ fn run(
                 // Ready the canvas the view is heading for, unless one
                 // already holds it.
                 ahead = held[index]
-                    .and_then(|h| h.layout.ahead(&want, heading, panel))
+                    .and_then(|h| h.layout.ahead(&want, heading_of_view, panel))
                     .filter(|next| !held.iter().flatten().any(|h| h.layout == *next));
             }
             Show::Busy => thread::sleep(BUSY_WAIT),
@@ -410,6 +489,7 @@ fn run(
             }
         }
     }
+    canvases.extend(ups);
     canvases
 }
 
@@ -426,6 +506,109 @@ fn draw_marker(
         Some(Marker::Dot(x, y)) => nv12::dot(dst, pitch, chroma, size, layout.pixel((x, y))),
         Some(Marker::Arrow(x, y, heading)) => {
             nv12::arrow(dst, pitch, chroma, size, layout.pixel((x, y)), heading);
+        }
+        None => {}
+    }
+}
+
+/// Where the view's point sits on the panel heading up, in percent: the
+/// middle across, low down, for more road ahead than behind.
+const UP_ANCHOR: (u32, u32) = (50, 69);
+
+/// A heading-up frame of `view` on `out`: the tiles turned so that `up`
+/// points up, the view's point at the anchor; then the route and the
+/// marker, turned the same way.
+fn render_up(
+    tiles: &mut Tiles,
+    out: &mut Canvas,
+    view: &View,
+    up: (i32, i32),
+    position: Option<Marker>,
+    route: Option<&[(i64, i64)]>,
+) {
+    let size = (out.width(), out.height());
+    let (pitch, chroma) = (out.pitch(), out.chroma_offset());
+    let anchor = (
+        i64::from(size.0 * UP_ANCHOR.0 / 100),
+        i64::from(size.1 * UP_ANCHOR.1 / 100),
+    );
+    // A world point (WORLD_Z pixels) in 1/65536 pixels of this zoom.
+    let s = i32::from(WORLD_Z - view.zoom.min(WORLD_Z)) - 16;
+    let fine = |v: i64| if s >= 0 { v >> s } else { v << -s };
+    let p = (fine(view.x), fine(view.y));
+    // `up`, and the way right of it, each 65536 long.
+    let len = f64::from(up.0).hypot(f64::from(up.1)).max(1.0);
+    let h = (
+        (f64::from(up.0) / len * 65536.0) as i64,
+        (f64::from(up.1) / len * 65536.0) as i64,
+    );
+    let across = (-h.1, h.0);
+    let down = (-h.0, -h.1);
+    // The panel's corners on the map, for the tiles under them.
+    let corner = |u: i64, v: i64| {
+        (
+            p.0 + (u - anchor.0) * across.0 + (v - anchor.1) * down.0,
+            p.1 + (u - anchor.0) * across.1 + (v - anchor.1) * down.1,
+        )
+    };
+    let (w, ht) = (i64::from(size.0), i64::from(size.1));
+    let corners = [corner(0, 0), corner(w, 0), corner(0, ht), corner(w, ht)];
+    let tile = TILE << 16;
+    let xs = corners.iter().map(|c| c.0);
+    let ys = corners.iter().map(|c| c.1);
+    let tx0 = xs.clone().min().unwrap_or(0).div_euclid(tile);
+    let tx1 = xs.max().unwrap_or(0).div_euclid(tile);
+    let ty0 = ys.clone().min().unwrap_or(0).div_euclid(tile);
+    let ty1 = ys.max().unwrap_or(0).div_euclid(tile);
+    let (cols, rows) = ((tx1 - tx0 + 1) as usize, (ty1 - ty0 + 1) as usize);
+    {
+        let grid = tiles.grid(view.zoom, (tx0, ty0), cols, rows);
+        let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
+        nv12::rotate(
+            &grid,
+            out.pixels(),
+            pitch,
+            chroma,
+            size,
+            origin,
+            anchor,
+            across,
+            down,
+        );
+    }
+    // A map point on the panel, in 1/16 pixels: from the anchor by its
+    // distance along each way.
+    let to_panel = |x: i64, y: i64| {
+        let (dx, dy) = (i128::from(fine(x) - p.0), i128::from(fine(y) - p.1));
+        let a = (dx * i128::from(across.0) + dy * i128::from(across.1)) >> 28;
+        let d = (dx * i128::from(down.0) + dy * i128::from(down.1)) >> 28;
+        (anchor.0 * 16 + a as i64, anchor.1 * 16 + d as i64)
+    };
+    if let Some(line) = route {
+        let points: Vec<(i64, i64)> = line.iter().map(|&(x, y)| to_panel(x, y)).collect();
+        nv12::route(out.pixels(), pitch, chroma, size, (0, 0, w, ht), &points);
+    }
+    match position {
+        Some(Marker::Dot(x, y)) => {
+            let at = to_panel(x, y);
+            nv12::dot(out.pixels(), pitch, chroma, size, (at.0 >> 4, at.1 >> 4));
+        }
+        Some(Marker::Arrow(x, y, m)) => {
+            let at = to_panel(x, y);
+            // Its heading on the panel, along each way as for points.
+            let (mx, my) = (i64::from(m.0), i64::from(m.1));
+            let turned = (
+                ((mx * across.0 + my * across.1) >> 16) as i32,
+                ((mx * down.0 + my * down.1) >> 16) as i32,
+            );
+            nv12::arrow(
+                out.pixels(),
+                pitch,
+                chroma,
+                size,
+                (at.0 >> 4, at.1 >> 4),
+                turned,
+            );
         }
         None => {}
     }

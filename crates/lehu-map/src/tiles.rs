@@ -256,6 +256,50 @@ impl Tiles {
 }
 
 impl Tiles {
+    /// The tiles of `zoom` from (`tx`, `ty`), `cols` x `rows`, decoded
+    /// where they are not kept, for a rotated frame.
+    pub fn grid(
+        &mut self,
+        zoom: u8,
+        (tx, ty): (i64, i64),
+        cols: usize,
+        rows: usize,
+    ) -> nv12::Grid<'_> {
+        let keys: Vec<Option<Key>> = (0..rows as i64)
+            .flat_map(|r| (0..cols as i64).map(move |c| (tx + c, ty + r)))
+            .map(|(x, y)| inside(zoom, x, y).then_some((zoom, x, y)))
+            .collect();
+        // A tile taken in can push out one taken in before it when a frame
+        // wants more than the cache keeps (enlarging takes the tiles a zoom
+        // out in too): look again until every one is there.
+        let mut slots = vec![None; keys.len()];
+        for _ in 0..3 {
+            for (slot, key) in slots.iter_mut().zip(&keys) {
+                if let Some(k) = key {
+                    *slot = Some(self.slot(*k));
+                }
+            }
+            let held = slots.iter().zip(&keys).all(|(s, k)| match (s, k) {
+                (Some(i), Some(k)) => self.entries[*i].key == *k,
+                _ => true,
+            });
+            if held {
+                break;
+            }
+        }
+        let (y, cb, cr) = nv12::ycc(LAND);
+        nv12::Grid {
+            tiles: slots
+                .iter()
+                .map(|s| s.and_then(|i| self.entries[i].pixels.as_deref()))
+                .collect(),
+            cols,
+            rows,
+            side: SIDE,
+            land: (y, cb, cr),
+        }
+    }
+
     /// Compose only the part `(left, top, right, bottom)` of `layout`'s
     /// canvas (its pixels; clipped to it, widened to even), as `compose`
     /// does the whole: to take a marker off again.

@@ -408,3 +408,105 @@ fn thick(
         }
     }
 }
+
+/// Tiles laid out around a point for a rotated view: `cols` x `rows`
+/// tiles (NV12, `side` a side), row by row; None where there is no tile.
+pub struct Grid<'a> {
+    pub tiles: Vec<Option<&'a [u8]>>,
+    pub cols: usize,
+    pub rows: usize,
+    pub side: usize,
+    /// The land colour, for outside the tiles: luma, Cb, Cr.
+    pub land: (u8, u8, u8),
+}
+
+/// A heading-up frame: each output pixel (u, v) of a `width` x `height`
+/// NV12 canvas samples the grid at
+///   origin + (u - ax) * across + (v - ay) * down
+/// where `origin` is the grid point at the anchor (ax, ay), and `across`
+/// and `down` the grid steps of one output pixel right and down; all in
+/// 1/65536 grid pixels. Nearest sample. Written 64 columns at a time, so
+/// the grid's reads stay in the cache, and a row's bytes at once, so the
+/// output (write-combined memory) is written in bursts.
+#[allow(clippy::too_many_arguments)]
+pub fn rotate(
+    grid: &Grid<'_>,
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (width, height): (u32, u32),
+    origin: (i64, i64),
+    (ax, ay): (i64, i64),
+    across: (i64, i64),
+    down: (i64, i64),
+) {
+    const BLOCK: usize = 64;
+    let (w, h) = (width as usize, height as usize);
+    let side = grid.side as i64;
+    let (gw, gh) = (grid.cols as i64 * side, grid.rows as i64 * side);
+    let mut row = [0u8; BLOCK];
+    // Where (u, v) samples, in 1/65536 grid pixels.
+    let at = |u: i64, v: i64| {
+        (
+            origin.0 + (u - ax) * across.0 + (v - ay) * down.0,
+            origin.1 + (u - ax) * across.1 + (v - ay) * down.1,
+        )
+    };
+    for c0 in (0..w).step_by(BLOCK) {
+        let n = BLOCK.min(w - c0);
+        for v in 0..h {
+            let (mut x, mut y) = at(c0 as i64, v as i64);
+            for o in row.iter_mut().take(n) {
+                let (gx, gy) = (x >> 16, y >> 16);
+                *o = if gx >= 0 && gy >= 0 && gx < gw && gy < gh {
+                    let (tx, ty) = ((gx / side) as usize, (gy / side) as usize);
+                    match grid.tiles[ty * grid.cols + tx] {
+                        Some(t) => t[(gy % side) as usize * grid.side + (gx % side) as usize],
+                        None => grid.land.0,
+                    }
+                } else {
+                    grid.land.0
+                };
+                x += across.0;
+                y += across.1;
+            }
+            let o = v * pitch + c0;
+            if let Some(out) = dst.get_mut(o..o + n) {
+                out.copy_from_slice(&row[..n]);
+            }
+        }
+        // The chroma: a pair for each two by two block, sampled at the
+        // block's middle; the pairs of a 64-pixel block are 64 bytes.
+        for cv in 0..h / 2 {
+            let (mut x, mut y) = at(c0 as i64, 2 * cv as i64);
+            // To the block's middle: half a pixel right and down.
+            x += (across.0 + down.0) / 2;
+            y += (across.1 + down.1) / 2;
+            for pair in row[..n].as_chunks_mut::<2>().0 {
+                let (gx, gy) = (x >> 16, y >> 16);
+                let (cb, cr) = if gx >= 0 && gy >= 0 && gx < gw && gy < gh {
+                    let (tx, ty) = ((gx / side) as usize, (gy / side) as usize);
+                    match grid.tiles[ty * grid.cols + tx] {
+                        Some(t) => {
+                            let at = grid.side * grid.side
+                                + ((gy % side) as usize / 2) * grid.side
+                                + ((gx % side) as usize / 2) * 2;
+                            (t[at], t[at + 1])
+                        }
+                        None => (grid.land.1, grid.land.2),
+                    }
+                } else {
+                    (grid.land.1, grid.land.2)
+                };
+                pair[0] = cb;
+                pair[1] = cr;
+                x += 2 * across.0;
+                y += 2 * across.1;
+            }
+            let o = chroma + cv * pitch + c0;
+            if let Some(out) = dst.get_mut(o..o + (n & !1)) {
+                out.copy_from_slice(&row[..n & !1]);
+            }
+        }
+    }
+}

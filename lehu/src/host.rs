@@ -200,6 +200,8 @@ pub struct AppHost {
     /// along it for the map's bar.
     map_route: Option<Route>,
     map_guide: Option<NavCard>,
+    /// Which way is up while it follows a drive: the heading, smoothed.
+    map_up: Option<(f64, f64)>,
     map_note: String,
     map_label: String,
 }
@@ -287,6 +289,7 @@ impl AppHost {
             map_follow: true,
             map_route: None,
             map_guide: None,
+            map_up: None,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -666,6 +669,10 @@ impl AppHost {
             Ok(viewer) => {
                 viewer.set_position(self.map_marker);
                 viewer.set_route(self.map_route.clone());
+                if let Some(Marker::Arrow(_, _, heading)) = self.map_marker {
+                    self.map_up = None;
+                    viewer.set_heading(self.steer(heading));
+                }
                 self.map = Some(viewer);
                 self.map_view = view;
                 self.map_set = Some(set);
@@ -693,29 +700,59 @@ impl AppHost {
     /// Each turn of the loop while the map is up: a replayed drive moves
     /// on, and the map with it while it follows.
     pub fn map_tick(&mut self) {
-        let (Some(track), Some(viewer), Some(set), Some(start)) = (
-            &self.map_track,
-            &self.map,
-            &self.map_set,
-            self.map_track_start,
-        ) else {
+        let Some(start) = self.map_track_start else {
+            return;
+        };
+        let Some(bounds) = self.map_set.as_ref().map(|s| s.bounds) else {
             return;
         };
         let now = lehu_core::clock::now_ms();
-        if now < self.map_track_shown + MAP_TRACK_STEP_MS {
+        if self.map.is_none() || now < self.map_track_shown + MAP_TRACK_STEP_MS {
             return;
         }
-        self.map_track_shown = now;
+        let Some(track) = &self.map_track else {
+            return;
+        };
         let fix = track.at(now - start);
         self.map_guide = track.ahead(now - start).map(|a| guidance(&a));
+        self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
         self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
-        viewer.set_position(self.map_marker);
-        if self.map_follow {
+        let up = if self.map_follow {
             (self.map_view.x, self.map_view.y) = (fix.x, fix.y);
-            self.map_view.clamp(&set.bounds);
-            viewer.set_view(self.map_view);
+            self.map_view.clamp(&bounds);
+            self.steer(fix.heading)
+        } else {
+            None
+        };
+        if let Some(viewer) = &self.map {
+            viewer.set_position(self.map_marker);
+            if self.map_follow {
+                viewer.set_heading(up);
+                viewer.set_view(self.map_view);
+            }
         }
+    }
+
+    /// The way up while following: the drive's heading, turned towards
+    /// a little each step (a bend turns the map over about a second), at
+    /// once when it reverses; None before it has moved.
+    fn steer(&mut self, heading: (i32, i32)) -> Option<(i32, i32)> {
+        let unit = |x: f64, y: f64| {
+            let len = x.hypot(y);
+            (len > 0.0).then(|| (x / len, y / len))
+        };
+        if let Some(target) = unit(f64::from(heading.0), f64::from(heading.1)) {
+            self.map_up = Some(match self.map_up {
+                Some(h) if h.0 * target.0 + h.1 * target.1 > -0.5 => {
+                    unit(h.0 * 0.55 + target.0 * 0.45, h.1 * 0.55 + target.1 * 0.45)
+                        .unwrap_or(target)
+                }
+                _ => target,
+            });
+        }
+        self.map_up
+            .map(|h| ((h.0 * 1024.0) as i32, (h.1 * 1024.0) as i32))
     }
 
     /// The map goes; where it was left is kept for next time.
@@ -986,8 +1023,11 @@ impl Host for AppHost {
         };
         self.map_view.pan(dx, dy, &set.bounds);
         viewer.set_view(self.map_view);
-        // Moved by hand: it stays where it was put.
+        // Moved by hand: it stays where it was put, north up.
         self.map_follow = false;
+        if let Some(viewer) = &self.map {
+            viewer.set_heading(None);
+        }
     }
 
     fn map_zoom(&mut self, step: i32) {
