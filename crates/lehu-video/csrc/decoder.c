@@ -6,8 +6,8 @@
  * PRIME dma-bufs (tiled NV12) and go straight onto the video plane: no copy
  * and no colour conversion on the CPU.
  *
- * Adapted from LIVI's decoder.c (GPL-3.0), itself ported from FastCarPlay's
- * V4l2DrmDecoder. What is kept, and why:
+ * Written by LEHU's author for LIVI's F1C200s branch, ported from
+ * FastCarPlay's V4l2DrmDecoder. What is kept, and why:
  *  - libavcodec's parser sits in front of the decoder. The stateless hwaccel
  *    takes the slice parameters from the parser; raw Annex B fed straight to
  *    avcodec_send_packet fails with "Invalid data".

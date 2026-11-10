@@ -22,7 +22,7 @@ LEHU_SITE = https://github.com/mbt28/lehu.git
 LEHU_SITE_METHOD = git
 # LEHU's own code is GPL-3.0+; the binary links Slint (GPL-3.0) and the
 # crates THIRD-PARTY.md lists, and embeds Open Sans (OFL-1.1).
-LEHU_LICENSE = GPL-3.0+, GPL-3.0, MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0, OFL-1.1
+LEHU_LICENSE = GPL-3.0+, GPL-3.0, MIT, Apache-2.0, BSD-3-Clause, ISC, Zlib, Unicode-3.0, OFL-1.1
 LEHU_LICENSE_FILES = LICENSE NOTICE THIRD-PARTY.md crates/lehu-ui/ui/fonts/OFL.txt
 
 LEHU_DEPENDENCIES = \
