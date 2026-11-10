@@ -33,6 +33,7 @@ pub enum Call {
     SetMapRunning(bool),
     MapPan(i32, i32),
     MapZoom(i32),
+    MapLocate,
     SetKeyLearning(bool),
     BtPromptAccept,
     BtPromptCancel,
@@ -407,6 +408,14 @@ impl Host for TestHost {
 
     fn map_zoom(&mut self, step: i32) {
         self.calls.push(Call::MapZoom(step));
+    }
+
+    fn map_locate(&mut self) {
+        self.calls.push(Call::MapLocate);
+    }
+
+    fn map_has_position(&self) -> bool {
+        true
     }
 
     fn map_label(&self) -> &str {

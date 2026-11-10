@@ -357,3 +357,49 @@ fn the_canvas_ahead_holds_the_view_where_it_leaves_the_one_shown() {
     let l = Layout::around(&v, panel, 5, 3);
     assert_eq!(l.ahead(&v, (0, 0), panel), None);
 }
+
+#[test]
+fn a_position_in_degrees_lands_on_its_tile() {
+    // Luxembourg City: tile 16/33883/22335, as scripts/map-tiles.py has it.
+    let (x, y) = crate::parse_position("49.6116, 6.1300").unwrap().unwrap();
+    let s = WORLD_Z - 16;
+    assert_eq!(((x >> s) / TILE, (y >> s) / TILE), (33883, 22335));
+    // The equator and the prime meridian: the middle of the world.
+    let mid = TILE << (WORLD_Z - 1);
+    assert_eq!(crate::world_from_degrees(0.0, 0.0), Some((mid, mid)));
+    assert_eq!(crate::parse_position("  "), Ok(None));
+    assert!(crate::parse_position("49.6").is_err());
+    assert!(crate::parse_position("91, 6").is_err());
+    assert!(crate::parse_position("north, east").is_err());
+}
+
+#[test]
+fn the_dot_is_drawn_round_and_clipped_at_the_canvas_edge() {
+    let (w, h, pitch) = (64u32, 48u32, 80usize);
+    let chroma = pitch * h as usize;
+    let mut canvas = vec![0u8; chroma + pitch * h as usize / 2];
+    nv12::dot(&mut canvas, pitch, chroma, (w, h), (20, 20));
+    let (dot_y, dot_cb, dot_cr) = ycc([26, 115, 232]);
+    let (ring_y, _, _) = ycc([255, 255, 255]);
+    assert_eq!(canvas[20 * pitch + 20], dot_y);
+    assert_eq!(canvas[20 * pitch + 20 + 11], ring_y);
+    assert_eq!(canvas[20 * pitch + 20 + 14], 0, "outside the ring");
+    assert_eq!(
+        canvas[(20 + 9) * pitch + 20 + 9],
+        ring_y,
+        "the ring's corner"
+    );
+    let c = chroma + 10 * pitch + 20;
+    assert_eq!((canvas[c], canvas[c + 1]), (dot_cb, dot_cr));
+    // Past the padding (a pitch wider than the canvas), nothing is written.
+    assert!(
+        canvas
+            .iter()
+            .enumerate()
+            .all(|(i, &v)| (i % pitch) < w as usize || v == 0)
+    );
+    // Half off the canvas, or wholly: no panic, the rest stays.
+    nv12::dot(&mut canvas, pitch, chroma, (w, h), (-5, 47));
+    nv12::dot(&mut canvas, pitch, chroma, (w, h), (500, -500));
+    assert_eq!(canvas[47 * pitch + 2], dot_y);
+}

@@ -412,6 +412,12 @@ pub trait Host {
     fn map_pan(&mut self, _dx: i32, _dy: i32) {}
     /// Zoom in (+1) or out (-1).
     fn map_zoom(&mut self, _step: i32) {}
+    /// Centre the map on where we are.
+    fn map_locate(&mut self) {}
+    /// There is a position to centre on.
+    fn map_has_position(&self) -> bool {
+        false
+    }
     /// Over the map, while there is no picture: why, or that it loads.
     fn map_note(&self) -> &str {
         ""

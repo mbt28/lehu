@@ -25,7 +25,7 @@ mod view;
 mod viewer;
 
 pub use tileset::TileSet;
-pub use view::{View, WORLD_Z};
+pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
 pub use viewer::Viewer;
 
 #[cfg(test)]

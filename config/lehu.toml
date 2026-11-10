@@ -167,6 +167,10 @@ dir = "/var/lib/lehu/maps"
 zoom = 0
 x = 0
 y = 0
+# A position to show until there is a real one, for testing: "latitude,
+# longitude" in degrees, e.g. "49.6116, 6.1300". The map opens on it and
+# draws it as a blue dot; the bar's Me key centres on it. Empty: none.
+fake-position = ""
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

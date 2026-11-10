@@ -5,6 +5,7 @@
 
     scripts/map-tiles.py EXTRACT.osm.pbf OUT [--zoom 8-16] [--name NAME]
                          [--bbox W,S,E,N] [--jobs N] [--quality 80]
+                         [--font FONT.ttf] [--no-labels]
 
 OUT gets one 256 x 256 baseline JPEG per tile, OUT/<z>/<x>/<y>.jpg, and
 OUT/map.toml, which tells LEHU the zoom levels, the area and where to open.
@@ -14,7 +15,11 @@ download.geofabrik.de; the tiles are drawn here, never fetched from
 OpenStreetMap's tile servers, whose policy forbids offline use.
 
 The drawing is deliberately plain: land use, water, buildings, roads and
-railways, no labels yet. It needs pyosmium and Pillow
+railways, with the names of streets and places. Labels are placed once for
+the whole map at each zoom, before any tile is drawn, so they never
+collide and a label across a tile's edge continues on the next tile. The
+font is LEHU's own (crates/lehu-ui/ui/fonts/font.ttf) unless --font names
+another. It needs pyosmium and Pillow
 (python3 -m venv v && v/bin/pip install osmium pillow).
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0: LEHU shows the
@@ -29,7 +34,7 @@ import sys
 import time
 
 import osmium
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 TILE = 256
 SS = 2  # drawn at twice the size and reduced: smooth edges
@@ -117,6 +122,34 @@ LEVELS = (6, 10, 12, 14)
 FEATURES = []  # (layer, kind, minzoom, bbox, rings or line), shared by fork
 BUCKETS = {}
 
+# Labels. Street names from these zooms, by road class; places by kind:
+# (first zoom, last zoom, text size at 1x, priority: lower first).
+STREET_NAMES = {
+    "motorway": 13, "trunk": 13, "primary": 13, "secondary": 14,
+    "tertiary": 14, "minor": 15, "service": 17, "path": 17,
+}
+PLACES = {
+    "city": (8, 14, 15, 0),
+    "town": (10, 15, 13, 1),
+    "village": (12, 16, 12, 2),
+    "suburb": (13, 15, 12, 3),
+    "hamlet": (14, 16, 11, 4),
+}
+STREET_SIZE = 12  # pixels at 1x
+STREET_TEXT = (60, 60, 60)
+PLACE_TEXT = (40, 40, 40)
+HALO = (255, 255, 255)
+LABEL_GAP = 6  # pixels kept clear around every label, at 1x
+REPEAT = 320  # pixels between two labels of the same street, at 1x
+DEFAULT_FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crates",
+                            "lehu-ui", "ui", "fonts", "font.ttf")
+
+STREETS = []  # (road class, name, line in zoom-0 pixels)
+PLACE_NODES = []  # (kind, name, point in zoom-0 pixels)
+LABELS = {}  # zoom -> [(text, size, colour, centre (2x zoom pixels), angle, bbox)]
+LABEL_BUCKETS = {}  # zoom -> {(tile x, tile y): [label index]}
+FONT_PATH = DEFAULT_FONT
+
 
 def world(lon, lat):
     """Longitude and latitude to world pixels at zoom 0 (0..256)."""
@@ -142,6 +175,18 @@ def bbox(points):
 
 
 class Loader(osmium.SimpleHandler):
+    def __init__(self, labels):
+        super().__init__()
+        self.labels = labels
+
+    def node(self, n):
+        if not self.labels:
+            return
+        kind = n.tags.get("place")
+        name = n.tags.get("name")
+        if kind in PLACES and name and n.location.valid():
+            PLACE_NODES.append((kind, name, world(n.lon, n.lat)))
+
     def area(self, a):
         tags = a.tags
         kind = None
@@ -199,6 +244,8 @@ class Loader(osmium.SimpleHandler):
         if len(pts) < 2:
             return
         FEATURES.append((layer, kind, minzoom, bbox(pts), pts))
+        if self.labels and kind[0] == "road" and tags.get("name"):
+            STREETS.append((kind[1], tags["name"], pts))
 
 
 def tile_range(box, z):
@@ -231,6 +278,188 @@ def width(lo, hi, z):
     if t <= 0:
         return lo * 2 ** (z - 8) if z < 8 else lo
     return lo * (hi / lo) ** min(t, 1.25)
+
+
+class Grid:
+    """Boxes placed so far, hashed by cells, for overlap tests."""
+
+    CELL = 256
+
+    def __init__(self):
+        self.cells = {}
+
+    def _keys(self, b):
+        c = self.CELL
+        for gx in range(int(b[0] // c), int(b[2] // c) + 1):
+            for gy in range(int(b[1] // c), int(b[3] // c) + 1):
+                yield gx, gy
+
+    def free(self, b):
+        for k in self._keys(b):
+            for o in self.cells.get(k, ()):
+                if b[0] < o[2] and o[0] < b[2] and b[1] < o[3] and o[1] < b[3]:
+                    return False
+        return True
+
+    def add(self, b):
+        for k in self._keys(b):
+            self.cells.setdefault(k, []).append(b)
+
+
+def rotated_box(cx, cy, w, h, angle):
+    """The upright box around a w x h rectangle centred at (cx, cy), turned by
+    `angle` degrees."""
+    a = math.radians(angle)
+    c, s = abs(math.cos(a)), abs(math.sin(a))
+    hw = (w * c + h * s) / 2
+    hh = (w * s + h * c) / 2
+    return (cx - hw, cy - hh, cx + hw, cy + hh)
+
+
+def straight_run(pts, length, max_turn=22):
+    """Along a line (zoom pixels), the middle and the angle of a stretch at
+    least `length` long whose direction stays within `max_turn` degrees of
+    its chord, the stretch nearest the line's middle first; None if there
+    is none."""
+    if len(pts) < 2:
+        return None
+    seg = []
+    total = 0.0
+    for p, q in zip(pts, pts[1:]):
+        d = math.hypot(q[0] - p[0], q[1] - p[1])
+        seg.append(d)
+        total += d
+    if total < length:
+        return None
+    best = None
+    for i in range(len(pts) - 1):
+        run = 0.0
+        for j in range(i, len(pts) - 1):
+            run += seg[j]
+            if run < length:
+                continue
+            a, b = pts[i], pts[j + 1]
+            chord = math.atan2(b[1] - a[1], b[0] - a[0])
+            ok = True
+            for k in range(i, j + 1):
+                p, q = pts[k], pts[k + 1]
+                if seg[k] == 0:
+                    continue
+                t = math.atan2(q[1] - p[1], q[0] - p[0]) - chord
+                t = (t + math.pi) % (2 * math.pi) - math.pi
+                if abs(math.degrees(t)) > max_turn:
+                    ok = False
+                    break
+            if ok:
+                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+                # Prefer the stretch nearest the middle of the line.
+                at = sum(seg[:i]) + run / 2
+                score = abs(at - total / 2)
+                if best is None or score < best[0]:
+                    best = (score, mid, chord)
+            break
+    if best is None:
+        return None
+    angle = math.degrees(best[2])
+    # Upright: text reads from left to right.
+    if angle > 90:
+        angle -= 180
+    elif angle <= -90:
+        angle += 180
+    return best[1], angle
+
+
+def place_labels(z0, z1):
+    """Every zoom's labels: places, then streets major first, none
+    overlapping another and a street's name not repeated too close."""
+    fonts = {}
+
+    def font(size):
+        if size not in fonts:
+            fonts[size] = ImageFont.truetype(FONT_PATH, size * SS)
+        return fonts[size]
+
+    order = {r[0]: i for i, r in enumerate(reversed(ROADS))}
+    streets = sorted(STREETS, key=lambda s: (order[s[0]], -len(s[2])))
+    places = sorted(PLACE_NODES, key=lambda p: PLACES[p[0]][3])
+    for z in range(z0, z1 + 1):
+        scale = 2 ** z * SS
+        grid = Grid()
+        placed = []
+        gap = LABEL_GAP * SS
+        for kind, name, (x, y) in places:
+            first, last, size, _ = PLACES[kind]
+            if not first <= z <= last:
+                continue
+            f = font(size)
+            l, t, r, b = f.getbbox(name, stroke_width=2 * SS)
+            w, h = r - l, b - t
+            cx, cy = x * scale, y * scale
+            box = (cx - w / 2 - gap, cy - h / 2 - gap, cx + w / 2 + gap, cy + h / 2 + gap)
+            if grid.free(box):
+                grid.add(box)
+                placed.append((name, size, PLACE_TEXT, (cx, cy), 0.0, box))
+        last_at = {}
+        f = font(STREET_SIZE)
+        for cls, name, pts in streets:
+            if z < STREET_NAMES[cls]:
+                continue
+            l, t, r, b = f.getbbox(name, stroke_width=2 * SS)
+            w, h = r - l, b - t
+            line = [(p[0] * scale, p[1] * scale) for p in pts]
+            found = straight_run(line, w * 1.15)
+            if found is None:
+                continue
+            (cx, cy), angle = found
+            near = last_at.get(name, ())
+            if any(math.hypot(cx - px, cy - py) < REPEAT * SS for px, py in near):
+                continue
+            box = rotated_box(cx, cy, w + 2 * gap, h + 2 * gap, angle)
+            if not grid.free(box):
+                continue
+            grid.add(box)
+            last_at.setdefault(name, []).append((cx, cy))
+            placed.append((name, STREET_SIZE, STREET_TEXT, (cx, cy), angle, box))
+        LABELS[z] = placed
+        bucket = {}
+        side = TILE * SS
+        for i, lab in enumerate(placed):
+            b = lab[5]
+            for tx in range(int(b[0] // side), int(b[2] // side) + 1):
+                for ty in range(int(b[1] // side), int(b[3] // side) + 1):
+                    bucket.setdefault((tx, ty), []).append(i)
+        LABEL_BUCKETS[z] = bucket
+        print(f"  zoom {z}: {len(placed)} labels", flush=True)
+
+
+_LABEL_IMAGES = {}
+
+
+def label_image(z, i):
+    """A label's text with its halo, turned, as an RGBA picture (2x)."""
+    key = (z, i)
+    if key not in _LABEL_IMAGES:
+        name, size, colour, _, angle, _ = LABELS[z][i]
+        f = ImageFont.truetype(FONT_PATH, size * SS)
+        stroke = 2 * SS
+        l, t, r, b = f.getbbox(name, stroke_width=stroke)
+        im = Image.new("RGBA", (r - l, b - t), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.text((-l, -t), name, font=f, fill=colour + (255,), stroke_width=stroke,
+               stroke_fill=HALO + (255,))
+        if angle:
+            im = im.rotate(-angle, resample=Image.BICUBIC, expand=True)
+        _LABEL_IMAGES[key] = im
+    return _LABEL_IMAGES[key]
+
+
+def draw_labels(img, z, x, y):
+    side = TILE * SS
+    for i in LABEL_BUCKETS.get(z, {}).get((x, y), ()):
+        cx, cy = LABELS[z][i][3]
+        im = label_image(z, i)
+        at = (round(cx - x * side - im.width / 2), round(cy - y * side - im.height / 2))
+        img.paste(im, at, im)
 
 
 def render(job):
@@ -312,6 +541,7 @@ def render(job):
             w = width(RAIL[1], RAIL[2], z) * SS
             draw.line(px(f[4]), fill=RAIL[0], width=max(1, round(w)), joint="curve")
 
+    draw_labels(img, z, x, y)
     img = img.resize((TILE, TILE), Image.LANCZOS)
     d = os.path.join(out, str(z), str(x))
     os.makedirs(d, exist_ok=True)
@@ -331,7 +561,14 @@ def main():
     ap.add_argument("--bbox", default=None, help="W,S,E,N in degrees; the extract's own if absent")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--quality", type=int, default=80)
+    ap.add_argument("--font", default=DEFAULT_FONT, help="the labels' TrueType font")
+    ap.add_argument("--no-labels", action="store_true", help="no street or place names")
     a = ap.parse_args()
+    global FONT_PATH
+    FONT_PATH = a.font
+    labels = not a.no_labels
+    if labels and not os.path.exists(FONT_PATH):
+        sys.exit(f"no font at {FONT_PATH}: give --font")
     z0, z1 = (int(v) for v in a.zoom.split("-"))
     if not 0 <= z0 <= z1 <= 19:
         sys.exit("zoom: first-last, 0..19")
@@ -345,9 +582,12 @@ def main():
             sys.exit("the extract has no bounding box: give --bbox")
         w, s, e, n = box.bottom_left.lon, box.bottom_left.lat, box.top_right.lon, box.top_right.lat
     print(f"reading {a.extract}", flush=True)
-    Loader().apply_file(a.extract, locations=True, idx="flex_mem")
-    print(f"{len(FEATURES)} features in {time.time() - t:.0f} s", flush=True)
+    Loader(labels).apply_file(a.extract, locations=True, idx="flex_mem")
+    print(f"{len(FEATURES)} features, {len(STREETS)} named streets, "
+          f"{len(PLACE_NODES)} places in {time.time() - t:.0f} s", flush=True)
     index()
+    if labels:
+        place_labels(z0, z1)
 
     left, top = world(w, n)
     right, bottom = world(e, s)

@@ -4,7 +4,8 @@
 //! program; here only the bar over it, the drag and the keys.
 //!
 //! A drag moves the map with the finger. The arrows move it a quarter of
-//! the panel, the knob zooms, Back leaves.
+//! the panel, the knob zooms, Back leaves. The bar's Me key, there when
+//! there is a position, centres the map on it.
 
 use slint::SharedString;
 
@@ -59,6 +60,11 @@ impl<H: Host> State<H> {
         }
         if self.p_map_label.update(self.host.map_label()) {
             bridge.set_map_label(SharedString::from(self.p_map_label.as_str()));
+        }
+        let has = self.host.map_has_position();
+        if self.p_map_position != Some(has) {
+            self.p_map_position = Some(has);
+            bridge.set_map_has_position(has);
         }
     }
 }

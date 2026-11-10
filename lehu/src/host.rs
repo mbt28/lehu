@@ -182,6 +182,8 @@ pub struct AppHost {
     map_set: Option<TileSet>,
     map_view: View,
     map_wanted: bool,
+    /// Where we are, world pixels at zoom 22.
+    map_position: Option<(i64, i64)>,
     map_note: String,
     map_label: String,
 }
@@ -261,6 +263,7 @@ impl AppHost {
                 y: 0,
             },
             map_wanted: false,
+            map_position: None,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -579,6 +582,13 @@ impl AppHost {
             }
         };
         let m = &self.settings.map;
+        self.map_position = match lehu_map::parse_position(&m.fake_position) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("map.fake-position {e}");
+                None
+            }
+        };
         let mut view = if m.zoom == 0 {
             View {
                 zoom: set.start_zoom,
@@ -592,10 +602,15 @@ impl AppHost {
                 y: m.y,
             }
         };
+        // Where we are, when we know: like any navigation map.
+        if let Some((x, y)) = self.map_position {
+            (view.x, view.y) = (x, y);
+        }
         view.zoom_by(0, set.min_zoom, set.max_zoom);
         view.clamp(&set.bounds);
         match Viewer::start(display, set.clone(), view) {
             Ok(viewer) => {
+                viewer.set_position(self.map_position);
                 self.map = Some(viewer);
                 self.map_view = view;
                 self.map_set = Some(set);
@@ -888,6 +903,20 @@ impl Host for AppHost {
         self.map_view.zoom_by(step, set.min_zoom, set.max_zoom);
         viewer.set_view(self.map_view);
         self.update_map_label();
+    }
+
+    fn map_locate(&mut self) {
+        let (Some(set), Some(viewer), Some((x, y))) = (&self.map_set, &self.map, self.map_position)
+        else {
+            return;
+        };
+        (self.map_view.x, self.map_view.y) = (x, y);
+        self.map_view.clamp(&set.bounds);
+        viewer.set_view(self.map_view);
+    }
+
+    fn map_has_position(&self) -> bool {
+        self.map_position.is_some()
     }
 
     fn map_note(&self) -> &str {

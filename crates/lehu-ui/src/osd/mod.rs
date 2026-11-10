@@ -142,6 +142,7 @@ enum Action {
     MapDragStart,
     MapDrag(i32, i32),
     MapZoom(i32),
+    MapLocate,
     EditField(i32),
     OskKey(SharedString),
     OskBackspace,
@@ -394,6 +395,7 @@ struct State<H> {
     map_drag: (i32, i32),
     p_map_note: Last,
     p_map_label: Last,
+    p_map_position: Option<bool>,
 
     // ── Settings > Audio ────────────────────────────────────────────────
     p_levels: Option<[u32; 4]>,
@@ -558,6 +560,7 @@ impl<H: Host> State<H> {
             map_drag: (0, 0),
             p_map_note: Last::default(),
             p_map_label: Last::default(),
+            p_map_position: None,
             p_levels: None,
             outputs: Vec::new(),
             outputs_seen: false,
@@ -726,6 +729,7 @@ impl<H: Host> State<H> {
             Action::MapDragStart => self.map_drag_start(),
             Action::MapDrag(dx, dy) => self.map_drag(dx, dy),
             Action::MapZoom(step) => self.host.map_zoom(step),
+            Action::MapLocate => self.host.map_locate(),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
@@ -879,6 +883,7 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_map_drag_start, || Action::MapDragStart);
     on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
     on!(on_map_zoom, |step| Action::MapZoom(step));
+    on!(on_map_locate, || Action::MapLocate);
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
     on!(on_osk_backspace, || Action::OskBackspace);

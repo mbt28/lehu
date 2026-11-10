@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use lehu_drm::{Canvas, Display, Show};
 
 use crate::hw::HwJpeg;
+use crate::nv12;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View, WORLD_Z};
@@ -31,6 +32,8 @@ const BUSY_WAIT: Duration = Duration::from_millis(4);
 
 struct Inner {
     want: View,
+    /// Where we are, world pixels at `WORLD_Z`, drawn as a dot.
+    position: Option<(i64, i64)>,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -106,6 +109,7 @@ impl Viewer {
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 want: view,
+                position: None,
                 stop: false,
                 shown: false,
             }),
@@ -133,6 +137,15 @@ impl Viewer {
         let mut inner = self.shared.lock();
         if inner.want != view {
             inner.want = view;
+            self.shared.wake.notify_one();
+        }
+    }
+
+    /// Show where we are (world pixels at `WORLD_Z`), or nothing.
+    pub fn set_position(&self, position: Option<(i64, i64)>) {
+        let mut inner = self.shared.lock();
+        if inner.position != position {
+            inner.position = position;
             self.shared.wake.notify_one();
         }
     }
@@ -192,10 +205,19 @@ fn run(
     // leaves the one shown.
     let mut heading = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
+    // The position the canvases show.
+    let mut position: Option<(i64, i64)> = None;
     loop {
         let want = {
             let mut inner = shared.lock();
             loop {
+                if inner.position != position {
+                    // Every canvas shows the old one: all composed afresh.
+                    position = inner.position;
+                    held.fill(None);
+                    ahead = None;
+                    shown = None;
+                }
                 if inner.stop || shown != Some(inner.want) || ahead.is_some() {
                     break;
                 }
@@ -217,9 +239,14 @@ fn run(
                 // Every tile kept: the canvas composed from them.
                 ahead = None;
                 let started = Instant::now();
-                if let Some(i) =
-                    compose_free(&mut tiles, &mut canvases, &mut held, &recent, &layout)
-                {
+                if let Some(i) = compose_free(
+                    &mut tiles,
+                    &mut canvases,
+                    &mut held,
+                    &recent,
+                    &layout,
+                    position,
+                ) {
                     log::info!(
                         "map: zoom {} at {},{} ready ahead in {} ms (canvas {i})",
                         layout.zoom,
@@ -253,9 +280,14 @@ fn run(
                 let layout = Layout::around(&want, panel, cols, rows);
                 let started = Instant::now();
                 let (decoded, software) = (tiles.decoded, tiles.software);
-                let Some(index) =
-                    compose_free(&mut tiles, &mut canvases, &mut held, &recent, &layout)
-                else {
+                let Some(index) = compose_free(
+                    &mut tiles,
+                    &mut canvases,
+                    &mut held,
+                    &recent,
+                    &layout,
+                    position,
+                ) else {
                     log::error!("map: no canvas free to compose into");
                     break;
                 };
@@ -304,19 +336,25 @@ fn run(
 }
 
 /// Compose `layout` into a canvas that is neither on scanout nor just
-/// replaced, and say which; None when there is none such.
+/// replaced, with the dot at `position`, and say which; None when there is
+/// none such.
 fn compose_free(
     tiles: &mut Tiles,
     canvases: &mut [Canvas],
     held: &mut [Option<Layout>],
     recent: &[Option<usize>; 2],
     layout: &Layout,
+    position: Option<(i64, i64)>,
 ) -> Option<usize> {
     let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
     let canvas = &mut canvases[index];
     let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
+    let size = (canvas.width(), canvas.height());
     held[index] = None;
     tiles.compose(layout, canvas.pixels(), pitch, chroma);
+    if let Some(at) = position {
+        nv12::dot(canvas.pixels(), pitch, chroma, size, layout.pixel(at));
+    }
     held[index] = Some(*layout);
     Some(index)
 }

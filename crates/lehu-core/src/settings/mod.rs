@@ -260,6 +260,10 @@ pub struct Map {
     pub zoom: u8,
     pub x: i64,
     pub y: i64,
+    /// A position to show until there is a real one, for testing:
+    /// "latitude, longitude" in degrees. Empty: none. The map opens on it
+    /// and draws it as a dot.
+    pub fake_position: String,
 }
 
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
@@ -435,6 +439,7 @@ impl Default for Map {
             zoom: 0,
             x: 0,
             y: 0,
+            fake_position: String::new(),
         }
     }
 }

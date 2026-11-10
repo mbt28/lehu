@@ -2298,7 +2298,10 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     playing(&mut osd);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
-    assert_eq!(stops(&mut osd), ["connect", "media", "phones", "map", "settings"]);
+    assert_eq!(
+        stops(&mut osd),
+        ["connect", "media", "phones", "map", "settings"]
+    );
     // A session waiting: its tile in Connect's place, the Resume action.
     let host = osd.host_mut();
     host.status = "Android Auto: Pixel 8".into();
@@ -2307,7 +2310,10 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     tick(&mut osd);
     assert_eq!(home_words(&osd).0, "Android Auto");
     assert_eq!(home_words(&osd).1, "Pixel 8");
-    assert_eq!(stops(&mut osd), ["resume", "media", "phones", "map", "settings"]);
+    assert_eq!(
+        stops(&mut osd),
+        ["resume", "media", "phones", "map", "settings"]
+    );
     advance(&mut osd, KEY_RECENT_MS);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
@@ -2795,6 +2801,11 @@ fn the_map_runs_while_its_screen_is_up_and_moves_with_the_finger() {
     assert!(osd.host().has(&Call::MapZoom(1)));
     press(&mut osd, OsdKey::Prev);
     assert!(osd.host().has(&Call::MapZoom(-1)));
+    // With a position, the bar's Me key centres on it.
+    assert!(osd.ui.global::<Bridge<'_>>().get_map_has_position());
+    osd.ui.global::<Bridge<'_>>().invoke_map_locate();
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapLocate));
     // Left is a direction here, not Back.
     press(&mut osd, OsdKey::Left);
     assert_eq!(screen(&osd), MAP);

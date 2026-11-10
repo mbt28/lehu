@@ -229,6 +229,7 @@ export global Bridge {
     // it loads) and its bar's words.
     in property <string> map-note;
     in property <string> map-label;
+    in property <bool> map-has-position;      // the bar's Me key is there
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -246,6 +247,7 @@ export global Bridge {
     callback map-drag-start();                // a finger down on the map
     callback map-drag(int, int);              // it moved: pixels from where it went down
     callback map-zoom(int);                   // -1 out, +1 in
+    callback map-locate();                    // centre on where we are
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -2303,6 +2305,12 @@ component ScreenMap inherits Rectangle {
             OskKey { label: "Back"; weight: 0; width: 120px; pressed => { Bridge.back(); } }
             OskKey { label: "-"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(-1); } }
             OskKey { label: "+"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(1); } }
+            if Bridge.map-has-position: OskKey {
+                label: "Me";
+                weight: 0;
+                width: 96px;
+                pressed => { Bridge.map-locate(); }
+            }
             Text {
                 horizontal-stretch: 1;
                 text: Bridge.map-label;

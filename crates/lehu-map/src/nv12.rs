@@ -58,3 +58,62 @@ pub fn from_rgb(rgb: &[u8], side: usize, dst: &mut [u8]) {
         }
     }
 }
+
+/// The position dot: its fill and ring, and their radii in pixels.
+const DOT: [u8; 3] = [26, 115, 232];
+const RING: [u8; 3] = [255, 255, 255];
+const DOT_R: i64 = 9;
+const RING_R: i64 = 13;
+
+/// Draw the position dot centred at (`cx`, `cy`) on an NV12 canvas of
+/// `width` x `height` whose rows are `pitch` bytes apart and whose chroma
+/// begins at `chroma`; the parts off the canvas are left out. Written, not
+/// read: the canvas may be write-combined memory.
+pub fn dot(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (width, height): (u32, u32),
+    (cx, cy): (i64, i64),
+) {
+    let (w, h) = (i64::from(width), i64::from(height));
+    if cx + RING_R < 0 || cy + RING_R < 0 || cx - RING_R >= w || cy - RING_R >= h {
+        return;
+    }
+    let (dot_y, dot_cb, dot_cr) = ycc(DOT);
+    let (ring_y, ring_cb, ring_cr) = ycc(RING);
+    let inside = |dx: i64, dy: i64, r: i64| dx * dx + dy * dy <= r * r;
+    for y in (cy - RING_R).max(0)..(cy + RING_R + 1).min(h) {
+        for x in (cx - RING_R).max(0)..(cx + RING_R + 1).min(w) {
+            let (dx, dy) = (x - cx, y - cy);
+            let v = if inside(dx, dy, DOT_R) {
+                dot_y
+            } else if inside(dx, dy, RING_R) {
+                ring_y
+            } else {
+                continue;
+            };
+            if let Some(p) = dst.get_mut(y as usize * pitch + x as usize) {
+                *p = v;
+            }
+        }
+    }
+    // The chroma: one pair a two by two block, by the block's middle.
+    for by in ((cy - RING_R).max(0) / 2)..((cy + RING_R + 2).min(h) / 2) {
+        for bx in ((cx - RING_R).max(0) / 2)..((cx + RING_R + 2).min(w) / 2) {
+            // The block's middle, in half pixels against the centre's.
+            let (dx2, dy2) = (4 * bx + 1 - 2 * cx, 4 * by + 1 - 2 * cy);
+            let (cb, cr) = if inside(dx2, dy2, 2 * DOT_R) {
+                (dot_cb, dot_cr)
+            } else if inside(dx2, dy2, 2 * RING_R) {
+                (ring_cb, ring_cr)
+            } else {
+                continue;
+            };
+            let at = chroma + by as usize * pitch + 2 * bx as usize;
+            if let Some(p) = dst.get_mut(at..at + 2) {
+                p.copy_from_slice(&[cb, cr]);
+            }
+        }
+    }
+}

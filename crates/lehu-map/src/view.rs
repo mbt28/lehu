@@ -84,6 +84,12 @@ impl Layout {
         }
     }
 
+    /// A point (world pixels at `WORLD_Z`) in this canvas's pixels.
+    pub fn pixel(&self, (x, y): (i64, i64)) -> (i64, i64) {
+        let s = WORLD_Z - self.zoom.min(WORLD_Z);
+        ((x >> s) - self.tx * TILE, (y >> s) - self.ty * TILE)
+    }
+
     /// Where the panel's window for `view` sits on this canvas, if it lies
     /// wholly inside.
     pub fn window(&self, view: &View, panel: (u32, u32)) -> Option<(u32, u32)> {
@@ -138,4 +144,32 @@ impl Layout {
         let next = Self::around(&past, panel, self.cols, self.rows);
         (next != *self).then_some(next)
     }
+}
+
+/// A latitude and longitude in degrees as world pixels at `WORLD_Z`
+/// (Web Mercator); None outside the map's latitudes.
+pub fn world_from_degrees(lat: f64, lon: f64) -> Option<(i64, i64)> {
+    const MAX_LAT: f64 = 85.051_128_78;
+    if !(-MAX_LAT..=MAX_LAT).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return None;
+    }
+    let size = (TILE as f64) * f64::from(1u32 << WORLD_Z);
+    let s = lat.to_radians().sin();
+    let x = (lon + 180.0) / 360.0 * size;
+    let y = (0.5 - ((1.0 + s) / (1.0 - s)).ln() / (4.0 * std::f64::consts::PI)) * size;
+    Some((x as i64, y as i64))
+}
+
+/// A position as the settings give it, "latitude, longitude" in degrees,
+/// as world pixels. Empty: none.
+pub fn parse_position(text: &str) -> Result<Option<(i64, i64)>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let bad = || format!("{text:?}: latitude, longitude in degrees, e.g. \"49.6116, 6.1300\"");
+    let (lat, lon) = text.split_once(',').ok_or_else(bad)?;
+    let lat: f64 = lat.trim().parse().map_err(|_| bad())?;
+    let lon: f64 = lon.trim().parse().map_err(|_| bad())?;
+    world_from_degrees(lat, lon).map(Some).ok_or_else(bad)
 }
