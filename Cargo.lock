@@ -2297,6 +2297,7 @@ dependencies = [
  "lehu-drm",
  "lehu-image",
  "lehu-input",
+ "lehu-map",
  "lehu-session",
  "lehu-ui",
  "lehu-update",
@@ -2442,6 +2443,18 @@ dependencies = [
  "lehu-core",
  "libc",
  "log",
+]
+
+[[package]]
+name = "lehu-map"
+version = "0.2.0"
+dependencies = [
+ "lehu-drm",
+ "lehu-image",
+ "log",
+ "png",
+ "serde",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

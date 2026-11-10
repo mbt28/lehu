@@ -13,7 +13,7 @@
 use slint::ComponentHandle;
 use slint::platform::Key;
 
-use super::{Bridge, CAMERA, HOME, Host, Pick, State, dispatch_key};
+use super::{Bridge, CAMERA, HOME, Host, MAP, Pick, State, dispatch_key};
 use crate::input::KeyEvent;
 use crate::keys::OsdKey;
 use crate::{AppWindow, Osk};
@@ -124,6 +124,11 @@ impl<H: Host> State<H> {
         // The camera view: its settings column.
         if bridge.get_screen() == CAMERA {
             self.camera_key(&bridge, nav, repeat);
+            return;
+        }
+        // The map: the arrows move it, the knob zooms.
+        if bridge.get_screen() == MAP {
+            self.map_key(&bridge, nav, repeat);
             return;
         }
 

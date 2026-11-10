@@ -30,6 +30,9 @@ pub enum Call {
     CameraCycleStandard(i32),
     CameraAdjustLevel(usize, i32),
     SetCameraRunning(bool),
+    SetMapRunning(bool),
+    MapPan(i32, i32),
+    MapZoom(i32),
     SetKeyLearning(bool),
     BtPromptAccept,
     BtPromptCancel,
@@ -392,6 +395,22 @@ impl Host for TestHost {
 
     fn set_camera_running(&mut self, on: bool) {
         self.calls.push(Call::SetCameraRunning(on));
+    }
+
+    fn set_map_running(&mut self, on: bool) {
+        self.calls.push(Call::SetMapRunning(on));
+    }
+
+    fn map_pan(&mut self, dx: i32, dy: i32) {
+        self.calls.push(Call::MapPan(dx, dy));
+    }
+
+    fn map_zoom(&mut self, step: i32) {
+        self.calls.push(Call::MapZoom(step));
+    }
+
+    fn map_label(&self) -> &str {
+        "Test  -  zoom 12"
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {

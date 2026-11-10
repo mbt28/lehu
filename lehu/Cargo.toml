@@ -16,6 +16,7 @@ lehu-core = { path = "../crates/lehu-core" }
 lehu-cp = { path = "../crates/lehu-cp" }
 lehu-drm = { path = "../crates/lehu-drm" }
 lehu-image = { path = "../crates/lehu-image" }
+lehu-map = { path = "../crates/lehu-map" }
 lehu-input = { path = "../crates/lehu-input" }
 lehu-session = { path = "../crates/lehu-session" }
 lehu-ui = { path = "../crates/lehu-ui" }

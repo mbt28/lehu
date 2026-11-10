@@ -32,7 +32,7 @@ mod error;
 mod frame;
 mod request;
 
-pub use display::{Display, Show};
+pub use display::{Canvas, Display, Show};
 pub use drm::buffer::DrmFourcc as Fourcc;
 pub use error::Error;
 pub use frame::{Frame, FrameError, MAX_PLANES, Plane};

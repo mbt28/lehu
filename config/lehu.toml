@@ -158,6 +158,16 @@ fast-switch = false
 # brightness = 40
 # contrast = 140
 
+[map]
+# The offline map's tiles and their map.toml, as scripts/map-tiles.py
+# writes them, on the SD card.
+dir = "/var/lib/lehu/maps"
+# Where the map was left, written when it closes: the zoom (0 = the map's
+# own start) and the point at the centre, in world pixels at zoom 22.
+zoom = 0
+x = 0
+y = 0
+
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,
 # /usr/sbin/lehu-os-update, must be there). The board has no internet of its

@@ -10,8 +10,8 @@ use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
 
 use super::{
     ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEVICES,
-    HOME, Host, INFO, LINK, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO, VOLUME_BAR_MS,
-    clean, compose,
+    HOME, Host, INFO, LINK, MAP, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO,
+    VOLUME_BAR_MS, clean, compose,
 };
 use crate::AppWindow;
 use crate::keys::key_name;
@@ -192,6 +192,8 @@ impl<H: Host> State<H> {
             }
             // The loop runs the camera while its view is up.
             self.host.set_camera_running(screen == CAMERA);
+            // And the map while its screen is.
+            self.host.set_map_running(screen == MAP);
             if screen == CAMERA {
                 // The column comes up on the menu, the ring on Back -- unless
                 // a request (the camera key) switched the camera on: then
@@ -233,6 +235,7 @@ impl<H: Host> State<H> {
             }
         }
         self.pump_camera(&bridge, screen);
+        self.pump_map(&bridge, screen);
         self.pump_bluetooth(&bridge, screen);
         self.pump_devices(&bridge);
         self.pump_media(&bridge, screen, now);

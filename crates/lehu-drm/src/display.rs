@@ -1103,6 +1103,121 @@ impl Display {
     }
 }
 
+/// A picture the program draws itself (the map) for the video plane: a
+/// dumb buffer, mapped, larger than the panel, of which the plane shows a
+/// panel-sized window. Moving the window is a commit, no copy. Owned by
+/// whoever draws into it, on any thread: the mapping is its alone.
+/// Write-combined memory: written in rows, never read back.
+pub struct Canvas {
+    dumb: Dumb,
+    width: u32,
+    height: u32,
+    bpp: u32,
+}
+
+impl Canvas {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Bytes a pixel: 2 for RGB565, 4 for XRGB8888.
+    pub fn bytes_per_pixel(&self) -> u32 {
+        self.bpp
+    }
+
+    /// Bytes from one row to the next.
+    pub fn pitch(&self) -> usize {
+        self.dumb.pitch as usize
+    }
+
+    /// The whole buffer, rows `pitch` apart.
+    pub fn pixels(&mut self) -> &mut [u8] {
+        // SAFETY: the mapping made in `Dumb::create`, `size` bytes, alive as
+        // long as the canvas; `&mut self` makes this the only view of it.
+        unsafe { std::slice::from_raw_parts_mut(self.dumb.map.as_ptr(), self.dumb.size) }
+    }
+}
+
+impl Display {
+    /// A canvas of `width` x `height` for the video plane, in the plane's
+    /// RGB format (RGB565 when it takes it, else XRGB8888), black.
+    pub fn canvas(&self, width: u32, height: u32) -> Result<Canvas, Error> {
+        let (format, bpp) = if self.video_rgb565 {
+            (DrmFourcc::Rgb565, 2)
+        } else {
+            (DrmFourcc::Xrgb8888, 4)
+        };
+        let dumb = Dumb::create(&self.card, width, height, format, bpp)?;
+        Ok(Canvas {
+            dumb,
+            width,
+            height,
+            bpp,
+        })
+    }
+
+    /// Show the panel-sized window of `canvas` whose top left is (`x`,
+    /// `y`), 1:1, on the video plane. Like `show_camera`: the decoder's
+    /// frames wait while `hold_video` holds them, a pending flip gives
+    /// `Busy`, and the canvas stays on scanout until a later picture
+    /// replaces it (keep the last three shown alive).
+    pub fn show_canvas(&self, canvas: &Canvas, x: u32, y: u32) -> Show {
+        if x.saturating_add(self.width) > canvas.width
+            || y.saturating_add(self.height) > canvas.height
+        {
+            return Show::Failed;
+        }
+        let mut st = self.lock();
+        st.request.clear();
+        let flags = self.add_modeset(&mut st);
+        let p = &self.video_props;
+        let plane = self.video_plane;
+        let req = &mut st.request;
+        req.add(plane, p.fb, u64::from(u32::from(canvas.dumb.fb)));
+        req.add(plane, p.crtc, u64::from(self.crtc));
+        req.add(plane, p.src_x, u64::from(x) << 16);
+        req.add(plane, p.src_y, u64::from(y) << 16);
+        req.add(plane, p.src_w, u64::from(self.width) << 16);
+        req.add(plane, p.src_h, u64::from(self.height) << 16);
+        req.add(plane, p.crtc_x, 0);
+        req.add(plane, p.crtc_y, 0);
+        req.add(plane, p.crtc_w, u64::from(self.width));
+        req.add(plane, p.crtc_h, u64::from(self.height));
+        if st.modeset_done {
+            return match self.commit(&mut st, flags | NONBLOCK) {
+                Ok(()) => Show::Shown,
+                Err(e) if e.kind() == io::ErrorKind::ResourceBusy => Show::Busy,
+                Err(e) => {
+                    if !st.warned.video_commit {
+                        st.warned.video_commit = true;
+                        log::warn!("canvas commit failed: {e}");
+                    }
+                    Show::Failed
+                }
+            };
+        }
+        match self.commit(&mut st, flags) {
+            Ok(()) => {
+                st.modeset_done = true;
+                Show::Shown
+            }
+            Err(e) => {
+                log::warn!("canvas commit failed: {e}");
+                Show::Failed
+            }
+        }
+    }
+
+    /// Free a canvas. If it is still on the plane the kernel takes it off.
+    pub fn free_canvas(&self, canvas: Canvas) {
+        canvas.dumb.destroy(&self.card);
+    }
+}
+
 impl Drop for Display {
     fn drop(&mut self) {
         let st = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);

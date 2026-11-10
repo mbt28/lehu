@@ -10,7 +10,7 @@ reached either way. Bluetooth keyboards and remotes work as well.
 
 ## Home
 
-Four tiles:
+Five tiles:
 
 - **The phone**: CarPlay or Android Auto, the phone's name and its link.
   Select it to go back to the phone. With no phone connected, this tile
@@ -19,6 +19,7 @@ Four tiles:
 - **Now playing**: the title, the artist and the progress. Opens the media
   page, with the album art and large previous, play/pause and next keys.
 - **Linked Phones**: the phones LEHU knows.
+- **Map**: the offline map from the SD card ([map.md](map.md)).
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,

@@ -403,6 +403,23 @@ pub trait Host {
     fn take_camera_failure(&mut self, why: &mut String) -> bool;
     /// A switch asked from outside the screens, once.
     fn take_camera_request(&mut self) -> CameraRequest;
+
+    // ── map ──────────────────────────────────────────────────────────────
+    /// The map screen is up (or gone): the loop shows (or stops) the map.
+    fn set_map_running(&mut self, _on: bool) {}
+    /// Move the map's view by pixels of the panel, right and down positive:
+    /// what lies that way comes into view.
+    fn map_pan(&mut self, _dx: i32, _dy: i32) {}
+    /// Zoom in (+1) or out (-1).
+    fn map_zoom(&mut self, _step: i32) {}
+    /// Over the map, while there is no picture: why, or that it loads.
+    fn map_note(&self) -> &str {
+        ""
+    }
+    /// The bar's words: the map and the zoom.
+    fn map_label(&self) -> &str {
+        ""
+    }
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);
     /// The key that was learned, once (its Linux key code).

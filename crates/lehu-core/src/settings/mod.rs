@@ -43,6 +43,7 @@ pub struct Settings {
     pub usb: Usb,
     pub decode: Decode,
     pub camera: Camera,
+    pub map: Map,
     pub update: Update,
     pub system: System,
 }
@@ -248,6 +249,19 @@ pub struct Camera {
     pub inputs: Vec<CameraInput>,
 }
 
+/// The offline map: tiles drawn on a PC by scripts/map-tiles.py.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct Map {
+    /// The tiles and their map.toml, on the SD card.
+    pub dir: String,
+    /// Where the map was left: the zoom (0: the tile set's own start) and
+    /// the point at the centre, world pixels at zoom 22.
+    pub zoom: u8,
+    pub x: i64,
+    pub y: i64,
+}
+
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
 /// the update server to a page the head unit serves on its access point.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -410,6 +424,17 @@ impl Default for CameraInput {
             sharpness: None,
             chroma_gain: None,
             chroma_enhance: None,
+        }
+    }
+}
+
+impl Default for Map {
+    fn default() -> Self {
+        Self {
+            dir: "/var/lib/lehu/maps".into(),
+            zoom: 0,
+            x: 0,
+            y: 0,
         }
     }
 }

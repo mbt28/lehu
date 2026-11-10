@@ -222,8 +222,13 @@ export global Bridge {
     // 0 home, 1 settings, 3 wireless, 4 bluetooth, 5 bt device,
     // 6 audio, 8 video, 9 camera view, 10 phones, 11 media,
     // 12 access point, 13 link speed, 14 update, 15 update from the phone,
-    // 16 connection, 17 system, 18 info
+    // 16 connection, 17 system, 18 info, 19 map
     in-out property <int> screen;
+
+    // The map: what it says over the picture (why there is none, or that
+    // it loads) and its bar's words.
+    in property <string> map-note;
+    in property <string> map-label;
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -238,6 +243,9 @@ export global Bridge {
     callback camera-picture();                // a tap on the picture: the column hides
     callback camera-key();                    // learn the switch key (asks for it)
     callback camera-fastswitch-toggle();
+    callback map-drag-start();                // a finger down on the map
+    callback map-drag(int, int);              // it moved: pixels from where it went down
+    callback map-zoom(int);                   // -1 out, +1 in
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -431,6 +439,7 @@ global Icons {
         if (kind == "power") { return "M12 2.5 L12 11 M6.5 5.8 A8.5 8.5 0 1 0 17.5 5.8"; }
         if (kind == "settings") { return "M3 6 L21 6 M3 12 L21 12 M3 18 L21 18 M8 4 L8 8 M16 10 L16 14 M10 16 L10 20"; }
         if (kind == "music") { return "M9 18 L9 5 L20 3 L20 16 M9 18 A3 3 0 1 1 3 18 A3 3 0 1 1 9 18 M20 16 A3 3 0 1 1 14 16 A3 3 0 1 1 20 16"; }
+        if (kind == "map") { return "M3 6 L9 3 L15 6 L21 3 L21 18 L15 21 L9 18 L3 21 Z M9 3 L9 18 M15 6 L15 21"; }
         if (kind == "navigation") { return "M12 2 L20 21 L12 17 L4 21 Z"; }
         if (kind == "bell") { return "M6 17 L6 11 A6 6 0 0 1 18 11 L18 17 L20 19 L4 19 Z M10 21.5 L14 21.5"; }
         if (kind == "buffer") { return "M6 3 L18 3 M6 21 L18 21 M7 3 L7 7 L17 17 L17 21 M17 3 L17 7 L7 17 L7 21"; }
@@ -1184,6 +1193,15 @@ export global CameraPanel {
         + (Bridge.camera-page == 1 ? root.buttons-h : 0px) + 2 * root.padding;
 }
 
+// The map's bar: Back, the zoom keys and the map's words. Over the map the
+// program shows exactly this rectangle of the overlay plane.
+export global MapBar {
+    out property <length> height: 64px;
+    out property <length> x: 0px;
+    out property <length> y: 480px - root.height;
+    out property <length> width: 800px;
+}
+
 // Where the volume bar sits. Over live video the program shows exactly
 // this rectangle of the overlay plane (a window composited by the display
 // engine), so the bar is a plain opaque rectangle: RGB565 has no alpha, and
@@ -1380,6 +1398,13 @@ component ScreenHome inherits Rectangle {
                     title: "Linked Phones";
                     sub: Bridge.phones-summary;
                     clicked => { Bridge.screen = 10; }
+                }
+                Tile {
+                    ring-key: "map";
+                    icon: "map";
+                    title: "Map";
+                    sub: "Offline, OpenStreetMap";
+                    clicked => { Bridge.screen = 19; }
                 }
                 Tile {
                     ring-key: "settings";
@@ -2236,6 +2261,66 @@ component ScreenCamera inherits Rectangle {
     }
 }
 
+// The map: the picture is on the video plane beneath; the screens show only
+// the bar over it. A drag moves the map with the finger.
+component ScreenMap inherits Rectangle {
+    background: #000000;
+    TouchArea {
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down {
+                Bridge.map-drag-start();
+            }
+        }
+        moved => {
+            if self.pressed {
+                Bridge.map-drag(Math.round((self.mouse-x - self.pressed-x) / 1px),
+                    Math.round((self.mouse-y - self.pressed-y) / 1px));
+            }
+        }
+    }
+    if Bridge.map-note != "": Text {
+        x: 40px;
+        width: parent.width - 80px;
+        y: 0px;
+        height: MapBar.y;
+        text: Bridge.map-note;
+        color: #ffffff;
+        font-size: 28px;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        x: MapBar.x;
+        y: MapBar.y;
+        width: MapBar.width;
+        height: MapBar.height;
+        background: Theme.bar;
+        TouchArea { } // between the keys: not a drag
+        HorizontalLayout {
+            padding: 6px;
+            spacing: 6px;
+            OskKey { label: "Back"; weight: 0; width: 120px; pressed => { Bridge.back(); } }
+            OskKey { label: "-"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(-1); } }
+            OskKey { label: "+"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(1); } }
+            Text {
+                horizontal-stretch: 1;
+                text: Bridge.map-label;
+                color: Theme.text;
+                font-size: 20px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: "© OpenStreetMap contributors";
+                color: Theme.dim;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 // Keys and their ring positions follow Osk (row, col) -- keep the two in step.
 component Editor inherits Rectangle {
     background: Theme.bg;
@@ -2448,7 +2533,7 @@ export component AppWindow inherits Window {
     property <bool> modal: Bridge.prompt-kind != 0 || Bridge.editing >= 0;
     // The navigation card pushes the screens down; over the camera view it
     // is a window over the picture and the view stays where it is.
-    property <length> top: Bridge.nav-card && Bridge.screen != 9 ? NavCardBox.height : 0px;
+    property <length> top: Bridge.nav-card && Bridge.screen != 9 && Bridge.screen != 19 ? NavCardBox.height : 0px;
 
     if Bridge.screen == 0 && !root.modal: ScreenHome      { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 1 && !root.modal: ScreenSettings  { y: root.top; height: root.height - root.top; }
@@ -2467,6 +2552,7 @@ export component AppWindow inherits Window {
     if Bridge.screen == 16 && !root.modal: ScreenConnection { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 17 && !root.modal: ScreenSystem   { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 18 && !root.modal: ScreenInfo     { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 19 && !root.modal: ScreenMap      { }
     if Bridge.nav-card: NavCardView {}
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}

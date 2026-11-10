@@ -31,8 +31,8 @@ use toml::Value;
 use crate::host::{AudioOutput, CameraRequest, Host};
 use crate::input::{Input, KEY_QUEUE, KeyEvent};
 use crate::{
-    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DeviceRow, NavCardBox, VolumeBar, platform,
-    text,
+    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DeviceRow, MapBar, NavCardBox, VolumeBar,
+    platform, text,
 };
 
 mod audio;
@@ -43,6 +43,7 @@ mod dialog;
 mod editor;
 mod info;
 mod keys;
+mod map;
 mod media;
 mod pick;
 mod pump;
@@ -93,8 +94,9 @@ const UPDATE_PHONE: i32 = 15;
 const CONNECTION: i32 = 16;
 const SYSTEM: i32 = 17;
 const INFO: i32 = 18;
+const MAP: i32 = 19;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 19;
+const SCREENS: usize = 20;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -137,6 +139,9 @@ enum Action {
     CameraPicture,
     CameraKey,
     CameraFastswitchToggle,
+    MapDragStart,
+    MapDrag(i32, i32),
+    MapZoom(i32),
     EditField(i32),
     OskKey(SharedString),
     OskBackspace,
@@ -384,6 +389,12 @@ struct State<H> {
     /// phone's video is in front.
     over_phone: bool,
 
+    // ── the map ─────────────────────────────────────────────────────────
+    /// The drag so far, as last reported: pixels from where it went down.
+    map_drag: (i32, i32),
+    p_map_note: Last,
+    p_map_label: Last,
+
     // ── Settings > Audio ────────────────────────────────────────────────
     p_levels: Option<[u32; 4]>,
     /// The playback devices as listed when the screen last opened.
@@ -544,6 +555,9 @@ impl<H: Host> State<H> {
             nav_until: 0,
             p_nav_card: false,
             over_phone: false,
+            map_drag: (0, 0),
+            p_map_note: Last::default(),
+            p_map_label: Last::default(),
             p_levels: None,
             outputs: Vec::new(),
             outputs_seen: false,
@@ -607,7 +621,7 @@ impl<H: Host> State<H> {
             UPDATE_PHONE => Some(UPDATE),
             CAMERA => Some(self.cam_return),
             DEVICES => Some(self.devices_parent),
-            MEDIA | SETTINGS => Some(HOME),
+            MEDIA | SETTINGS | MAP => Some(HOME),
             _ => Some(SETTINGS),
         }
     }
@@ -709,6 +723,9 @@ impl<H: Host> State<H> {
                 self.dialog_dirty = true;
                 self.host.set_key_learning(true);
             }
+            Action::MapDragStart => self.map_drag_start(),
+            Action::MapDrag(dx, dy) => self.map_drag(dx, dy),
+            Action::MapZoom(step) => self.host.map_zoom(step),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
@@ -859,6 +876,9 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_camera_fastswitch_toggle, || {
         Action::CameraFastswitchToggle
     });
+    on!(on_map_drag_start, || Action::MapDragStart);
+    on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
+    on!(on_map_zoom, |step| Action::MapZoom(step));
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
     on!(on_osk_backspace, || Action::OskBackspace);
@@ -1006,7 +1026,7 @@ impl<H: Host> Osd<H> {
             dispatch_key(&self.ui, Key::Tab, false);
         }
 
-        self.st.over_phone = over_video && self.st.p_screen != CAMERA;
+        self.st.over_phone = over_video && self.st.p_screen != CAMERA && self.st.p_screen != MAP;
         self.pointer_events();
         drain(&self.actions, &mut self.st, &self.ui);
 
@@ -1153,7 +1173,18 @@ impl<H: Host> Osd<H> {
         }
         // A change the next tick has not pumped yet brings the bar up too.
         let pending = st.volume_seen && st.host.volume_generation() != st.p_volume_gen;
-        if !pending && !(st.volume_bar && st.now() < st.volume_bar_until) {
+        let bar_up = pending || (st.volume_bar && st.now() < st.volume_bar_until);
+        // The map's bar, while the volume bar is not up.
+        if st.p_screen == MAP && !bar_up {
+            let bar = self.ui.global::<MapBar<'_>>();
+            return Some(rect(
+                bar.get_x(),
+                bar.get_y(),
+                bar.get_width(),
+                bar.get_height(),
+            ));
+        }
+        if !bar_up {
             // Over the phone's video the card never shows: the phone draws
             // its own route.
             if st.p_screen == CAMERA && st.p_nav_card && st.now() < st.nav_until {

@@ -344,6 +344,8 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     // The camera view ended or failed while it is still up: not again
     // until it is left.
     let mut camera_done = false;
+    // The map could not start: not again until its screen is left.
+    let mut map_done = false;
     // The settings' generation the program last followed.
     let mut settings_seen = 0;
     let mut mem_watch = crate::mem::Watch::new();
@@ -516,6 +518,38 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             }
         }
 
+        // The map: on the video plane while its screen is up. Its canvases
+        // want video memory the phone's decoder may hold, so the decoder is
+        // parked meanwhile, as for the camera.
+        let mut map_shown = false;
+        let mut map_ready = false;
+        if let Some((osd, plane)) = &mut screens {
+            let wanted = osd.host().map_wanted();
+            if !wanted {
+                map_done = false;
+            }
+            if osd.host().map_started() && !wanted {
+                // The screens cover the map before it goes.
+                osd.invalidate();
+                if osd.tick(false, plane) {
+                    plane.show();
+                }
+                over_video = false;
+                osd.host_mut().map_stop();
+                driver.unpark();
+                crate::mem::trim();
+            }
+            if wanted && !map_done && !osd.host().map_started() {
+                driver.park(true);
+                if !osd.host_mut().map_start() {
+                    map_done = true;
+                    driver.unpark();
+                }
+            }
+            map_shown = osd.host().map_started();
+            map_ready = osd.host().map_ready();
+        }
+
         // Settings > Video > Camera: the camera owns the panel until its
         // view is closed, whatever the phone does meanwhile. It needs the
         // video memory the phone's decoder holds (~19 of 24 MiB): the
@@ -616,8 +650,8 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // front, and only the window the screens ask for (the volume bar,
         // the camera column) over the picture. The camera's column is the
         // screens' own, so the phone takes nothing while it runs.
-        let phone_front = driver.phone_front() && !camera_running;
-        let over_now = phone_front || (camera_running && !camera_waiting);
+        let phone_front = driver.phone_front() && !camera_running && !map_shown;
+        let over_now = phone_front || (camera_running && !camera_waiting) || map_ready;
         hub.set_phone_takes(phone_front);
         if let Some(input) = &input {
             input.route(if phone_front {

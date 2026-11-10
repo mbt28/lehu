@@ -11,6 +11,7 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
+use lehu_map::{TileSet, View, Viewer};
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
     NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
@@ -174,6 +175,15 @@ pub struct AppHost {
     /// Install was confirmed: the loop ends the phone's session first.
     update_install: bool,
     video_bytes: u32,
+    /// The map: the display it goes on, the viewer while its screen is up,
+    /// the tile set and the view it shows.
+    map_display: Option<Arc<Display>>,
+    map: Option<Viewer>,
+    map_set: Option<TileSet>,
+    map_view: View,
+    map_wanted: bool,
+    map_note: String,
+    map_label: String,
 }
 
 impl AppHost {
@@ -189,6 +199,7 @@ impl AppHost {
         // A camera needs the video plane; the probe opens the device for a
         // moment, as FastCarPlay did, so the Video screen knows its rows.
         let camera_present = display.is_some() && lehu_camera::present(&settings.camera.device);
+        let map_display = display.clone();
         let camera = display.map(Camera::new);
         Self {
             settings,
@@ -241,6 +252,17 @@ impl AppHost {
             update_gen: 0,
             update_install: false,
             video_bytes: 0,
+            map_display,
+            map: None,
+            map_set: None,
+            map_view: View {
+                zoom: 0,
+                x: 0,
+                y: 0,
+            },
+            map_wanted: false,
+            map_note: String::new(),
+            map_label: String::new(),
         }
     }
 
@@ -525,6 +547,96 @@ impl AppHost {
         self.settings.camera.key
     }
 
+    /// The map's screen is up: the loop should show the map.
+    pub fn map_wanted(&self) -> bool {
+        self.map_wanted
+    }
+
+    /// The map is on the video plane, or on its way there.
+    pub fn map_started(&self) -> bool {
+        self.map.is_some()
+    }
+
+    /// Its first picture is up.
+    pub fn map_ready(&self) -> bool {
+        self.map.as_ref().is_some_and(Viewer::picture_ready)
+    }
+
+    /// Show the map: the tile set read afresh (the card may have new
+    /// tiles), the view where it was left. False, with the reason on the
+    /// screen, when there is no map or no memory for it.
+    pub fn map_start(&mut self) -> bool {
+        let Some(display) = self.map_display.clone() else {
+            self.map_note = "No display for the map".into();
+            return false;
+        };
+        let set = match TileSet::open(std::path::Path::new(&self.settings.map.dir)) {
+            Ok(set) => set,
+            Err(e) => {
+                log::warn!("map: {e}");
+                self.map_note = e;
+                return false;
+            }
+        };
+        let m = &self.settings.map;
+        let mut view = if m.zoom == 0 {
+            View {
+                zoom: set.start_zoom,
+                x: set.center.0,
+                y: set.center.1,
+            }
+        } else {
+            View {
+                zoom: m.zoom,
+                x: m.x,
+                y: m.y,
+            }
+        };
+        view.zoom_by(0, set.min_zoom, set.max_zoom);
+        view.clamp(&set.bounds);
+        match Viewer::start(display, set.clone(), view) {
+            Ok(viewer) => {
+                self.map = Some(viewer);
+                self.map_view = view;
+                self.map_set = Some(set);
+                self.map_note = "Loading the map".into();
+                self.update_map_label();
+                true
+            }
+            Err(e) => {
+                log::warn!("map: {e}");
+                self.map_note = e;
+                false
+            }
+        }
+    }
+
+    /// The map goes; where it was left is kept for next time.
+    pub fn map_stop(&mut self) {
+        if let Some(viewer) = self.map.take() {
+            viewer.stop();
+        }
+        let v = self.map_view;
+        let m = &self.settings.map;
+        if self.map_set.is_some() && (v.zoom, v.x, v.y) != (m.zoom, m.x, m.y) {
+            self.persist_any("map.zoom", v.zoom);
+            self.persist_any("map.x", v.x);
+            self.persist_any("map.y", v.y);
+        }
+    }
+
+    fn update_map_label(&mut self) {
+        self.map_label.clear();
+        if let Some(set) = &self.map_set {
+            use std::fmt::Write as _;
+            let _ = write!(
+                self.map_label,
+                "{}  -  zoom {}",
+                set.name, self.map_view.zoom
+            );
+        }
+    }
+
     /// The camera view is up: the loop should run the camera.
     pub fn camera_wanted(&self) -> bool {
         self.camera_wanted
@@ -755,6 +867,35 @@ impl Host for AppHost {
 
     fn set_camera_running(&mut self, on: bool) {
         self.camera_wanted = on;
+    }
+
+    fn set_map_running(&mut self, on: bool) {
+        self.map_wanted = on;
+    }
+
+    fn map_pan(&mut self, dx: i32, dy: i32) {
+        let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
+            return;
+        };
+        self.map_view.pan(dx, dy, &set.bounds);
+        viewer.set_view(self.map_view);
+    }
+
+    fn map_zoom(&mut self, step: i32) {
+        let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
+            return;
+        };
+        self.map_view.zoom_by(step, set.min_zoom, set.max_zoom);
+        viewer.set_view(self.map_view);
+        self.update_map_label();
+    }
+
+    fn map_note(&self) -> &str {
+        if self.map_ready() { "" } else { &self.map_note }
+    }
+
+    fn map_label(&self) -> &str {
+        &self.map_label
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {

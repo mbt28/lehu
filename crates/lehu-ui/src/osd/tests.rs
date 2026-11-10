@@ -2111,8 +2111,8 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
     let mut host = TestHost::new();
     host.bt_paired = vec![device("/k", "Remote")];
     let mut osd = osd(host);
-    // Home: Connect, Phones, Settings -- Settings opens.
-    for _ in 0..3 {
+    // Home: Connect, Phones, Map, Settings -- Settings opens.
+    for _ in 0..4 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "settings");
@@ -2287,8 +2287,8 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
         seen.rotate_left(first);
         seen
     };
-    // No phone: Connect (wide), Phones, Settings.
-    assert_eq!(stops(&mut osd), ["connect", "phones", "settings"]);
+    // No phone: Connect (wide), Phones, Map, Settings.
+    assert_eq!(stops(&mut osd), ["connect", "phones", "map", "settings"]);
     assert_eq!(
         prop!(osd, get_bt_name),
         "LEHU",
@@ -2298,7 +2298,7 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     playing(&mut osd);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
-    assert_eq!(stops(&mut osd), ["connect", "media", "phones", "settings"]);
+    assert_eq!(stops(&mut osd), ["connect", "media", "phones", "map", "settings"]);
     // A session waiting: its tile in Connect's place, the Resume action.
     let host = osd.host_mut();
     host.status = "Android Auto: Pixel 8".into();
@@ -2307,7 +2307,7 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     tick(&mut osd);
     assert_eq!(home_words(&osd).0, "Android Auto");
     assert_eq!(home_words(&osd).1, "Pixel 8");
-    assert_eq!(stops(&mut osd), ["resume", "media", "phones", "settings"]);
+    assert_eq!(stops(&mut osd), ["resume", "media", "phones", "map", "settings"]);
     advance(&mut osd, KEY_RECENT_MS);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
@@ -2321,7 +2321,7 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     host.media_gen += 1;
     tick(&mut osd);
     tick(&mut osd);
-    assert_eq!(stops(&mut osd), ["resume", "phones", "settings"]);
+    assert_eq!(stops(&mut osd), ["resume", "phones", "map", "settings"]);
     // The Phones tile opens the phones; Back goes Home again.
     advance(&mut osd, KEY_RECENT_MS);
     goto(&mut osd, SETTINGS);
@@ -2755,4 +2755,51 @@ fn the_last_update_is_said_once() {
     tick(&mut osd);
     assert_eq!(screen(&osd), UPDATE);
     assert!(osd.host().has(&Call::UpdateOutcomeSeen));
+}
+
+// ── the map ──────────────────────────────────────────────────────────────
+
+#[test]
+fn the_map_runs_while_its_screen_is_up_and_moves_with_the_finger() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    assert!(osd.host().has(&Call::SetMapRunning(true)));
+    assert_eq!(prop!(osd, get_map_label), "Test  -  zoom 12");
+    // Only the bar shows over the map.
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.x, bar.y, bar.width, bar.height), (0, 416, 800, 64));
+    // A drag: the map follows the finger, the view goes the other way, by
+    // what the finger moved since the last report.
+    osd.pointer(400, 200, true);
+    tick(&mut osd);
+    osd.pointer(430, 190, true);
+    tick(&mut osd);
+    osd.pointer(450, 190, true);
+    tick(&mut osd);
+    osd.pointer(450, 190, false);
+    tick(&mut osd);
+    let pans: Vec<_> = osd
+        .host()
+        .calls
+        .iter()
+        .filter(|c| matches!(c, Call::MapPan(..)))
+        .cloned()
+        .collect();
+    assert_eq!(pans, [Call::MapPan(-30, 10), Call::MapPan(-20, 0)]);
+    // The arrows move it a quarter of the panel; the knob zooms.
+    press(&mut osd, OsdKey::Right);
+    assert!(osd.host().has(&Call::MapPan(200, 0)));
+    press(&mut osd, OsdKey::Up);
+    assert!(osd.host().has(&Call::MapPan(0, -120)));
+    press(&mut osd, OsdKey::Next);
+    assert!(osd.host().has(&Call::MapZoom(1)));
+    press(&mut osd, OsdKey::Prev);
+    assert!(osd.host().has(&Call::MapZoom(-1)));
+    // Left is a direction here, not Back.
+    press(&mut osd, OsdKey::Left);
+    assert_eq!(screen(&osd), MAP);
+    // Back: home, and the map stops.
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), HOME);
+    assert!(osd.host().has(&Call::SetMapRunning(false)));
 }

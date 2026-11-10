@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+//! The offline map: OpenStreetMap tiles read from the SD card, shown on the
+//! video plane, scrolled in four directions and zoomed.
+//!
+//! The tiles are drawn on a PC (`scripts/map-tiles.py`) into
+//! `<dir>/<z>/<x>/<y>.jpg`, 256 x 256, with `<dir>/map.toml` describing the
+//! set. Here they are only decoded and copied: the board has no FPU, and a
+//! JPEG is what its video engine can decode in hardware later.
+//!
+//! The picture is a canvas larger than the panel, composed from whole
+//! tiles, of which the video plane shows a panel-sized window. Scrolling
+//! moves the window, a commit and no copy; only when the window would leave
+//! the canvas is a new one composed around it, from decoded tiles kept in
+//! memory. Everything runs on a thread of its own, so the screens and the
+//! input never wait for a decode. Coordinates are integers: world pixels
+//! at zoom 22.
+
+mod tiles;
+mod tileset;
+mod view;
+mod viewer;
+
+pub use tileset::TileSet;
+pub use view::{View, WORLD_Z};
+pub use viewer::Viewer;
+
+#[cfg(test)]
+mod tests;
