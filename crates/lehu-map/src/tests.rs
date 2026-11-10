@@ -525,3 +525,74 @@ fn enlarging_matches_the_four_sample_rule_everywhere() {
         );
     }
 }
+
+#[test]
+fn a_gpx_time_is_seconds_since_1970() {
+    use crate::track::seconds_for_test as s;
+    assert_eq!(s("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(s("2000-03-01T00:00:00Z"), Some(951_868_800));
+    assert_eq!(s("2027-01-15T08:00:05Z"), Some(1_800_000_005));
+    assert_eq!(s("soon"), None);
+}
+
+const GPX: &str = r#"<?xml version="1.0"?>
+<gpx version="1.1"><trk><trkseg>
+<trkpt lat="49.6000" lon="6.1300"><time>2027-01-15T08:00:00Z</time></trkpt>
+<trkpt lon="6.1310" lat="49.6000"><time>2027-01-15T08:00:10Z</time></trkpt>
+<trkpt lat='49.6010' lon='6.1310'><time>2027-01-15T08:00:20Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+
+#[test]
+fn a_drive_is_replayed_along_its_points_in_time() {
+    let track = crate::Track::parse_gpx(GPX).unwrap();
+    assert_eq!(track.duration(), 20_000);
+    let p0 = crate::world_from_degrees(49.6, 6.13).unwrap();
+    let p1 = crate::world_from_degrees(49.6, 6.131).unwrap();
+    let p2 = crate::world_from_degrees(49.601, 6.131).unwrap();
+    let a = track.at(0);
+    assert_eq!((a.x, a.y), p0);
+    // Halfway along the first step, heading east.
+    let b = track.at(5_000);
+    assert_eq!((b.x, b.y), ((p0.0 + p1.0) / 2, p0.1));
+    assert_eq!(b.heading, (1024, 0));
+    // On the second step, heading north (up: y falls).
+    let c = track.at(15_000);
+    assert_eq!(c.x, p1.0);
+    assert!(c.y < p1.1 && c.y > p2.1);
+    assert_eq!(c.heading, (0, -1024));
+    // Past the end: from the start again.
+    assert_eq!(track.at(20_000 + 5_000), b);
+}
+
+#[test]
+fn a_drive_without_times_goes_a_point_a_second_and_bad_ones_are_refused() {
+    let plain = GPX.replace("<time>", "<x>").replace("</time>", "</x>");
+    assert_eq!(crate::Track::parse_gpx(&plain).unwrap().duration(), 2_000);
+    assert!(crate::Track::parse_gpx("<gpx></gpx>").is_err());
+    assert!(crate::Track::parse_gpx(r#"<trkpt lat="1"/><trkpt lat="2"/>"#).is_err());
+    assert!(
+        crate::Track::parse_gpx(r#"<trkpt lat="95" lon="1"/><trkpt lat="1" lon="1"/>"#).is_err()
+    );
+}
+
+#[test]
+fn the_arrow_points_along_the_heading() {
+    let (w, h, pitch) = (64u32, 64u32, 64usize);
+    let chroma = pitch * h as usize;
+    let mut canvas = vec![0u8; chroma + pitch * h as usize / 2];
+    // Heading east: the tip to the right of the middle, the notch behind.
+    nv12::arrow(&mut canvas, pitch, chroma, (w, h), (32, 32), (1024, 0));
+    let (blue, _, _) = ycc([26, 115, 232]);
+    let (white, _, _) = ycc([255, 255, 255]);
+    let at = |x: usize, y: usize| canvas[y * pitch + x];
+    assert_eq!(at(32 + 12, 32), blue, "near the tip");
+    assert_eq!(at(32 + 17, 32), white, "the tip's edge");
+    assert_eq!(at(32 - 12, 32), 0, "the notch behind is open");
+    assert_eq!(at(32 - 10, 32 - 9), blue, "a wing");
+    assert_eq!(at(32 + 10, 32 - 10), 0, "beside the tip");
+    // Not moving yet: the dot.
+    let mut still = vec![0u8; canvas.len()];
+    nv12::arrow(&mut still, pitch, chroma, (w, h), (32, 32), (0, 0));
+    assert_eq!(still[32 * pitch + 32], blue);
+    assert_eq!(still[32 * pitch + 32 - 12], white, "the dot's ring");
+}

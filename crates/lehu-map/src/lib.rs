@@ -21,12 +21,14 @@ mod hw;
 mod nv12;
 mod tiles;
 mod tileset;
+mod track;
 mod view;
 mod viewer;
 
 pub use tileset::TileSet;
+pub use track::{Fix, Track};
 pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
-pub use viewer::Viewer;
+pub use viewer::{Marker, Viewer};
 
 #[cfg(test)]
 mod tests;

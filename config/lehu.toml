@@ -171,6 +171,12 @@ y = 0
 # longitude" in degrees, e.g. "49.6116, 6.1300". The map opens on it and
 # draws it as a blue dot; the bar's Me key centres on it. Empty: none.
 fake-position = ""
+# A drive to replay as the position, for testing: a GPX track file, as
+# scripts/route-gpx.py writes one. LEHU follows it in real time, from the
+# start again at its end, and shows an arrow along the way; the map follows
+# it until it is dragged, and the Me key makes it follow again. It outranks
+# fake-position. Empty: none.
+fake-track = ""
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

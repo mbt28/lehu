@@ -30,10 +30,19 @@ const HW_INPUT: u32 = 256 * 1024;
 /// A flip is still pending: look again this much later.
 const BUSY_WAIT: Duration = Duration::from_millis(4);
 
+/// Where we are, as the map shows it: world pixels at `WORLD_Z`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Marker {
+    /// A position that does not move: a dot.
+    Dot(i64, i64),
+    /// On the move: an arrow along the heading (x right, y down).
+    Arrow(i64, i64, (i32, i32)),
+}
+
 struct Inner {
     want: View,
-    /// Where we are, world pixels at `WORLD_Z`, drawn as a dot.
-    position: Option<(i64, i64)>,
+    /// Where we are.
+    position: Option<Marker>,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -141,8 +150,8 @@ impl Viewer {
         }
     }
 
-    /// Show where we are (world pixels at `WORLD_Z`), or nothing.
-    pub fn set_position(&self, position: Option<(i64, i64)>) {
+    /// Show where we are, or nothing.
+    pub fn set_position(&self, position: Option<Marker>) {
         let mut inner = self.shared.lock();
         if inner.position != position {
             inner.position = position;
@@ -206,7 +215,7 @@ fn run(
     let mut heading = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
     // The position the canvases show.
-    let mut position: Option<(i64, i64)> = None;
+    let mut position: Option<Marker> = None;
     loop {
         let want = {
             let mut inner = shared.lock();
@@ -345,7 +354,7 @@ fn compose_free(
     held: &mut [Option<Layout>],
     recent: &[Option<usize>; 2],
     layout: &Layout,
-    position: Option<(i64, i64)>,
+    position: Option<Marker>,
 ) -> Option<usize> {
     let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
     let canvas = &mut canvases[index];
@@ -353,8 +362,15 @@ fn compose_free(
     let size = (canvas.width(), canvas.height());
     held[index] = None;
     tiles.compose(layout, canvas.pixels(), pitch, chroma);
-    if let Some(at) = position {
-        nv12::dot(canvas.pixels(), pitch, chroma, size, layout.pixel(at));
+    match position {
+        Some(Marker::Dot(x, y)) => {
+            nv12::dot(canvas.pixels(), pitch, chroma, size, layout.pixel((x, y)));
+        }
+        Some(Marker::Arrow(x, y, heading)) => {
+            let at = layout.pixel((x, y));
+            nv12::arrow(canvas.pixels(), pitch, chroma, size, at, heading);
+        }
+        None => {}
     }
     held[index] = Some(*layout);
     Some(index)

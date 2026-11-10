@@ -361,10 +361,14 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // page's position line); otherwise the loop sleeps until a
         // descriptor is ready.
         let timeout = screens.as_ref().and_then(|(osd, _)| {
-            match (lehu_ui::next_timer_due(), osd.next_due()) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            }
+            [
+                lehu_ui::next_timer_due(),
+                osd.next_due(),
+                osd.host().map_due(),
+            ]
+            .into_iter()
+            .flatten()
+            .min()
         });
         match poller.wait(timeout) {
             Ok(_) => {}
@@ -546,6 +550,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
                     driver.unpark();
                 }
             }
+            osd.host_mut().map_tick();
             map_shown = osd.host().map_started();
             map_ready = osd.host().map_ready();
         }

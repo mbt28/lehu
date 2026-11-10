@@ -11,7 +11,11 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
-use lehu_map::{TileSet, View, Viewer};
+use lehu_map::{Marker, TileSet, Track, View, Viewer};
+
+/// A replayed drive's position moves on this often: smooth enough at
+/// city speeds, and each move redraws a canvas (about 20 ms).
+const MAP_TRACK_STEP_MS: u64 = 200;
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
     NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
@@ -182,8 +186,16 @@ pub struct AppHost {
     map_set: Option<TileSet>,
     map_view: View,
     map_wanted: bool,
-    /// Where we are, world pixels at zoom 22.
+    /// Where we are, world pixels at zoom 22, and what the map shows there.
     map_position: Option<(i64, i64)>,
+    map_marker: Option<Marker>,
+    /// A drive replayed as the position (map.fake-track), and when it
+    /// started: it goes on while the map is closed.
+    map_track: Option<Track>,
+    map_track_start: Option<u64>,
+    map_track_shown: u64,
+    /// The map keeps where we are in the middle, until it is dragged.
+    map_follow: bool,
     map_note: String,
     map_label: String,
 }
@@ -264,6 +276,11 @@ impl AppHost {
             },
             map_wanted: false,
             map_position: None,
+            map_marker: None,
+            map_track: None,
+            map_track_start: None,
+            map_track_shown: 0,
+            map_follow: true,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -589,6 +606,31 @@ impl AppHost {
                 None
             }
         };
+        self.map_marker = self.map_position.map(|(x, y)| Marker::Dot(x, y));
+        self.map_track = None;
+        if !m.fake_track.is_empty() {
+            match std::fs::read_to_string(&m.fake_track)
+                .map_err(|e| e.to_string())
+                .and_then(|text| Track::parse_gpx(&text))
+            {
+                Ok(track) => {
+                    log::info!(
+                        "map: replaying {} ({} s a lap)",
+                        m.fake_track,
+                        track.duration() / 1000
+                    );
+                    let start = *self
+                        .map_track_start
+                        .get_or_insert_with(lehu_core::clock::now_ms);
+                    let fix = track.at(lehu_core::clock::now_ms() - start);
+                    self.map_position = Some((fix.x, fix.y));
+                    self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+                    self.map_track = Some(track);
+                }
+                Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
+            }
+        }
+        self.map_follow = true;
         let mut view = if m.zoom == 0 {
             View {
                 zoom: set.start_zoom,
@@ -610,7 +652,7 @@ impl AppHost {
         view.clamp(&set.bounds);
         match Viewer::start(display, set.clone(), view) {
             Ok(viewer) => {
-                viewer.set_position(self.map_position);
+                viewer.set_position(self.map_marker);
                 self.map = Some(viewer);
                 self.map_view = view;
                 self.map_set = Some(set);
@@ -623,6 +665,42 @@ impl AppHost {
                 self.map_note = e;
                 false
             }
+        }
+    }
+
+    /// While a drive is replayed: how long the loop may sleep before the
+    /// position should move on.
+    pub fn map_due(&self) -> Option<std::time::Duration> {
+        (self.map.is_some() && self.map_track.is_some()).then(|| {
+            let next = self.map_track_shown + MAP_TRACK_STEP_MS;
+            std::time::Duration::from_millis(next.saturating_sub(lehu_core::clock::now_ms()))
+        })
+    }
+
+    /// Each turn of the loop while the map is up: a replayed drive moves
+    /// on, and the map with it while it follows.
+    pub fn map_tick(&mut self) {
+        let (Some(track), Some(viewer), Some(set), Some(start)) = (
+            &self.map_track,
+            &self.map,
+            &self.map_set,
+            self.map_track_start,
+        ) else {
+            return;
+        };
+        let now = lehu_core::clock::now_ms();
+        if now < self.map_track_shown + MAP_TRACK_STEP_MS {
+            return;
+        }
+        self.map_track_shown = now;
+        let fix = track.at(now - start);
+        self.map_position = Some((fix.x, fix.y));
+        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+        viewer.set_position(self.map_marker);
+        if self.map_follow {
+            (self.map_view.x, self.map_view.y) = (fix.x, fix.y);
+            self.map_view.clamp(&set.bounds);
+            viewer.set_view(self.map_view);
         }
     }
 
@@ -894,6 +972,8 @@ impl Host for AppHost {
         };
         self.map_view.pan(dx, dy, &set.bounds);
         viewer.set_view(self.map_view);
+        // Moved by hand: it stays where it was put.
+        self.map_follow = false;
     }
 
     fn map_zoom(&mut self, step: i32) {
@@ -913,6 +993,7 @@ impl Host for AppHost {
         (self.map_view.x, self.map_view.y) = (x, y);
         self.map_view.clamp(&set.bounds);
         viewer.set_view(self.map_view);
+        self.map_follow = true;
     }
 
     fn map_has_position(&self) -> bool {

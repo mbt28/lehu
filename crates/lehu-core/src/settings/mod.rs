@@ -264,6 +264,11 @@ pub struct Map {
     /// "latitude, longitude" in degrees. Empty: none. The map opens on it
     /// and draws it as a dot.
     pub fake_position: String,
+    /// A drive to replay as the position, for testing: a GPX track file
+    /// (scripts/route-gpx.py writes one), followed in real time and from
+    /// the start again at its end. Empty: none; it outranks
+    /// `fake_position`.
+    pub fake_track: String,
 }
 
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
@@ -440,6 +445,7 @@ impl Default for Map {
             x: 0,
             y: 0,
             fake_position: String::new(),
+            fake_track: String::new(),
         }
     }
 }

@@ -198,3 +198,110 @@ fn up2(
         }
     }
 }
+
+/// The heading arrow: half its length, in pixels, and its white edge.
+const ARROW_R: f64 = 15.0;
+const ARROW_EDGE: f64 = 3.0;
+
+/// Draw the heading arrow centred at (`cx`, `cy`), pointing along
+/// `heading` (any length, x right, y down), on an NV12 canvas as `dot`
+/// does: a blue arrowhead with a white edge.
+pub fn arrow(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    (cx, cy): (i64, i64),
+    heading: (i32, i32),
+) {
+    let (hx, hy) = (f64::from(heading.0), f64::from(heading.1));
+    let len = hx.hypot(hy);
+    if len == 0.0 {
+        dot(dst, pitch, chroma, size, (cx, cy));
+        return;
+    }
+    let (ux, uy) = (hx / len, hy / len);
+    // An arrowhead: the tip ahead, two wings behind, a notch between them;
+    // as two triangles, tip-wing-notch on each side. Corners in 1/16 px.
+    let shape = |r: f64| {
+        let at = |along: f64, across: f64| {
+            let x = cx as f64 + ux * along - uy * across;
+            let y = cy as f64 + uy * along + ux * across;
+            ((x * 16.0) as i64, (y * 16.0) as i64)
+        };
+        let tip = at(r, 0.0);
+        let left = at(-0.8 * r, -0.75 * r);
+        let right = at(-0.8 * r, 0.75 * r);
+        let notch = at(-0.35 * r, 0.0);
+        [[tip, left, notch], [tip, notch, right]]
+    };
+    fill(
+        dst,
+        pitch,
+        chroma,
+        size,
+        &shape(ARROW_R + ARROW_EDGE * 1.6),
+        RING,
+    );
+    fill(dst, pitch, chroma, size, &shape(ARROW_R), DOT);
+}
+
+/// Fill the triangles (corners in 1/16 px) with `colour`, clipped to the
+/// canvas: each pixel by its middle, each chroma pair by its block's.
+fn fill(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (width, height): (u32, u32),
+    tris: &[[(i64, i64); 3]],
+    colour: [u8; 3],
+) {
+    let (w, h) = (i64::from(width), i64::from(height));
+    let (y_val, cb, cr) = ycc(colour);
+    let xs = tris.iter().flatten().map(|p| p.0);
+    let ys = tris.iter().flatten().map(|p| p.1);
+    let (x0, x1) = (
+        xs.clone().min().unwrap_or(0) / 16 - 1,
+        xs.max().unwrap_or(0) / 16 + 1,
+    );
+    let (y0, y1) = (
+        ys.clone().min().unwrap_or(0) / 16 - 1,
+        ys.max().unwrap_or(0) / 16 + 1,
+    );
+    if x1 < 0 || y1 < 0 || x0 >= w || y0 >= h {
+        return;
+    }
+    let edge = |a: (i64, i64), b: (i64, i64), p: (i64, i64)| {
+        (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
+    };
+    let inside = |p: (i64, i64)| {
+        tris.iter().any(|t| {
+            let (e0, e1, e2) = (
+                edge(t[0], t[1], p),
+                edge(t[1], t[2], p),
+                edge(t[2], t[0], p),
+            );
+            (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0)
+        })
+    };
+    for y in y0.max(0)..=y1.min(h - 1) {
+        for x in x0.max(0)..=x1.min(w - 1) {
+            if inside((x * 16 + 8, y * 16 + 8))
+                && let Some(p) = dst.get_mut(y as usize * pitch + x as usize)
+            {
+                *p = y_val;
+            }
+        }
+    }
+    for by in (y0.max(0) / 2)..=(y1.min(h - 1) / 2) {
+        for bx in (x0.max(0) / 2)..=(x1.min(w - 1) / 2) {
+            // The block's middle: between its four pixels.
+            if inside((bx * 32 + 16, by * 32 + 16)) {
+                let at = chroma + by as usize * pitch + 2 * bx as usize;
+                if let Some(p) = dst.get_mut(at..at + 2) {
+                    p.copy_from_slice(&[cb, cr]);
+                }
+            }
+        }
+    }
+}
