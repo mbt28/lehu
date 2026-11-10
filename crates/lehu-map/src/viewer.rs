@@ -188,7 +188,8 @@ fn run(
                 let canvas = &mut canvases[index];
                 let pitch = canvas.pitch();
                 tiles.compose(&layout, canvas.pixels(), pitch);
-                log::debug!(
+                // At info while the decode is being measured on the board.
+                log::info!(
                     "map: zoom {} at {},{} composed in {} ms, {} decoded",
                     layout.zoom,
                     layout.tx,
