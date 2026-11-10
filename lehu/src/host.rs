@@ -606,7 +606,7 @@ impl AppHost {
         if let Some((x, y)) = self.map_position {
             (view.x, view.y) = (x, y);
         }
-        view.zoom_by(0, set.min_zoom, set.max_zoom);
+        view.zoom_by(0, set.min_zoom, set.top_zoom());
         view.clamp(&set.bounds);
         match Viewer::start(display, set.clone(), view) {
             Ok(viewer) => {
@@ -900,7 +900,7 @@ impl Host for AppHost {
         let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
             return;
         };
-        self.map_view.zoom_by(step, set.min_zoom, set.max_zoom);
+        self.map_view.zoom_by(step, set.min_zoom, set.top_zoom());
         viewer.set_view(self.map_view);
         self.update_map_label();
     }

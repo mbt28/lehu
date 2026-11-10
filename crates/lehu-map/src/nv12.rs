@@ -117,3 +117,70 @@ pub fn dot(
         }
     }
 }
+
+/// The quarter (`qx`, `qy`, each 0 or 1) of an NV12 tile `side` pixels a
+/// side, at twice the size, as a whole tile: bilinear, from the samples
+/// around it in the tile too, so the quarters meet without a seam.
+pub fn enlarge_quarter(src: &[u8], side: usize, (qx, qy): (usize, usize), dst: &mut [u8]) {
+    let (src_y, src_c) = src.split_at(side * side);
+    let (dst_y, dst_c) = dst.split_at_mut(side * side);
+    let half = side / 2;
+    up2(
+        src_y,
+        (side, side),
+        1,
+        (qx * half, qy * half),
+        (half, half),
+        dst_y,
+    );
+    // The chroma: half as many pairs each way, each of the pair alone.
+    let quarter = side / 4;
+    up2(
+        src_c,
+        (half, half),
+        2,
+        (qx * quarter, qy * quarter),
+        (quarter, quarter),
+        dst_c,
+    );
+}
+
+/// Twice the size, bilinear: the `w` x `h` region at (`ox`, `oy`) of a
+/// plane of `sw` x `sh` samples, `n` bytes to a sample (each byte on its
+/// own), into `dst`, `2w` x `2h` samples. Each new sample is 3/4 of its
+/// nearest and 1/4 of the next each way; at the plane's edge the nearest
+/// stands in for the next.
+fn up2(
+    src: &[u8],
+    (sw, sh): (usize, usize),
+    n: usize,
+    (ox, oy): (usize, usize),
+    (w, h): (usize, usize),
+    dst: &mut [u8],
+) {
+    let at = |x: usize, y: usize, c: usize| u32::from(src[(y * sw + x) * n + c]);
+    let row = 2 * w * n;
+    for dy in 0..2 * h {
+        let sy = oy + dy / 2;
+        let ny = if dy % 2 == 0 {
+            sy.saturating_sub(1)
+        } else {
+            (sy + 1).min(sh - 1)
+        };
+        let line = &mut dst[dy * row..(dy + 1) * row];
+        for dx in 0..2 * w {
+            let sx = ox + dx / 2;
+            let nx = if dx % 2 == 0 {
+                sx.saturating_sub(1)
+            } else {
+                (sx + 1).min(sw - 1)
+            };
+            for c in 0..n {
+                // Sixteenths: 9 the nearest, 3 and 3 the next each way, 1
+                // the one across.
+                let v = 9 * at(sx, sy, c) + 3 * at(nx, sy, c) + 3 * at(sx, ny, c) + at(nx, ny, c);
+                line[dx * n + c] = ((v + 8) / 16) as u8;
+            }
+        }
+    }
+}

@@ -43,7 +43,16 @@ pub struct TileSet {
     pub attribution: String,
 }
 
+/// Zooms the map goes past the set's last, its tiles enlarged: softer,
+/// and the names on them larger.
+pub const OVERZOOM: u8 = 2;
+
 impl TileSet {
+    /// The deepest zoom the map shows: the set's last and `OVERZOOM` more.
+    pub fn top_zoom(&self) -> u8 {
+        self.max_zoom.saturating_add(OVERZOOM).min(WORLD_Z)
+    }
+
     /// The tiles are JPEG files (else PNG).
     pub fn is_jpeg(&self) -> bool {
         self.ext == "jpg"

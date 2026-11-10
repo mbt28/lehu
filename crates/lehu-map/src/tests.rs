@@ -403,3 +403,74 @@ fn the_dot_is_drawn_round_and_clipped_at_the_canvas_edge() {
     nv12::dot(&mut canvas, pitch, chroma, (w, h), (500, -500));
     assert_eq!(canvas[47 * pitch + 2], dot_y);
 }
+
+#[test]
+fn the_map_zooms_past_the_sets_last_level() {
+    let set = TileSet::parse(Path::new("/m"), META).unwrap();
+    assert_eq!(set.top_zoom(), 16 + crate::tileset::OVERZOOM);
+    let deep = META.replace("max-zoom = 16", "max-zoom = 22");
+    assert_eq!(
+        TileSet::parse(Path::new("/m"), &deep).unwrap().top_zoom(),
+        WORLD_Z
+    );
+}
+
+#[test]
+fn a_missing_tile_is_the_one_a_zoom_out_enlarged() {
+    let dir = temp("enlarge");
+    std::fs::write(dir.join("map.toml"), META).unwrap();
+    // Zoom 3 has tile 1/1, red; zoom 4 has nothing.
+    write_png(&dir.join("3/1/1.png"), [255, 0, 0]);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
+    let layout = Layout {
+        zoom: 4,
+        tx: 2,
+        ty: 2,
+        cols: 2,
+        rows: 2,
+    };
+    let pitch = 2 * 256;
+    let chroma = pitch * 512;
+    let mut canvas = vec![0u8; chroma + pitch * 256];
+    tiles.compose(&layout, &mut canvas, pitch, chroma);
+    // All four quarters of the red tile, each made from it once.
+    for (x, y) in [(0, 0), (300, 10), (10, 300), (511, 511)] {
+        assert_eq!(
+            nv12_at(&canvas, pitch, chroma, x, y),
+            ycc([255, 0, 0]),
+            "at {x},{y}"
+        );
+    }
+    assert_eq!((tiles.decoded, tiles.enlarged), (1, 4));
+    // Five zooms in, too far to enlarge: land.
+    let far = Layout {
+        zoom: 8,
+        tx: 32,
+        ty: 32,
+        cols: 1,
+        rows: 1,
+    };
+    tiles.compose(&far, &mut canvas, pitch, chroma);
+    assert_eq!(nv12_at(&canvas, pitch, chroma, 5, 5), ycc(LAND));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_enlarged_quarter_keeps_its_place_and_meets_its_neighbour() {
+    // Luma a ramp across (x), chroma pairs constant: the left quarter at
+    // twice the size runs from about 0 to about 127, smoothly.
+    let side = 64;
+    let mut src = vec![128u8; side * side * 3 / 2];
+    for y in 0..side {
+        for x in 0..side {
+            src[y * side + x] = (x * 4) as u8;
+        }
+    }
+    let mut out = vec![0u8; side * side * 3 / 2];
+    nv12::enlarge_quarter(&src, side, (0, 0), &mut out);
+    let row = &out[10 * side..11 * side];
+    assert!(row[0] <= 4);
+    assert!((120..=130).contains(&row[side - 1]), "{}", row[side - 1]);
+    assert!(row.windows(2).all(|p| p[1] >= p[0] && p[1] - p[0] <= 4));
+    assert!(out[side * side..].iter().all(|&c| c == 128));
+}

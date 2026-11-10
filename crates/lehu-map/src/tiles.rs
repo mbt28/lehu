@@ -30,6 +30,11 @@ pub const CACHED: usize = 36;
 /// that a trip over empty land does not push decoded tiles out.
 const MISSING: usize = 256;
 
+/// A missing tile is made from the one a zoom out, enlarged, and that one
+/// from the next, up to this many zooms: past that it is too soft to be
+/// worth it.
+const MAX_ENLARGE: u8 = 4;
+
 type Key = (u8, i64, i64);
 
 struct Entry {
@@ -38,6 +43,8 @@ struct Entry {
     /// The tile, NV12; None where the set has none (or it would not
     /// decode): not looked for again.
     pixels: Option<Box<[u8]>>,
+    /// How many times enlarged: 0 for a tile of the set.
+    soft: u8,
 }
 
 /// The decoded tiles, least recently used out first.
@@ -51,11 +58,14 @@ pub struct Tiles {
     /// A tile's row of land: luma, and Cb, Cr pairs.
     land_y: Box<[u8]>,
     land_c: Box<[u8]>,
-    /// Decodes since the start: all, in software, and those that failed
-    /// (for the log).
+    /// Decodes since the start: all, in software, and those that failed;
+    /// and the missing tiles made by enlarging (for the log).
     pub decoded: u32,
     pub software: u32,
     pub failed: u32,
+    pub enlarged: u32,
+    /// How many enlargements deep `load` is now.
+    depth: u8,
 }
 
 impl Tiles {
@@ -75,6 +85,8 @@ impl Tiles {
             decoded: 0,
             software: 0,
             failed: 0,
+            enlarged: 0,
+            depth: 0,
         }
     }
 
@@ -84,11 +96,15 @@ impl Tiles {
         let at = match self.entries.iter().position(|e| e.key == key) {
             Some(i) => i,
             None => {
-                let pixels = self.load(key);
+                let (pixels, soft) = match self.load(key) {
+                    Some((p, soft)) => (Some(p), soft),
+                    None => (None, 0),
+                };
                 let entry = Entry {
                     key,
                     used: 0,
                     pixels,
+                    soft,
                 };
                 let kept = self.entries.iter().filter(|e| e.pixels.is_some()).count();
                 let full = if entry.pixels.is_some() {
@@ -118,10 +134,11 @@ impl Tiles {
         at
     }
 
-    fn load(&mut self, (z, x, y): Key) -> Option<Box<[u8]>> {
+    /// The tile, and how many times it was enlarged.
+    fn load(&mut self, (z, x, y): Key) -> Option<(Box<[u8]>, u8)> {
         match self.set.read(z, x, y, &mut self.path, &mut self.file) {
             Ok(true) => {}
-            Ok(false) => return None,
+            Ok(false) => return self.enlarge((z, x, y)),
             Err(e) => {
                 self.failed += 1;
                 log::warn!("map: tile {z}/{x}/{y}: {e}");
@@ -133,7 +150,7 @@ impl Tiles {
             match hw.decode(&self.file, &mut out) {
                 Ok(()) => {
                     self.decoded += 1;
-                    return Some(out);
+                    return Some((out, 0));
                 }
                 Err(HwError::Refused) => {}
                 Err(HwError::Io(e)) => log::warn!("map: tile {z}/{x}/{y} in hardware: {e}"),
@@ -155,7 +172,32 @@ impl Tiles {
         self.decoded += 1;
         self.software += 1;
         nv12::from_rgb(&picture.rgb, SIDE, &mut out);
-        Some(out)
+        Some((out, 0))
+    }
+
+    /// A tile the set lacks, as its quarter of the tile a zoom out,
+    /// enlarged (that one made the same way if it is missing too): softer,
+    /// but the map rather than bare land, so a set can stop at a lower
+    /// zoom than the map shows.
+    fn enlarge(&mut self, (z, x, y): Key) -> Option<(Box<[u8]>, u8)> {
+        if z <= self.set.min_zoom || self.depth >= MAX_ENLARGE {
+            return None;
+        }
+        self.depth += 1;
+        let i = self.slot((z - 1, x >> 1, y >> 1));
+        self.depth -= 1;
+        let parent = &self.entries[i];
+        // A tile kept from an earlier enlargement counts its own.
+        let soft = parent.soft + 1;
+        if soft > MAX_ENLARGE {
+            return None;
+        }
+        let src = parent.pixels.as_deref()?;
+        let mut out = vec![0u8; TILE_BYTES].into_boxed_slice();
+        let quarter = ((x & 1) as usize, (y & 1) as usize);
+        nv12::enlarge_quarter(src, SIDE, quarter, &mut out);
+        self.enlarged += 1;
+        Some((out, soft))
     }
 
     /// Decode one tile of `layout` that is not kept yet, for a canvas

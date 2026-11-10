@@ -279,7 +279,7 @@ fn run(
             None => {
                 let layout = Layout::around(&want, panel, cols, rows);
                 let started = Instant::now();
-                let (decoded, software) = (tiles.decoded, tiles.software);
+                let (decoded, software, enlarged) = (tiles.decoded, tiles.software, tiles.enlarged);
                 let Some(index) = compose_free(
                     &mut tiles,
                     &mut canvases,
@@ -293,13 +293,14 @@ fn run(
                 };
                 // At info while the decode is being measured on the board.
                 log::info!(
-                    "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software",
+                    "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software, {} enlarged",
                     layout.zoom,
                     layout.tx,
                     layout.ty,
                     started.elapsed().as_millis(),
                     tiles.decoded - decoded,
-                    tiles.software - software
+                    tiles.software - software,
+                    tiles.enlarged - enlarged
                 );
                 match layout.window(&want, panel) {
                     Some(w) => (index, w),
