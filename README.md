@@ -57,10 +57,10 @@ Linux.
 
 | | | |
 |:-:|:-:|:-:|
-| ![Home](docs/images/home.png) | ![Now playing](docs/images/now-playing.png) | ![Navigation](docs/images/navigation.png) |
-| Home | Now playing | Navigation |
-| ![Settings](docs/images/settings.png) | ![Phones](docs/images/phones.png) | ![Night](docs/images/night.png) |
-| Settings | Phones | Night |
+| ![Home](docs/images/home.png) | ![Now playing and navigation](docs/images/now-playing.png) | ![Settings](docs/images/settings.png) |
+| Home | Now playing and navigation | Settings |
+| ![Linked Phones](docs/images/linked-phones.png) | ![Update](docs/images/update.png) | ![Night](docs/images/night.png) |
+| Linked Phones | Update | Night |
 
 ## Requirements
 
