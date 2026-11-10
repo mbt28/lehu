@@ -55,12 +55,12 @@ Linux.
 
 ## Screenshots
 
-| | | |
-|:-:|:-:|:-:|
-| ![Home](docs/images/home.png) | ![Now playing and navigation](docs/images/now-playing.png) | ![Settings](docs/images/settings.png) |
-| Home | Now playing and navigation | Settings |
-| ![Linked Phones](docs/images/linked-phones.png) | ![Update](docs/images/update.png) | ![Night](docs/images/night.png) |
-| Linked Phones | Update | Night |
+| | |
+|:-:|:-:|
+| ![Home](docs/images/home.png) | ![Now playing and navigation](docs/images/now-playing.png) |
+| Home | Now playing and navigation |
+| ![Settings](docs/images/settings.png) | ![Update](docs/images/update.png) |
+| Settings | Update |
 
 ## Requirements
 
