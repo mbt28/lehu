@@ -53,8 +53,8 @@ updater needs room of its own there.
 The tiles are drawn by the script, never fetched from OpenStreetMap's tile
 servers: their usage policy forbids offline use. The drawing is plain:
 land use, water, buildings, roads and railways, with the names of streets
-(from zoom 13 for main roads, 15 for the rest) and of places, in LEHU's own
-font. The names are placed once for the whole map at each zoom, so they
+(from zoom 13 for primary roads and up, 14 for secondary and tertiary
+roads, 15 for the rest) and of places, in LEHU's own font. The names are placed once for the whole map at each zoom, so they
 never overlap and run on across a tile's edge. `--no-labels` leaves them
 out; `--font` takes another TrueType font.
 
