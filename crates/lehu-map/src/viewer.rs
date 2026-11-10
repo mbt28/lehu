@@ -175,6 +175,17 @@ impl Viewer {
         }
     }
 
+    /// The view, where we are and the way up, all at once: one frame for
+    /// the three, where setting them one by one could wake the thread for
+    /// each.
+    pub fn set(&self, view: View, position: Option<Marker>, heading: Option<(i32, i32)>) {
+        let mut inner = self.shared.lock();
+        if (inner.want, inner.position, inner.heading) != (view, position, heading) {
+            (inner.want, inner.position, inner.heading) = (view, position, heading);
+            self.shared.wake.notify_one();
+        }
+    }
+
     /// Turn the map so that `heading` points up, the view's point low on
     /// the panel (more ahead than behind); None: north up, the view's point
     /// in the middle.
@@ -263,8 +274,10 @@ fn run(
     panel: (u32, u32),
     (cols, rows): (u32, u32),
 ) -> Vec<Canvas> {
-    // The heading-up frames shown last, as `recent` is for the canvases.
+    // The heading-up frames shown last, as `recent` is for the canvases;
+    // and their cost, said every so often.
     let mut recent_up: [Option<usize>; 2] = [None, None];
+    let mut up_stats = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
     let mut heading: Option<(i32, i32)> = None;
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
@@ -361,11 +374,20 @@ fn run(
                 position,
                 route.as_deref(),
             );
-            log::debug!(
-                "map: zoom {} heading up in {} ms",
-                want.zoom,
-                started.elapsed().as_millis()
-            );
+            let took = started.elapsed();
+            up_stats.0 += 1;
+            up_stats.1 += took;
+            up_stats.2 = up_stats.2.max(took);
+            if up_stats.3.elapsed() >= UP_STATS_EVERY {
+                log::info!(
+                    "map: {} frames heading up in {} s, {} ms each, {} ms at most",
+                    up_stats.0,
+                    up_stats.3.elapsed().as_secs(),
+                    up_stats.1.as_millis() / u128::from(up_stats.0.max(1)),
+                    up_stats.2.as_millis()
+                );
+                up_stats = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+            }
             // A pending flip: the same frame again a moment later.
             let mut tries = 0;
             loop {
@@ -510,6 +532,9 @@ fn draw_marker(
         None => {}
     }
 }
+
+/// How often the cost of the heading-up frames is logged.
+const UP_STATS_EVERY: Duration = Duration::from_secs(30);
 
 /// Where the view's point sits on the panel heading up, in percent: the
 /// middle across, low down, for more road ahead than behind.

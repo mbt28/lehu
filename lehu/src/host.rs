@@ -726,11 +726,7 @@ impl AppHost {
             None
         };
         if let Some(viewer) = &self.map {
-            viewer.set_position(self.map_marker);
-            if self.map_follow {
-                viewer.set_heading(up);
-                viewer.set_view(self.map_view);
-            }
+            viewer.set(self.map_view, self.map_marker, up);
         }
     }
 
