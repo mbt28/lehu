@@ -18,7 +18,7 @@ use lehu_drm::{Canvas, Display, Show};
 use crate::hw::HwJpeg;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
-use crate::view::{Layout, TILE, View};
+use crate::view::{Layout, TILE, View, WORLD_Z};
 
 const CANVASES: usize = 3;
 
@@ -188,10 +188,17 @@ fn run(
     let mut held: Vec<Option<Layout>> = vec![None; canvases.len()];
     let mut recent: [Option<usize>; 2] = [None, None];
     let mut shown: Option<View> = None;
+    // Where the view was going, and the canvas to have ready for where it
+    // leaves the one shown.
+    let mut heading = (0i64, 0i64);
+    let mut ahead: Option<Layout> = None;
     loop {
         let want = {
             let mut inner = shared.lock();
-            while !inner.stop && shown == Some(inner.want) {
+            loop {
+                if inner.stop || shown != Some(inner.want) || ahead.is_some() {
+                    break;
+                }
                 inner = shared
                     .wake
                     .wait(inner)
@@ -200,8 +207,38 @@ fn run(
             if inner.stop {
                 break;
             }
-            inner.want
+            (shown != Some(inner.want)).then_some(inner.want)
         };
+        let Some(want) = want else {
+            // Nothing new to show: a step towards the canvas ahead.
+            if let Some(layout) = ahead
+                && !tiles.prepare(&layout)
+            {
+                // Every tile kept: the canvas composed from them.
+                ahead = None;
+                let started = Instant::now();
+                if let Some(i) =
+                    compose_free(&mut tiles, &mut canvases, &mut held, &recent, &layout)
+                {
+                    log::info!(
+                        "map: zoom {} at {},{} ready ahead in {} ms (canvas {i})",
+                        layout.zoom,
+                        layout.tx,
+                        layout.ty,
+                        started.elapsed().as_millis()
+                    );
+                }
+            }
+            continue;
+        };
+        if let Some(last) = shown {
+            heading = if last.zoom == want.zoom {
+                let s = WORLD_Z - want.zoom.min(WORLD_Z);
+                ((want.x >> s) - (last.x >> s), (want.y >> s) - (last.y >> s))
+            } else {
+                (0, 0)
+            };
+        }
         // A canvas that already holds the window, the one shown first:
         // scrolling back over an edge flips back, with no copy.
         let placed = recent
@@ -214,17 +251,14 @@ fn run(
             Some(p) => p,
             None => {
                 let layout = Layout::around(&want, panel, cols, rows);
-                let Some(index) = (0..canvases.len()).find(|i| !recent.contains(&Some(*i))) else {
+                let started = Instant::now();
+                let (decoded, software) = (tiles.decoded, tiles.software);
+                let Some(index) =
+                    compose_free(&mut tiles, &mut canvases, &mut held, &recent, &layout)
+                else {
                     log::error!("map: no canvas free to compose into");
                     break;
                 };
-                let started = Instant::now();
-                let (decoded, software) = (tiles.decoded, tiles.software);
-                let canvas = &mut canvases[index];
-                let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
-                held[index] = None;
-                tiles.compose(&layout, canvas.pixels(), pitch, chroma);
-                held[index] = Some(layout);
                 // At info while the decode is being measured on the board.
                 log::info!(
                     "map: zoom {} at {},{} composed in {} ms, {} decoded, {} in software",
@@ -253,6 +287,11 @@ fn run(
                     recent = [Some(index), recent[0]];
                 }
                 shared.lock().shown = true;
+                // Ready the canvas the view is heading for, unless one
+                // already holds it.
+                ahead = held[index]
+                    .and_then(|l| l.ahead(&want, heading, panel))
+                    .filter(|next| !held.contains(&Some(*next)));
             }
             Show::Busy => thread::sleep(BUSY_WAIT),
             Show::Failed => {
@@ -262,4 +301,22 @@ fn run(
         }
     }
     canvases
+}
+
+/// Compose `layout` into a canvas that is neither on scanout nor just
+/// replaced, and say which; None when there is none such.
+fn compose_free(
+    tiles: &mut Tiles,
+    canvases: &mut [Canvas],
+    held: &mut [Option<Layout>],
+    recent: &[Option<usize>; 2],
+    layout: &Layout,
+) -> Option<usize> {
+    let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
+    let canvas = &mut canvases[index];
+    let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
+    held[index] = None;
+    tiles.compose(layout, canvas.pixels(), pitch, chroma);
+    held[index] = Some(*layout);
+    Some(index)
 }

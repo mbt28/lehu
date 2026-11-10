@@ -306,3 +306,54 @@ fn tiles_outside_the_world_are_land() {
     assert_eq!((tiles.decoded, tiles.failed), (0, 0));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_canvas_ahead_holds_the_view_where_it_leaves_the_one_shown() {
+    let panel = (800, 480);
+    let s = WORLD_Z - 12;
+    for heading in [
+        (-7, 0),
+        (5, 0),
+        (0, -3),
+        (0, 9),
+        (-4, -4),
+        (6, -2),
+        (3, 8),
+        (-1, 5),
+    ] {
+        for start in [(0, 0), (101, 37), (-90, 60)] {
+            let mut v = View {
+                zoom: 12,
+                x: 200_000_000 + (start.0 << s),
+                y: 300_000_000 + (start.1 << s),
+            };
+            let shown = Layout::around(&v, panel, 5, 3);
+            let ahead = shown.ahead(&v, heading, panel).unwrap();
+            // Walk along the heading until the view leaves the canvas shown:
+            // the one ahead holds it there, and for a while past it.
+            let mut steps = 0;
+            while shown.window(&v, panel).is_some() {
+                v.x += heading.0 << s;
+                v.y += heading.1 << s;
+                steps += 1;
+                assert!(steps < 10_000, "never left the canvas");
+            }
+            for _ in 0..8 {
+                assert!(
+                    ahead.window(&v, panel).is_some(),
+                    "heading {heading:?} from {start:?}: off the canvas ahead"
+                );
+                v.x += heading.0 << s;
+                v.y += heading.1 << s;
+            }
+        }
+    }
+    // Standing still, nothing is ahead.
+    let v = View {
+        zoom: 12,
+        x: 200_000_000,
+        y: 300_000_000,
+    };
+    let l = Layout::around(&v, panel, 5, 3);
+    assert_eq!(l.ahead(&v, (0, 0), panel), None);
+}

@@ -158,23 +158,34 @@ impl Tiles {
         Some(out)
     }
 
+    /// Decode one tile of `layout` that is not kept yet, for a canvas
+    /// composed later; false when there is none left. One at a time, so
+    /// the caller can look for something more urgent between them.
+    pub fn prepare(&mut self, layout: &Layout) -> bool {
+        let z = layout.zoom;
+        let next = order(layout).into_iter().find_map(|(c, r)| {
+            let (x, y) = (layout.tx + i64::from(c), layout.ty + i64::from(r));
+            let kept = self.entries.iter().any(|e| e.key == (z, x, y));
+            (inside(z, x, y) && !kept).then_some((z, x, y))
+        });
+        match next {
+            Some(key) => {
+                self.slot(key);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Compose `layout` into `dst`, an NV12 canvas whose rows are `pitch`
     /// bytes apart and whose chroma begins at `chroma`: each tile kept or
     /// decoded, land where there is none. Written row by row, never read:
     /// `dst` may be write-combined memory.
     pub fn compose(&mut self, layout: &Layout, dst: &mut [u8], pitch: usize, chroma: usize) {
-        let span = 1i64 << layout.zoom;
-        // The middle first: it is what the panel shows.
-        let mut order: Vec<(u32, u32)> = (0..layout.rows)
-            .flat_map(|r| (0..layout.cols).map(move |c| (c, r)))
-            .collect();
-        let (mc, mr) = (layout.cols as i64 - 1, layout.rows as i64 - 1);
-        order.sort_by_key(|&(c, r)| (2 * c as i64 - mc).abs() + (2 * r as i64 - mr).abs());
         let (luma, croma) = dst.split_at_mut(chroma.min(dst.len()));
-        for (c, r) in order {
+        for (c, r) in order(layout) {
             let (x, y) = (layout.tx + i64::from(c), layout.ty + i64::from(r));
-            let inside = (0..span).contains(&x) && (0..span).contains(&y);
-            let slot = inside.then(|| self.slot((layout.zoom, x, y)));
+            let slot = inside(layout.zoom, x, y).then(|| self.slot((layout.zoom, x, y)));
             let pixels = slot.and_then(|i| self.entries[i].pixels.as_deref());
             let x0 = c as usize * SIDE;
             let (tile_y, tile_c) = match pixels {
@@ -200,6 +211,23 @@ impl Tiles {
             }
         }
     }
+}
+
+/// A layout's tiles, column and row, the middle first: what the panel
+/// shows.
+fn order(layout: &Layout) -> Vec<(u32, u32)> {
+    let mut order: Vec<(u32, u32)> = (0..layout.rows)
+        .flat_map(|r| (0..layout.cols).map(move |c| (c, r)))
+        .collect();
+    let (mc, mr) = (layout.cols as i64 - 1, layout.rows as i64 - 1);
+    order.sort_by_key(|&(c, r)| (2 * c as i64 - mc).abs() + (2 * r as i64 - mr).abs());
+    order
+}
+
+/// Tile (`x`, `y`) is inside the world at zoom `z`.
+fn inside(z: u8, x: i64, y: i64) -> bool {
+    let span = 1i64 << z;
+    (0..span).contains(&x) && (0..span).contains(&y)
 }
 
 /// `rows` rows of a tile's plane (`src`, rows `SIDE` bytes; `land`'s one
