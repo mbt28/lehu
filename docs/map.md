@@ -113,8 +113,11 @@ them off, and so does the map menu's Voice row, at once.
 
 A prompt is put together from clips, WAV files of a phrase each ("In 500
 metres", "turn left", "then", "Take the second exit"), read from
-`map.voice-dir` (`/var/lib/lehu/voice/en` by default) as they are first
-needed. They are made on a PC by `scripts/voice-clips.py`, with
+`map.voice-dir` as they are first needed: by default `/maps/voice/en` on
+the card's map partition ([below](#data-on-the-card)), or
+`/var/lib/lehu/voice/en` on a card without one. The clips are not in the
+system image: they are made on a PC and copied to the card. Without them the map guides in silence, and Settings > Map says
+the voice is not installed. They are made on a PC by `scripts/voice-clips.py`, with
 [Piper](https://github.com/OHF-voice/piper1-gpl), an offline speech
 synthesizer, and a voice from its catalogue. `en_GB-cori-high`, a British
 English voice, is in the public domain: its recordings are LibriVox's and
@@ -133,8 +136,8 @@ The script writes the forty-one clips, about 2.8 MB, into `voice/en`: 16-bit
 mono PCM at 24 kHz, half the mixer's rate, their silent ends trimmed and
 all at one loudness, so the board only copies them. `--demo` also writes
 a few whole prompts, put together as the board does, to hear on the PC.
-Copy the directory to the head unit as `map.voice-dir`, readable by
-LEHU's user. A clip that is missing is named once in the log, and the
+Copy the directory to the card's map partition as `voice/en`. A clip
+that is missing is named once in the log, and the
 prompts that need it stay silent. Routes found on the board (below) are
 spoken the same way, and so is the speed camera warning ("Speed camera
 ahead", the clip `speed-camera`).
@@ -321,8 +324,10 @@ v/bin/python scripts/map-graph.py luxembourg-latest.osm.pbf maps
 | `places.bin` | 0.5 MB: 10,000 streets, 2,200 places, 1,200 filling stations, car parks and charging stations | 4.1 MB: 119,000 streets, 17,900 places (3,200 towns), 1,800 filling stations, 1,500 car parks, 1,500 charging stations |
 | on a PC | half a minute | about 5 minutes and 2.2 GB of memory (a Raspberry Pi 5) |
 
-Copy them into the map's directory, beside `map.toml`, or into another
-directory named by `map.route-dir`. `cameras.bin` is optional: without
+They go in the region's folder, beside `map.toml`
+(`scripts/map-region.py` puts them there); `map.route-dir`, deprecated
+but still read, names another directory to take them from instead.
+`cameras.bin` is optional: without
 it, or with one made for other road data, there are no camera warnings
 and routes are found as before. The roads and their speeds are the ones
 `scripts/route-gpx.py` drives, so both find the same routes; only the
@@ -482,33 +487,60 @@ the map opens, but for Hungary that is reading 69 MB from the card.
 
 ## Making a map
 
-The tiles are drawn on a PC from an OpenStreetMap extract, for example
-one from [Geofabrik](https://download.geofabrik.de):
+Most people get a region onto the card with the PC tool,
+`tools/lehu-maps` ([below](#data-on-the-card)), which does what follows
+for them. By hand, a region is built on a PC from an OpenStreetMap
+extract, for example one from [Geofabrik](https://download.geofabrik.de),
+by one command:
 
 ```sh
 python3 -m venv v && v/bin/pip install osmium pillow
-v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf maps --zoom 8-16
+v/bin/python scripts/map-region.py hungary-latest.osm.pbf hungary --preset hungary --workers 4
 ```
 
-The script writes `maps/<z>/<x>/<y>.jpg` (256 x 256 baseline JPEGs) and
-`maps/map.toml`, which names the zoom levels, the area and where to open.
-Copy the `maps` directory to the head unit as `map.dir`
-(`/var/lib/lehu/maps` by default), readable by LEHU's user. A whole
-country takes a while on a PC: Luxembourg, zoom 8 to 16, is 41,000 tiles,
-240 MB and five minutes on four cores. Most of that is the last two zoom
-levels (zoom 8 to 14 is 26 MB), so mind the space on the card: the system
-updater needs room of its own there.
+`scripts/map-region.py` writes the road data (`scripts/map-graph.py`),
+draws the tiles and places the names (`scripts/map-tiles.py`), packs
+them, and last writes the region's `map.toml`, into the folder `hungary`,
+ready to copy to the card. The loose tiles are drawn into `hungary/.work`
+first and removed at the end (`--keep-work` keeps them). `--only graph`,
+`--only tiles` or `--only manifest` does one part (and the manifest after
+it). `--voice-dir voice/en` checks a voice set and gives it a `map.toml`
+of its own, to copy beside the region. `--estimate` prints a rough size
+and time and exits; `--progress` prints lines for a program running the
+script (`@stage`, `@progress`, `@done`, `@error`; the script's header
+lists them); SIGTERM stops it and what it runs, the folder left as far as
+it got. A preset says which zooms are drawn where: a whole country at the
+deepest zooms would be far too large and take days, so they are drawn
+only over towns.
 
-At night (Settings, Night) the map shows night tiles, dark with light
-names, when the map has them. With Night set to Auto, night is when the
-sun is down where the head unit is ([below](#night-by-the-sun)). The
-night tiles are a second set in `night/` under the map's
-directory, drawn with `--night` over the same area and zooms. The night
-set of the Luxembourg example is about 30 MB.
+| Preset | Zooms |
+|---|---|
+| `luxembourg` | 8-14 over the extract, 15-16 over Luxembourg City |
+| `hungary` | 8-14 over the extract, 15-16 over Budapest and every city or town of 50,000 people or more (17, from the extract's place nodes and their `population`) |
+| `auto` | 8-14 over the extract, 15-16 round every place tagged city or town with 50,000 people or more |
 
-```sh
-v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf maps/night --zoom 8-16 --night
-```
+The names are always data, which LEHU draws ([below](#names)), placed for
+every zoom the map shows: two past the deepest tiles. Luxembourg takes
+about three and a half minutes on two cores and makes 33.8 MB: the tiles
+26.3 MB (4,289 tiles, 3,388 different), the names 0.3 MB, the road data
+7.2 MB.
+
+`scripts/map-tiles.py` can also be run alone. It writes
+`<out>/<z>/<x>/<y>.jpg` (256 x 256 baseline JPEGs) and `<out>/map.toml`,
+which names the zoom levels, the area and where to open; `--area
+Z0-Z1:W,S,E,N` (again for more) draws more zooms over a smaller area in
+the same run, and `--pack [DEST]` then packs the tiles into
+`DEST/tiles.pmtiles` and the names into `DEST/labels.pack` (`--pack-only`
+packs what `<out>` has, without drawing). A folder of loose tiles, with
+`labels/`, still works as a map.
+
+At night (Settings, Night) the map is dark with light names. With Night
+set to Auto, night is when the sun is down where the head unit is
+([below](#night-by-the-sun)). The night map is made on the head unit
+from the day tiles, as each is decoded: there is no second set to build
+or copy ([Night from the day tiles](#night-from-the-day-tiles)). A night
+set drawn on a PC, in `night/` under the map's folder (`--night`), is
+still shown when it is there.
 
 The tiles are drawn by the script, never fetched from OpenStreetMap's tile
 servers: their usage policy forbids offline use. The drawing is plain:
@@ -543,22 +575,119 @@ the names of a zoom or two out, so a pass over a city at deeper zooms can follow
 country. A set without `labels/` has its names in the tiles, and LEHU
 draws none.
 
-The Luxembourg example with names as data, the city deeper:
+The Luxembourg example with names as data, the city deeper, in one run
+(what `scripts/map-region.py --preset luxembourg` runs):
 
 ```sh
-P="v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf"
-CITY="--zoom 15-16 --bbox 6.02,49.56,6.22,49.67"
-$P maps --zoom 8-14 --labels data --label-zoom 8-16
-$P maps $CITY --labels data
-$P maps/night --zoom 8-14 --labels none --night
-$P maps/night $CITY --labels none --night
+v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf maps --zoom 8-14 \
+    --labels data --label-zoom 8-16 --area 15-16:6.02,49.56,6.22,49.67 --pack
 ```
 
-The second pass writes a `map.toml` for its own zooms and area: set
-`min-zoom` and `bounds` back to the first pass's (and the same in
-`night/`). `--no-tiles` writes only the label data, to place the names
-again without drawing the tiles again. The data is small: 320 KB in 780
-files for the example (3.4 MB on the card, a 4 KB block a file).
+Each `--area` places its names again over its own blocks, as a pass over
+the whole map would, replacing the first pass's there. `--no-tiles`
+writes only the label data, to place the names again without drawing the
+tiles again. The data is small: 320 KB for the example, in 780 files
+loose (3.4 MB on the card, a 4 KB block a file) or one `labels.pack` of
+336 KB.
+
+## Data on the card
+
+The map's data is on a partition of the SD card of its own, **LEHU-MAPS**:
+exFAT, so that a PC with Windows, macOS or Linux can write it, mounted
+at `/maps`, always read only (see
+[image-requirements.md](image-requirements.md#map-data)). Map data
+reaches the card only by putting the card in a PC: LEHU reads it, checks
+it and never writes it, nothing of it is in the system image, and neither
+system updates (OSTree) nor LEHU's own updates carry any. Nothing of it
+is in LEHU's repository either: each piece is built from OpenStreetMap
+with the scripts here.
+
+```
+/maps/<region>/        e.g. /maps/hungary/
+  map.toml             the region: name, zooms, area, data version, OSM date,
+                       preset, the size and sha256 of each file
+  tiles.pmtiles        the tiles (PMTiles v3, JPEG, nothing compressed)
+  labels.pack          the names LEHU draws (an index and the blocks)
+  roads.bin            the road network
+  cameras.bin          the speed cameras, for that roads.bin
+  places.bin           the names to search, fuel, parking, charging
+/maps/voice/<lang>/    the spoken prompts' clips, e.g. /maps/voice/en
+```
+
+What navigation needs, and where it comes from (Luxembourg measured,
+Hungary the region planned for):
+
+| Data | Used for | Made by | On the card | Luxembourg | Hungary |
+|---|---|---|---|---|---|
+| Day map tiles | the map | `scripts/map-tiles.py` (via `map-region.py`) | `tiles.pmtiles` | 26.3 MB (z8-14, z15-16 over the city) | HU_TILES |
+| Night map tiles | the map at night | made on the head unit from the day tiles | none | 0 | 0 |
+| Names | street and place names LEHU draws | `map-tiles.py --labels data` | `labels.pack` | 0.3 MB | HU_LABELS |
+| Road network | routing, turns, speed limits, motorways, the main-road layer | `scripts/map-graph.py` | `roads.bin` | 7.0 MB | 68.6 MB |
+| Places | Go to's search; fuel, parking, charging | `scripts/map-graph.py` | `places.bin` | 0.5 MB | 4.1 MB |
+| Speed cameras | the camera warning | `scripts/map-graph.py` (OSM `highway=speed_camera`) | `cameras.bin`, tied to its roads.bin | 1 kB, 39 cameras | 11.5 kB, 480 |
+| Voice clips | spoken prompts | `scripts/voice-clips.py` (Piper) | `/maps/voice/en/*.wav` | 2.8 MB (English) | the same |
+| Region description | versions, checks, where to open | `scripts/map-region.py` | `map.toml` | 1 KB | 1 KB |
+| Time zone | local arrival times | the system image's tzdata | `/usr/share/zoneinfo` | | Europe/Budapest |
+| Test drive | a fake position on the bench | `scripts/route-gpx.py` | anywhere, `map.fake-track` | 33 KB | |
+| Source extract | the PC tools' input only | Geofabrik `.osm.pbf` | never | 48 MB | 330 MB |
+
+**One file, not thousands.** A tile a file wastes most of a 4 KB block
+on each of tens of thousands of tiles, and every tile costs a directory
+walk on the card. [PMTiles](https://github.com/protomaps/PMTiles) is an
+open single-file tile archive: the head unit reads its header and root
+directory once (the first 16 KB), a leaf directory now and then (a few
+are kept), and each tile with one read. A tile the same as another (sea,
+empty land) is stored once. On a PC, `pmtiles show tiles.pmtiles` or
+[pmtiles.io](https://pmtiles.io) looks inside. `labels.pack` does the same
+for the names: the blocks' text as it was, behind an index, mapped and
+read where it lies.
+
+**Choosing a region.** `map.dir` names the region's folder; empty, the
+first region on the partition is shown (and `/var/lib/lehu/maps` on a
+card without the partition). Settings > Map > Region steps through the
+regions on the card, with the knob or the - and + keys, and Enter takes
+the one shown; the map then opens on that region's own start. A region
+that cannot be shown says so as it is stepped past ("Needs a newer
+LEHU", "Damaged") and Enter leaves the region shown as it was. Settings >
+Map also says whether the voice is there.
+
+**Versions and checks.** `map.toml` names the layout the folder is in
+(`data-version`): a LEHU refuses a region of a later layout than it reads
+and says "Map needs a newer LEHU" on the map screen, rather than failing
+on files it does not understand. As the map opens, LEHU reads only
+`map.toml` and the size of each file it names: a copy cut short is found
+at once, and the map says "Map damaged: copy Hungary again". A region new
+to the head unit is then checked whole, each file against its sha256, in
+the background at the lowest priority (minutes on the head unit for a
+large region); the result is kept in `~/.lehu/map-checks`, the partition
+being read only, and a region that fails is shown as damaged from then
+on. A folder from before there was a `data-version` is read as before.
+
+**Getting a region onto the card.** The PC tool, `tools/lehu-maps`, is
+the way: it downloads the extract, builds the region with
+`scripts/map-region.py` (`--progress` tells it how far along it is,
+`--estimate` how large and how long beforehand) and writes it to the
+card's LEHU-MAPS partition. By hand, build the region ([Making a
+map](#making-a-map)) and copy its folder to the partition, with the card
+in the PC's reader:
+
+- **Windows:** put the card in a reader. Windows shows a drive called
+  LEHU-MAPS (and offers to format the card's other partitions: say no).
+  Copy the region's folder (for example `hungary`) into it, and the
+  voice folder into `voice`, then eject the drive before taking the card
+  out.
+- **macOS:** the card shows up as LEHU-MAPS in the Finder; copy the
+  folder onto it and eject it. The Finder adds `._*` files beside the
+  copied ones, which LEHU ignores (`dot_clean /Volumes/LEHU-MAPS` removes
+  them).
+- **Linux:** the desktop mounts LEHU-MAPS (exFAT is built into current
+  kernels); or by hand: `sudo mount -o uid=$USER /dev/sdX7 /mnt`, then
+  `cp -r hungary /mnt/ && sync && sudo umount /mnt`.
+
+Copying a region over an older copy of itself is safe while the head
+unit is off: the next start checks the sizes, and the new copy is checked
+whole once. Keep a region's folder name when updating it, since
+`map.dir` names it.
 
 ## How it works
 
@@ -603,6 +732,32 @@ tick of the bar (five times a second), in integer arithmetic on the
 metres to the turn and the speed. A phrase's clips are joined with a short
 pause into one segment and handed to the mixer's third input, which plays
 LEHU's own prompts beside the phone's music and voice.
+
+## Night from the day tiles
+
+A region has only day tiles. At night each tile is turned into a night
+one as it is decoded (by the video engine or in software), once, before it
+is kept; the canvas and the turned frames are then composed as by day.
+`nv12::Night` does it with a few tables built from the land's colour,
+integers only:
+
+- the luma through a table: the land becomes the night land's dark
+  blue-grey; what is lighter than the land by day (white roads) much
+  lighter than it at night, so the roads stand out; what is darker
+  (woods, water, buildings) a little lighter, less so the darker it was;
+- each two by two block's chroma: a block warmer than the land (more red
+  than blue, as the major roads' orange, yellow and pink are, and no
+  area's colour is) is lifted to the roads' brightness at night and keeps
+  its colour; the reddest (the footpaths' thin lines) less so; any other
+  block keeps under half its colour's distance from the land's, so woods
+  and water stay dim.
+
+The names LEHU draws switch to their night colours too. The look was
+tuned against the night tiles the script draws (`--night`); the test
+`night_compare` puts the day, the night made from it and the drawn night
+side by side, and `night_lut_cost` times a tile (about 0.15-0.2 ms on a
+busy Raspberry Pi 5; tens of times that on the F1C200s, against about a
+millisecond for the engine's decode).
 
 ## Night by the sun
 
