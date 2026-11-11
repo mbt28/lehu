@@ -3,7 +3,8 @@
 //! The router and the search: on small networks built here, and on a real
 //! one (scripts/map-graph.py's) when one is given.
 
-use crate::graph::build::{M_PER_PX, Road, road, write, write_with};
+use crate::cameras::Cameras;
+use crate::graph::build::{CameraWords, M_PER_PX, Road, road, write, write_with};
 use crate::graph::{Graph, RouteBy, RouteOptions};
 use crate::route::Router;
 use crate::search::{FoundKind, Places, fold};
@@ -56,7 +57,7 @@ fn a_network_is_read_and_checked() {
     assert!(Graph::from_bytes(&other).is_err());
     // An arc to a node that is not there: found by the check.
     let mut broken = bytes;
-    let arcs_at = 20 * 4 + 4 * 4 * 4;
+    let arcs_at = 26 * 4 + 4 * 4 * 4;
     broken[arcs_at..arcs_at + 4].copy_from_slice(&99u32.to_le_bytes());
     assert!(Graph::from_bytes(&broken).unwrap().check().is_err());
 }
@@ -323,7 +324,7 @@ fn version_1_road_data_still_routes() {
     let bytes = write_with(&nodes, &[m, road(1, 2, "B")], &[], 1);
     let g = Graph::from_bytes(&bytes).unwrap();
     g.check().unwrap();
-    assert_eq!(g.cameras(), 0);
+    assert!(g.v2_cameras().is_none() && g.build_id().is_none());
     assert!(!g.edge(0).motorway, "version 1 has no motorway marks");
     let r = Router::new(g, None);
     let o = RouteOptions {
@@ -336,15 +337,14 @@ fn version_1_road_data_still_routes() {
     assert!((785.0..805.0).contains(&f64::from(t.metres())));
     // And a version LEHU does not know is refused.
     let mut later = bytes;
-    later[8..12].copy_from_slice(&3u32.to_le_bytes());
+    later[8..12].copy_from_slice(&4u32.to_le_bytes());
     assert!(Graph::from_bytes(&later).is_err());
 }
 
-#[test]
-fn a_route_carries_the_cameras_that_watch_its_way() {
-    // One street of 2 km, 0 to 1, then on to 2; a camera 500 m along it
-    // watching eastwards, one at 1500 m watching both ways, one on the
-    // second street watching westwards only.
+/// One street of 2 km, 0 to 1, then on to 2; a camera 500 m along it
+/// watching eastwards, one at 1500 m watching both ways, one on the
+/// second street watching westwards only.
+fn camera_street() -> ([(i64, i64); 3], Vec<Road>, [CameraWords; 3]) {
     let nodes = [at(0.0, 0.0), at(2000.0, 0.0), at(3000.0, 0.0)];
     let dm = |east: f64| (east * 10.0) as u32;
     let cam = |east: f64, edge: u32, from_a: f64, ways: u32, limit: u32| {
@@ -356,18 +356,21 @@ fn a_route_carries_the_cameras_that_watch_its_way() {
         cam(1500.0, 0, 1500.0, 3, 0),
         cam(2500.0, 1, 500.0, 2, 70),
     ];
-    let bytes = write_with(
-        &nodes,
-        &[road(0, 1, "Est"), road(1, 2, "Ouest")],
-        &cameras,
-        2,
-    );
-    let g = Graph::from_bytes(&bytes).unwrap();
+    (nodes, vec![road(0, 1, "Est"), road(1, 2, "Ouest")], cameras)
+}
+
+#[test]
+fn a_route_carries_the_cameras_that_watch_its_way() {
+    let (nodes, roads, cameras) = camera_street();
+    let g = Graph::from_bytes(&write(&nodes, &roads)).unwrap();
     g.check().unwrap();
-    assert_eq!(g.cameras(), 3);
-    assert_eq!(g.cameras_on(0).count(), 2);
-    assert_eq!(g.cameras_on(1).next().unwrap().limit, Some(70));
-    let r = Router::new(g, None);
+    let id = g.build_id().unwrap();
+    let cams = Cameras::from_bytes(&crate::cameras::write(id, &cameras), &g).unwrap();
+    assert_eq!(cams.len(), 3);
+    assert_eq!(cams.on(0).count(), 2);
+    assert_eq!(cams.on(1).next().unwrap().limit, Some(70));
+    let r = Router::new(g, None).with_cameras(Some(cams));
+    assert_eq!(r.cameras(), 3);
     let east = r.route(at(10.0, 0.0), None, at(2990.0, 0.0)).unwrap();
     let c = east.cameras();
     assert_eq!(c.len(), 2, "{c:?}");
@@ -382,11 +385,269 @@ fn a_route_carries_the_cameras_that_watch_its_way() {
     // Starting past a camera: not on the route.
     let late = r.route(at(1000.0, 0.0), None, at(1900.0, 0.0)).unwrap();
     assert_eq!(late.cameras().len(), 1);
-    // A camera on an edge that is not there: found by the check.
+    // No cameras: routes as before, none on them.
+    let (nodes, roads, _) = camera_street();
+    let bare = Router::new(Graph::from_bytes(&write(&nodes, &roads)).unwrap(), None);
+    let t = bare.route(at(10.0, 0.0), None, at(2990.0, 0.0)).unwrap();
+    assert!(t.cameras().is_empty());
+}
+
+#[test]
+fn cameras_from_another_build_or_broken_are_refused() {
+    let (nodes, roads, cameras) = camera_street();
+    let g = Graph::from_bytes(&write(&nodes, &roads)).unwrap();
+    let id = g.build_id().unwrap();
+    // The same network gives the same ID; another, another.
+    let again = Graph::from_bytes(&write(&nodes, &roads)).unwrap();
+    assert_eq!(again.build_id(), Some(id));
+    let mut longer = camera_street().1;
+    longer[1].kmh = 70;
+    let other = Graph::from_bytes(&write(&nodes, &longer)).unwrap();
+    assert_ne!(other.build_id(), Some(id));
+    let bytes = crate::cameras::write(id, &cameras);
+    assert!(Cameras::from_bytes(&bytes, &g).is_ok());
+    let e = Cameras::from_bytes(&bytes, &other).err().unwrap();
+    assert!(e.contains("not on this one"), "{e}");
+    // A camera on an edge that is not there, out of order, cut short, a
+    // version LEHU does not know.
     let mut bad = cameras;
     bad[2][2] = 9;
-    let bytes = write_with(&nodes, &[road(0, 1, "Est"), road(1, 2, "Ouest")], &bad, 2);
-    assert!(Graph::from_bytes(&bytes).unwrap().check().is_err());
+    assert!(Cameras::from_bytes(&crate::cameras::write(id, &bad), &g).is_err());
+    let mut bad = cameras;
+    bad.swap(0, 2);
+    assert!(Cameras::from_bytes(&crate::cameras::write(id, &bad), &g).is_err());
+    assert!(Cameras::from_bytes(&bytes[..bytes.len() - 4], &g).is_err());
+    let mut later = bytes.clone();
+    later[8..12].copy_from_slice(&2u32.to_le_bytes());
+    assert!(Cameras::from_bytes(&later, &g).is_err());
+
+    // From a map directory: read when it matches, else left out (with a
+    // line in the log) and the routes go on without.
+    let dir = std::env::temp_dir().join(format!("lehu-cameras-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(crate::ROADS_FILE), write(&nodes, &roads)).unwrap();
+    std::fs::write(dir.join(crate::CAMERAS_FILE), &bytes).unwrap();
+    assert_eq!(Router::open(&dir).unwrap().cameras(), 3);
+    std::fs::write(dir.join(crate::ROADS_FILE), write(&nodes, &longer)).unwrap();
+    let r = Router::open(&dir).unwrap();
+    assert_eq!(r.cameras(), 0);
+    assert!(r.route(at(10.0, 0.0), None, at(2990.0, 0.0)).is_ok());
+    std::fs::remove_file(dir.join(crate::CAMERAS_FILE)).unwrap();
+    assert_eq!(Router::open(&dir).unwrap().cameras(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn version_2_road_data_brings_its_own_cameras() {
+    let (nodes, roads, cameras) = camera_street();
+    let g = Graph::from_bytes(&write_with(&nodes, &roads, &cameras, 2)).unwrap();
+    g.check().unwrap();
+    assert_eq!(g.layer_junctions(), 0);
+    let cams = Cameras::open(std::path::Path::new("/nonexistent"), &g).unwrap();
+    assert_eq!(cams.len(), 3);
+    let r = Router::new(g, None).with_cameras(Some(cams));
+    let east = r.route(at(10.0, 0.0), None, at(2990.0, 0.0)).unwrap();
+    assert_eq!(east.cameras().len(), 2);
+    // A camera on an edge that is not there: refused.
+    let mut bad = cameras;
+    bad[2][2] = 9;
+    let g = Graph::from_bytes(&write_with(&nodes, &roads, &bad, 2)).unwrap();
+    assert!(Cameras::open(std::path::Path::new("/nonexistent"), &g).is_none());
+}
+
+/// A country in a line, 60 km wide: a main road (N1, 70 km/h) from Ville
+/// A at 0 to Ville B at 60 km, a village street joining it each kilometre
+/// (so its nodes are many, its layer junctions few), and, halfway, a
+/// back road that cuts a bend of N1: the main road bends 2 km south
+/// between 25 and 35 km, the back road goes straight at 90 km/h. A
+/// motorway (A1, 130 km/h) runs parallel 3 km north, with links at 4 and
+/// 56 km.
+fn a_country() -> (Vec<(i64, i64)>, Vec<Road>) {
+    let mut nodes = Vec::new();
+    let mut roads = Vec::new();
+    let mut node = |p: (i64, i64)| {
+        nodes.push(p);
+        nodes.len() as u32 - 1
+    };
+    // The ends: side streets 800 m south of N1 at 0 and at 60 km.
+    let start = node(at(0.0, 800.0));
+    let goal = node(at(60_000.0, 800.0));
+    let main_road = |a, b, name| {
+        let mut r = road(a, b, name);
+        r.kmh = 70;
+        r.main = true;
+        r
+    };
+    // N1, a node a kilometre, bent south between 25 and 35 km.
+    let south = |km: f64| {
+        if (25.0..=35.0).contains(&km) {
+            2000.0 * (1.0 - ((km - 30.0) / 5.0).abs())
+        } else {
+            0.0
+        }
+    };
+    let n1: Vec<u32> = (0..=60)
+        .map(|km| node(at(f64::from(km) * 1000.0, south(f64::from(km)))))
+        .collect();
+    for w in n1.windows(2) {
+        roads.push(main_road(w[0], w[1], "N1"));
+    }
+    // A village street at each kilometre, 500 m south (none in the bend).
+    for (km, &n) in n1.iter().enumerate() {
+        if (25..=35).contains(&km) {
+            continue;
+        }
+        let v = node(at(km as f64 * 1000.0 + 10.0, 500.0));
+        roads.push(road(n, v, "Rue du Village"));
+    }
+    roads.push(road(start, n1[0], "Rue de Départ"));
+    roads.push(road(n1[60], goal, "Rue d'Arrivée"));
+    // The back road across the bend: shorter and faster.
+    let mut back = road(n1[25], n1[35], "Chemin");
+    back.kmh = 90;
+    roads.push(back);
+    // A1 3 km north, one way each way (two carriageways), links at 4 and
+    // 56 km.
+    let a1: Vec<u32> = (0..=13)
+        .map(|i| node(at(4000.0 + f64::from(i) * 4000.0, -3000.0)))
+        .collect();
+    for w in a1.windows(2) {
+        for (a, b) in [(w[0], w[1]), (w[1], w[0])] {
+            let mut r = main_road(a, b, "A1");
+            r.kmh = 130;
+            r.motorway = true;
+            r.oneway = true;
+            roads.push(r);
+        }
+    }
+    for (i, km) in [(0, 4), (13, 56)] {
+        let mut link = main_road(a1[i], n1[km], "A1");
+        link.kmh = 60;
+        link.motorway = true;
+        roads.push(link);
+    }
+    (nodes, roads)
+}
+
+fn country(near_m: u32) -> Router {
+    let (nodes, roads) = a_country();
+    let g = Graph::from_bytes(&write(&nodes, &roads))
+        .unwrap()
+        .with_near(near_m);
+    g.check().unwrap();
+    Router::new(g, None)
+}
+
+#[test]
+fn the_main_roads_layer_is_built_and_checked() {
+    let (nodes, roads) = a_country();
+    let bytes = write(&nodes, &roads);
+    let g = Graph::from_bytes(&bytes).unwrap();
+    g.check().unwrap();
+    // N1's kilometres with a village street are not junctions of the
+    // layer, only where main roads meet (the links at 4 and 56 km, the
+    // ends at 0 and 60) and the motorway's nodes, whose carriageways go
+    // one way each.
+    assert_eq!(g.layer_junctions(), 4 + 14);
+    // Its steps no longer join: found by the check.
+    let w: Vec<u32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .collect();
+    let steps = w[24] as usize;
+    let mut broken = bytes.clone();
+    let last = broken.len() - 4 * steps;
+    let code = u32::from_le_bytes(broken[last..last + 4].try_into().unwrap());
+    broken[last..last + 4].copy_from_slice(&(code ^ 1).to_le_bytes());
+    assert!(Graph::from_bytes(&broken).unwrap().check().is_err());
+}
+
+/// The same trip found both ways: the best of all, and over the layer.
+fn both(by: RouteBy, avoid_motorways: bool) -> (Track, Track, u32, u32) {
+    let o = RouteOptions {
+        by,
+        avoid_motorways,
+    };
+    let (from, to) = (at(0.0, 700.0), at(60_000.0, 700.0));
+    let plain = country(0);
+    let layered = country(crate::NEAR_M);
+    let p = plain.route_with(from, None, to, &o).unwrap();
+    let l = layered.route_with(from, None, to, &o).unwrap();
+    (p, l, plain.last_settled(), layered.last_settled())
+}
+
+#[test]
+fn a_long_trip_runs_on_the_main_roads_far_from_both_ends() {
+    // The fastest: the motorway, both ways the same route, turn by turn,
+    // the layer's search settling fewer junctions (not many fewer here:
+    // N1's run is 52 km long, followed node by node from where the
+    // start's surroundings end).
+    let (p, l, ps, ls) = both(RouteBy::Fastest, false);
+    assert_eq!(p.line(), l.line());
+    assert_eq!(turns(&p), turns(&l));
+    assert_eq!(p.duration(), l.duration());
+    assert!(turns(&l).iter().any(|t| t.1 == "A1"), "{:?}", turns(&l));
+    assert!(ls < ps, "{ls} settled on the layer, {ps} without");
+    // Off motorways: N1, but the back road across the bend is 15 km from
+    // either end, so the layer's route keeps to N1, a little longer.
+    let (p, l, _, _) = both(RouteBy::Fastest, true);
+    assert!(turns(&p).iter().any(|t| t.1 == "Chemin"), "{:?}", turns(&p));
+    assert!(!turns(&l).iter().any(|t| t.1 == "Chemin" || t.1 == "A1"));
+    assert!(l.duration() > p.duration());
+    assert!(l.duration() < p.duration() * 11 / 10);
+    // The shortest likewise: N1 with the bend, the motorway is longer.
+    let (p, l, _, _) = both(RouteBy::Shortest, false);
+    assert!(turns(&p).iter().any(|t| t.1 == "Chemin"));
+    assert!(!turns(&l).iter().any(|t| t.1 == "A1"));
+    assert!(l.metres() > p.metres() && l.metres() < p.metres() * 11 / 10);
+}
+
+#[test]
+fn the_layer_comes_down_to_a_goal_in_the_middle_of_a_main_road() {
+    // A village street at 49 km: in the middle of N1's run from the link
+    // at 4 km to the one at 56, 7 km from either junction of the layer.
+    // The fastest way is the motorway, then back along N1 from 56 km:
+    // the search comes down off the layer at 56 km to follow N1.
+    let plain = country(0);
+    let layered = country(crate::NEAR_M);
+    let (from, to) = (at(0.0, 700.0), at(49_000.0, 450.0));
+    let p = plain.route(from, None, to).unwrap();
+    let l = layered.route(from, None, to).unwrap();
+    assert!(turns(&l).iter().any(|t| t.1 == "A1"), "{:?}", turns(&l));
+    assert_eq!(p.line(), l.line());
+    assert_eq!(turns(&p), turns(&l));
+    // Off motorways: N1 all the way.
+    let o = RouteOptions {
+        by: RouteBy::Fastest,
+        avoid_motorways: true,
+    };
+    let l = layered.route_with(from, None, to, &o).unwrap();
+    assert!(!turns(&l).iter().any(|t| t.1 == "A1"), "{:?}", turns(&l));
+    // And back, starting there.
+    let p = plain.route(to, None, from).unwrap();
+    let l = layered.route(to, None, from).unwrap();
+    assert_eq!(p.line(), l.line());
+}
+
+#[test]
+fn a_start_far_from_any_main_road_still_finds_its_route() {
+    // A lane 8 km long to N1 at 0 km: more than NEAR_M of minor road
+    // before the first main road. The search finds nothing within NEAR_M
+    // of the ends, then the way within four times that.
+    let (mut nodes, mut roads) = a_country();
+    nodes.push(at(-8000.0, 800.0));
+    let far = nodes.len() as u32 - 1;
+    roads.push(road(far, 0, "Chemin Long"));
+    let g = Graph::from_bytes(&write(&nodes, &roads)).unwrap();
+    g.check().unwrap();
+    let r = Router::new(g, None);
+    let t = r
+        .route(at(-7990.0, 800.0), None, at(60_000.0, 700.0))
+        .unwrap();
+    assert!(f64::from(t.metres()) > 68_000.0);
+    assert_eq!(turns(&t).last().unwrap().0, Turn::Arrive);
 }
 
 #[test]
@@ -715,7 +976,7 @@ fn routing_cost() {
             },
         ),
     ];
-    println!("{} speed cameras", r.graph().cameras());
+    println!("{} speed cameras", r.cameras());
     for round in 0..2 {
         for (mode, options) in modes {
             for (name, from, to) in drives {

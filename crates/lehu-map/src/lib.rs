@@ -29,6 +29,7 @@
 //! (`scripts/map-graph.py`) and mapped from the card: see [`Router`].
 
 mod blob;
+mod cameras;
 mod drive;
 mod glyphs;
 mod graph;
@@ -45,8 +46,9 @@ mod view;
 mod viewer;
 pub mod voice;
 
+pub use cameras::{CAMERAS_FILE, Camera, Cameras};
 pub use drive::Drive;
-pub use graph::{Camera, Graph, ROADS_FILE, RouteBy, RouteOptions, Snap};
+pub use graph::{Graph, NEAR_M, ROADS_FILE, RouteBy, RouteOptions, Snap};
 pub use route::Router;
 pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
 pub use tileset::TileSet;

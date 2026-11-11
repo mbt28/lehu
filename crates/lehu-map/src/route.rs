@@ -5,9 +5,11 @@
 //! a drive with its turns, as scripts/route-gpx.py makes one on a PC.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
+use crate::cameras::Cameras;
 use crate::graph::{Graph, RoadPath, RouteBy, RouteOptions, Work};
 use crate::search::{Found as Place, FoundKind, Places};
 use crate::track::{Leg, LegCamera, LegStep, Track, Turn, metres_per_px};
@@ -19,14 +21,19 @@ const TURN_SPAN_M: f64 = 15.0;
 pub struct Router {
     graph: Graph,
     places: Option<Places>,
+    cameras: Option<Cameras>,
     checked: OnceLock<Result<(), String>>,
     work: Mutex<Work>,
+    /// The junctions the last search settled (the bench's).
+    settled: AtomicU32,
 }
 
 impl Router {
-    /// `roads.bin` and, when it is there, `places.bin` in `dir`, mapped.
+    /// `roads.bin` and, when they are there, `places.bin` and
+    /// `cameras.bin` in `dir`, mapped.
     pub fn open(dir: &Path) -> Result<Self, String> {
         let graph = Graph::open(dir)?;
+        let cameras = Cameras::open(dir, &graph);
         let places = match Places::open(dir) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -35,31 +42,45 @@ impl Router {
             }
         };
         log::info!(
-            "map: {} junctions and {} roads to route over, {} speed cameras, {} names, {} fuel, {} parking, {} charging",
+            "map: {} junctions and {} roads to route over ({} junctions of main roads), {} speed cameras, {} names, {} fuel, {} parking, {} charging",
             graph.nodes(),
             graph.edges(),
-            graph.cameras(),
+            graph.layer_junctions(),
+            cameras.as_ref().map_or(0, Cameras::len),
             places.as_ref().map_or(0, Places::len),
             places.as_ref().map_or(0, |p| p.count(FoundKind::Fuel)),
             places.as_ref().map_or(0, |p| p.count(FoundKind::Parking)),
             places.as_ref().map_or(0, |p| p.count(FoundKind::Charging)),
         );
-        Ok(Self::new(graph, places))
+        Ok(Self::new(graph, places).with_cameras(cameras))
     }
 
     pub fn new(graph: Graph, places: Option<Places>) -> Self {
         Self {
             graph,
             places,
+            cameras: None,
             checked: OnceLock::new(),
             work: Mutex::new(Work::default()),
+            settled: AtomicU32::new(0),
         }
+    }
+
+    /// The speed cameras along the routes found, when there are any.
+    pub fn with_cameras(mut self, cameras: Option<Cameras>) -> Self {
+        self.cameras = cameras;
+        self
+    }
+
+    /// How many speed cameras there are.
+    pub fn cameras(&self) -> usize {
+        self.cameras.as_ref().map_or(0, Cameras::len)
     }
 
     /// Check the road network now rather than at the first route, which
     /// then starts at once; reading it all also brings the file in from
     /// the card. Meant for a thread of its own: it takes ~0.4 s on the
-    /// board.
+    /// board for Luxembourg; Hungary's roads.bin is ten times as large.
     pub fn prepare(&self) {
         let _ = self.checked.get_or_init(|| self.graph.check());
     }
@@ -135,8 +156,9 @@ impl Router {
                 .route_with(&start, heading, &end, options, &mut work)
         }
         .ok_or("No route there")?;
+        self.settled.store(path.settled, Ordering::Relaxed);
         let searched = began.elapsed();
-        let leg = leg(&self.graph, &path);
+        let leg = leg(&self.graph, self.cameras.as_ref(), &path);
         if leg.points.len() < 2 {
             return Err("We are there".into());
         }
@@ -162,6 +184,11 @@ impl Router {
             }
         );
         Ok(track)
+    }
+
+    /// The junctions the last route's search settled.
+    pub fn last_settled(&self) -> u32 {
+        self.settled.load(Ordering::Relaxed)
     }
 
     pub fn graph(&self) -> &Graph {
@@ -198,13 +225,12 @@ impl Line {
 
 /// The points of the route, its steps' speeds and limits, its turns and
 /// the speed cameras along it.
-pub(crate) fn leg(graph: &Graph, path: &RoadPath) -> Leg {
+pub(crate) fn leg(graph: &Graph, cams: Option<&Cameras>, path: &RoadPath) -> Leg {
     let line = line(graph, path);
     let turns = turns(graph, &line);
-    let cameras = if graph.cameras() > 0 {
-        cameras(graph, path, &line)
-    } else {
-        Vec::new()
+    let cameras = match cams {
+        Some(c) if !c.is_empty() => cameras(graph, c, path, &line),
+        _ => Vec::new(),
     };
     let steps = line
         .edge
@@ -228,7 +254,7 @@ pub(crate) fn leg(graph: &Graph, path: &RoadPath) -> Leg {
 
 /// The speed cameras the route passes that watch the way it goes, in
 /// order, each on the step of the line nearest it.
-fn cameras(graph: &Graph, path: &RoadPath, line: &Line) -> Vec<LegCamera> {
+fn cameras(graph: &Graph, cams: &Cameras, path: &RoadPath, line: &Line) -> Vec<LegCamera> {
     // The pieces of edges the route drives: (edge, towards b, from, to)
     // in decimetres from the edge's a.
     let (s, t) = (path.start, path.end);
@@ -261,8 +287,8 @@ fn cameras(graph: &Graph, path: &RoadPath, line: &Line) -> Vec<LegCamera> {
             .find(|&i| line.edge[i] != edge)
             .unwrap_or(line.edge.len());
         from = end;
-        let mut here: Vec<LegCamera> = graph
-            .cameras_on(edge)
+        let mut here: Vec<LegCamera> = cams
+            .on(edge)
             .filter(|c| (lo..=hi).contains(&c.from_a_dm))
             .filter(|c| if forward { c.forward } else { c.backward })
             .map(|c| {

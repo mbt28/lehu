@@ -14,21 +14,25 @@ same way (its road classes, maxspeed, one-way streets and roundabouts), so
 both find the same routes.
 
 roads.bin is the road network as junctions and the roads between them,
-the motorways marked (so routes can avoid them), with the speed cameras on
-it; places.bin the street names, each with a point on the street and the
-town or village it is in, the places' own names, and the filling
-stations, public car parks and charging stations (found nearest, not by
-name). Both files are little
+the motorways marked (so routes can avoid them), and the main roads again
+as a network of their own (the layer, which long routes are found on);
+cameras.bin the speed cameras on it, tied to that roads.bin by its build
+ID (a hash of its contents), so they can be replaced alone; places.bin the
+street names, each with a point on the street and the town or village it
+is in, the places' own names, and the filling stations, public car parks
+and charging stations (found nearest, not by name). The files are little
 endian and made of 32-bit words, so the board maps them and reads them in
 place; the layout is written out in docs/map.md and in
-crates/lehu-map/src/graph.rs and search.rs. Luxembourg makes about 7 MB and
-1 MB in a minute. It needs pyosmium (python3 -m venv v && v/bin/pip install
-osmium).
+crates/lehu-map/src/graph.rs, cameras.rs and search.rs. Luxembourg makes
+about 7 MB and 0.5 MB in half a minute, Hungary 69 MB and 4 MB in about
+five minutes and 2.2 GB of memory. It needs pyosmium (python3 -m venv v &&
+v/bin/pip install osmium).
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import math
 import os
@@ -69,10 +73,23 @@ KIND_STREET, KIND_PLACE = 0, 1
 
 ROADS_MAGIC = b"LEHUROAD"
 PLACES_MAGIC = b"LEHUFIND"
-ROADS_VERSION = 2
+CAMERAS_MAGIC = b"LEHUCAMS"
+ROADS_VERSION = 3
 PLACES_VERSION = 2
+CAMERAS_VERSION = 1
 # The classes a route avoiding motorways keeps off.
 MOTORWAY = ("motorway", "motorway_link")
+# The main roads: far from both ends of a route, the board searches only
+# these, over a smaller network of their own (the layer: the junctions
+# where main roads meet, the roads between them joined into one).
+MAIN = ("motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
+        "secondary", "secondary_link")
+# A node's word of how many roads meet there holds this many bits; above
+# them, its place in the layer (+ 1, 0 when it is not in it).
+DEGREE_BITS = 8
+# An arc's edge word: edge * 2 + 1 when it runs b to a, + this when the
+# edge is a main road.
+ARC_MAIN = 1 << 31
 # A speed camera further than this from any road is left out, metres.
 CAMERA_SNAP_M = 50
 # The points of interest found nearest (Map > Go to): their categories in
@@ -391,21 +408,34 @@ def write_roads(path, ex, edges, keep):
     arcs = [[] for _ in order]
     degree = [0] * len(order)
     ms = []
+    main = []
     for e, (a, b, between, m, s, fwd, bwd, wi) in enumerate(edges):
         t = max(1, round(s * 1000))
         ms.append(t)
+        is_main = ex.ways[wi][7] in MAIN
+        main.append(is_main)
+        flag = ARC_MAIN if is_main else 0
         ia, ib = number[a], number[b]
         if fwd:
-            arcs[ia].append((ib, t, e * 2))
+            arcs[ia].append((ib, t, e * 2 | flag))
         if bwd:
-            arcs[ib].append((ia, t, e * 2 + 1))
+            arcs[ib].append((ia, t, e * 2 + 1 | flag))
         degree[ia] += 1
         degree[ib] += 1
+    assert len(edges) < 1 << 30
+
+    ends = [(number[e[0]], number[e[1]], e[5], e[6]) for e in edges]
+    dms = [max(1, round(e[3] * 10)) for e in edges]
+    motorway = [ex.ways[e[7]][7] in MOTORWAY for e in edges]
+    layer, layer_node_words, layer_arc_words, unpack_words = main_layer(
+        len(order), ends, main, ms, dms, motorway, [world_of[n] for n in order])
+
     node_words = []
     first = 0
     for i, n in enumerate(order):
         x, y = world_of[n]
-        node_words += [x, y, first, degree[i]]
+        node_words += [x, y, first, min(degree[i], (1 << DEGREE_BITS) - 1)
+                       | (layer.get(i, -1) + 1) << DEGREE_BITS]
         first += len(arcs[i])
     node_words += [0, 0, first, 0]  # the end of the last node's arcs
     arc_words = [w for out in arcs for arc in out for w in arc]
@@ -470,20 +500,139 @@ def write_roads(path, ex, edges, keep):
     sections = [
         u32s(node_words), u32s(arc_words), u32s(edge_words), u32s(shape_x), u32s(shape_y),
         u32s(kind_words), u32s(cell_first), u32s(cell_edges), names.padded(),
-        u32s([w for c in camera_words for w in c]),
+        u32s(layer_node_words), u32s(layer_arc_words), u32s(unpack_words),
     ]
+    # The build's ID, which cameras.bin names: a hash of what follows the
+    # header, so the same network always has the same one.
+    digest = hashlib.blake2b(digest_size=8)
+    for s in sections:
+        digest.update(s)
+    build_id = int.from_bytes(digest.digest(), "little")
+    layer_nodes = len(layer_node_words) // LAYER_NODE - 1
+    layer_arcs = len(layer_arc_words) // LAYER_ARC - 1
     header = ROADS_MAGIC + u32s([
         ROADS_VERSION, len(order), len(arc_words) // 3, len(edges), len(shape_x), len(kinds),
         len(cell_edges), len(names.blob), x0, y0, GRID_SHIFT, cols, rows, h_q16, round(top),
-        len(camera_words), round(top_other), 0,
+        0, round(top_other), 0, build_id & 0xFFFFFFFF, build_id >> 32, layer_nodes, layer_arcs,
+        len(unpack_words), 0,
     ])
-    assert len(header) == 80
+    assert len(header) == 4 * ROADS_HEADER
     with open(path + ".tmp", "wb") as f:
         f.write(header)
         for s in sections:
             f.write(s)
     os.replace(path + ".tmp", path)
-    return len(order), len(edges), len(shape_x), len(kinds), cols * rows, len(camera_words), top
+
+    cameras = os.path.join(os.path.dirname(path), "cameras.bin")
+    with open(cameras + ".tmp", "wb") as f:
+        f.write(CAMERAS_MAGIC + u32s([CAMERAS_VERSION, len(camera_words), build_id & 0xFFFFFFFF,
+                                      build_id >> 32]))
+        f.write(u32s([w for c in camera_words for w in c]))
+    os.replace(cameras + ".tmp", cameras)
+    return {"junctions": len(order), "roads": len(edges), "shape points": len(shape_x),
+            "road names": len(kinds), "grid cells": cols * rows, "speed cameras": len(camera_words),
+            "top km/h": top, "layer junctions": layer_nodes, "layer roads": layer_arcs,
+            "layer steps": len(unpack_words), "build": f"{build_id:016x}"}
+
+
+# The layer's records, in words: a junction (its node, x, y, its first
+# road), a road (the junction it leads to, milliseconds, decimetres, the
+# milliseconds and decimetres of it that are motorway, its first step).
+LAYER_NODE = 4
+LAYER_ARC = 6
+ROADS_HEADER = 26
+
+
+def main_layer(nodes, ends, main, ms, dms, motorway, xy):
+    """The main roads as a network of their own: its junctions are the
+    nodes where main roads meet other than two in a row (or where the way
+    they may be driven changes), and each of its roads the main roads from
+    one junction to the next, with the edges they are made of (its steps,
+    edge * 2 + 1 when it runs b to a). Returns the junctions' places in it
+    by node, and its three sections' words."""
+    touching = {}
+    for e, on in enumerate(main):
+        if on:
+            a, b = ends[e][0], ends[e][1]
+            touching.setdefault(a, []).append(e)
+            touching.setdefault(b, []).append(e)
+
+    def leaves(e, n):
+        a, b, fwd, bwd = ends[e]
+        return (fwd and a == n) or (bwd and b == n)
+
+    def enters(e, n):
+        a, b, fwd, bwd = ends[e]
+        return (fwd and b == n) or (bwd and a == n)
+
+    def other(e, n):
+        a, b = ends[e][0], ends[e][1]
+        return b if a == n else a
+
+    def interior(n):
+        es = touching[n]
+        if len(es) != 2 or es[0] == es[1]:
+            return False
+        e1, e2 = es
+        # In through e1 and out through e2 as the chain runs, and against.
+        return (enters(e1, n), leaves(e1, n)) == (leaves(e2, n), enters(e2, n))
+
+    junction = {n for n in touching if not interior(n)}
+    seen = [False] * len(main)
+    roads = []  # (from node, to node, steps)
+
+    def walk(j, e):
+        steps, n, along, against = [], j, True, True
+        while True:
+            seen[e] = True
+            back = ends[e][1] == n and ends[e][0] != n
+            along &= leaves(e, n)
+            nxt = other(e, n)
+            against &= enters(e, n)
+            steps.append(e * 2 + back)
+            n = nxt
+            if n in junction:
+                break
+            es = touching[n]
+            e = es[1] if es[0] == e else es[0]
+        if n == j:
+            return  # a loop back to where it began: no route needs it
+        if along:
+            roads.append((j, n, steps))
+        if against:
+            roads.append((n, j, [s ^ 1 for s in reversed(steps)]))
+
+    for j in sorted(junction):
+        for e in touching[j]:
+            if not seen[e]:
+                walk(j, e)
+    # Rings of main roads with no junction on them: one made at a node.
+    for e, on in enumerate(main):
+        if on and not seen[e]:
+            j = ends[e][0]
+            junction.add(j)
+            walk(j, e)
+
+    order = sorted(junction)
+    place = {n: i for i, n in enumerate(order)}
+    out = [[] for _ in order]
+    for f, t, steps in roads:
+        out[place[f]].append((place[t], steps))
+    node_words, arc_words, unpack = [], [], []
+    first = 0
+    for i, n in enumerate(order):
+        node_words += [n, xy[n][0], xy[n][1], first]
+        first += len(out[i])
+    node_words += [0, 0, 0, first]
+    for i in range(len(order)):
+        for t, steps in out[i]:
+            edges_ = [s >> 1 for s in steps]
+            arc_words += [t, sum(ms[e] for e in edges_), sum(dms[e] for e in edges_),
+                          sum(ms[e] for e in edges_ if motorway[e]),
+                          sum(dms[e] for e in edges_ if motorway[e]), len(unpack)]
+            unpack += steps
+    arc_words += [0, 0, 0, 0, 0, len(unpack)]
+    return place, node_words, arc_words, unpack
 
 
 def place_cameras(ex, edges, world_of, cells, grid):
@@ -696,10 +845,10 @@ def main():
     keep = strongest(nodes, edges)
     print(f"{len(nodes)} junctions, {len(keep)} of them connected both ways", flush=True)
     roads = os.path.join(a.out, "roads.bin")
-    n, e, s, k, c, cams, top = write_roads(roads, ex, edges, keep)
-    print(f"{roads}: {n} junctions, {e} roads, {s} shape points, {k} road names, "
-          f"{c} grid cells, {cams} speed cameras, top {top:.0f} km/h; "
-          f"{os.path.getsize(roads) / 1e6:.1f} MB", flush=True)
+    counts = write_roads(roads, ex, edges, keep)
+    print(f"{roads}: " + ", ".join(f"{v} {k}" for k, v in counts.items())
+          + f"; {os.path.getsize(roads) / 1e6:.1f} MB, cameras.bin "
+          f"{os.path.getsize(os.path.join(a.out, 'cameras.bin')) / 1e3:.1f} kB", flush=True)
     # A street is found on the part of the network a route can reach.
     on_network = set(keep)
     for a_, b_, between, *_r in edges:
