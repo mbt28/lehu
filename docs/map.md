@@ -663,13 +663,24 @@ large region); the result is kept in `~/.lehu/map-checks`, the partition
 being read only, and a region that fails is shown as damaged from then
 on. A folder from before there was a `data-version` is read as before.
 
-**Getting a region onto the card.** The PC tool, `tools/lehu-maps`, is
-the way: it downloads the extract, builds the region with
-`scripts/map-region.py` (`--progress` tells it how far along it is,
-`--estimate` how large and how long beforehand) and writes it to the
-card's LEHU-MAPS partition. By hand, build the region ([Making a
-map](#making-a-map)) and copy its folder to the partition, with the card
-in the PC's reader:
+### Getting maps onto the card
+
+The PC tool, [`tools/lehu-maps`](../tools/lehu-maps/README.md), is the
+way: a small window (Linux, Windows, macOS) where you pick a region from
+Geofabrik's list and a voice, and press **Write to card**. It downloads
+the extract (continuing one that stopped, checked by its md5), sets up
+its own Python environment, builds the region with
+`scripts/map-region.py` (`--estimate` first, to check the card's room;
+`--progress` for its bar), makes the voice's clips with
+`scripts/voice-clips.py`, and writes both to the card's LEHU-MAPS drive:
+into `.incoming/` first, every file read back and checked against its
+sha256, then renamed into place. Built regions are cached, so a second
+card is quick. It lists what is on the card, with Remove, and never
+partitions or formats anything. `cd tools/lehu-maps && cargo run
+--release` from a LEHU checkout.
+
+By hand, build the region ([Making a map](#making-a-map)) and copy its
+folder to the partition, with the card in the PC's reader:
 
 - **Windows:** put the card in a reader. Windows shows a drive called
   LEHU-MAPS (and offers to format the card's other partitions: say no).
