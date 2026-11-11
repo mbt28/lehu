@@ -235,6 +235,36 @@ pub struct Destination {
     pub place: bool,
 }
 
+/// What Map > Go to finds the nearest of, besides names: its number is
+/// `Bridge.dest-near`'s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nearby {
+    /// Filling stations.
+    Fuel,
+    /// Public car parks.
+    Parking,
+    /// Charging stations for electric cars.
+    Charging,
+}
+
+impl Nearby {
+    /// In the order Go to offers them.
+    pub const ALL: [Nearby; 3] = [Nearby::Fuel, Nearby::Parking, Nearby::Charging];
+
+    /// As the screens number it (0 is none).
+    pub fn id(self) -> i32 {
+        match self {
+            Nearby::Fuel => 1,
+            Nearby::Parking => 2,
+            Nearby::Charging => 3,
+        }
+    }
+
+    pub fn from_id(id: i32) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+}
+
 /// A place kept for the map's menu, one choice away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapSlot {
@@ -521,6 +551,15 @@ pub trait Host {
     fn map_destinations(&self) -> &[Destination] {
         &[]
     }
+    /// There are places of this kind to find the nearest of.
+    fn map_can_find(&self, _kind: Nearby) -> bool {
+        false
+    }
+    /// The `limit` nearest places of a kind to where we are, the nearest
+    /// first, as a search: they are `map_destinations` from now, each
+    /// with a few words and how far ("Aral · 1.2 km"). None when where we
+    /// are is not known.
+    fn map_nearest(&mut self, _kind: Nearby, _limit: usize) {}
     /// Find the route from where we are to one of them, on a thread of
     /// its own; `map_route_poll` says how it goes.
     fn map_go(&mut self, _index: usize) {}

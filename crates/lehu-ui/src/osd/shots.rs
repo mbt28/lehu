@@ -697,4 +697,41 @@ fn shots() {
     s.key(OsdKey::Ok);
     s.keys(OsdKey::Next, 2);
     s.save("93-map-menu-night");
+
+    // ── Go to: the nearest fuel, parking and charging ──
+    let nearby = |h: &mut TestHost| {
+        use crate::host::Nearby;
+        let d = |name: &str, detail: &str| crate::host::Destination {
+            name: name.into(),
+            detail: detail.into(),
+            place: false,
+        };
+        names(h);
+        h.map_nearby = vec![
+            (Nearby::Fuel, d("Aral Bertrange", "Aral · 1.2 km")),
+            (Nearby::Fuel, d("Shell Strassen", "Shell · 2.4 km")),
+            (Nearby::Fuel, d("Station Total Helfent", "TotalEnergies · 3.0 km")),
+            (Nearby::Fuel, d("Q8 Route d'Arlon", "Q8 · 3.8 km")),
+            (Nearby::Fuel, d("Esso Mamer", "Esso · 6.1 km")),
+            (Nearby::Parking, d("Parking Knuedler", "Underground, 400 spaces · 350 m")),
+            (Nearby::Charging, d("Chargy Gare", "4 points, 22 kW · 900 m")),
+            (Nearby::Charging, d("Charging station", "2 points · 1.4 km")),
+        ];
+    };
+    let mut s = Shot::new(base_host());
+    nearby(s.osd.host_mut());
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.save("94-go-to-nearby");
+    s.key(OsdKey::Ok);
+    s.save("95-go-to-nearest-fuel");
+    let mut s = Shot::new(night_host());
+    nearby(s.osd.host_mut());
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_dest_nearby(3);
+    s.tick();
+    s.save("96-go-to-nearest-charging-night");
 }

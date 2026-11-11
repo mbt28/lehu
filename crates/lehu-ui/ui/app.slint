@@ -278,6 +278,12 @@ export global Bridge {
     in property <bool> dest-busy;             // the route is being found: taps wait
     in property <[DestRow]> dest-rows;        // the list
     in property <[DestRow]> dest-top;         // the best two, over the keyboard
+    // Go to's nearest fuel, parking, charging: which there are, and the
+    // one listed (Nearby: 1 fuel, 2 parking, 3 charging; 0 none).
+    in property <bool> dest-can-fuel;
+    in property <bool> dest-can-parking;
+    in property <bool> dest-can-charging;
+    in property <int> dest-near;
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -303,6 +309,7 @@ export global Bridge {
     callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
     callback dest-pick(int);                  // a tap on a destination: drive there
     callback dest-type();                     // from the list back to the keyboard
+    callback dest-nearby(int);                // list the nearest of a kind (Nearby)
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -2877,12 +2884,40 @@ component DestRowView inherits Rectangle {
     }
 }
 
+// One of Go to's kinds of place to find the nearest of: an icon over its
+// name, side by side with the others; the one listed has the accent edge.
+component NearTile inherits RowBase {
+    in property <string> icon;
+    in property <string> label;
+    // As wide as the others whatever its word.
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    min-width: 0px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: center;
+            Icon { kind: root.icon; ink: root.active ? Theme.text : Theme.dim; }
+        }
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
 // Map > Go to: a destination by name. While typing, the keyboard fills
 // the lower half and the two best matches sit over it, a tap away; its OK
 // (List) shows them all as rows the ring walks. Before anything is typed
-// the list shows the recent destinations. A tap on one finds the route and
-// goes back to the map, which drives it; Cancel and Back go back without.
-// Keys and their ring positions follow Osk (row, col), as in the editor.
+// the list shows the recent destinations, and under the search row the
+// kinds of place to find the nearest of (fuel, parking, charging): one
+// lists the nearest instead, Back the recent ones again. A tap on one
+// finds the route and goes back to the map, which drives it; Cancel and
+// Back go back without. Keys and their ring positions follow Osk (row,
+// col), as in the editor.
 component ScreenDest inherits Rectangle {
     background: Theme.bg;
     if Bridge.dest-typing: VerticalLayout {
@@ -2952,10 +2987,41 @@ component ScreenDest inherits Rectangle {
             label: Bridge.dest-query == "" ? "Type a street or a place" : Bridge.dest-query;
             clicked => { Bridge.dest-type(); }
         }
-        if Bridge.dest-caption != "": Caption { text: Bridge.dest-caption; }
+        // The nearest fuel, parking or charging, those there are.
+        if !Bridge.dest-choosing
+            && (Bridge.dest-can-fuel || Bridge.dest-can-parking || Bridge.dest-can-charging):
+            HorizontalLayout {
+                spacing: Theme.gap;
+                if Bridge.dest-can-fuel: NearTile {
+                    ring-key: "near-1";
+                    icon: "search";
+                    label: "Fuel";
+                    active: Bridge.dest-near == 1;
+                    clicked => { Bridge.dest-nearby(1); }
+                }
+                if Bridge.dest-can-parking: NearTile {
+                    ring-key: "near-2";
+                    icon: "search";
+                    label: "Parking";
+                    active: Bridge.dest-near == 2;
+                    clicked => { Bridge.dest-nearby(2); }
+                }
+                if Bridge.dest-can-charging: NearTile {
+                    ring-key: "near-3";
+                    icon: "bolt";
+                    label: "Charging";
+                    active: Bridge.dest-near == 3;
+                    clicked => { Bridge.dest-nearby(3); }
+                }
+            }
+        if Bridge.dest-near > 0: Caption {
+            text: (Bridge.dest-near == 1 ? "Fuel" : Bridge.dest-near == 2 ? "Parking" : "Charging")
+                + " · " + Bridge.dest-caption;
+        }
+        if Bridge.dest-near == 0 && Bridge.dest-caption != "": Caption { text: Bridge.dest-caption; }
         for r[i] in Bridge.dest-rows: NavRow {
             ring-key: "dest-" + i;
-            icon: r.place ? "map" : "navigation";
+            icon: Bridge.dest-near == 3 ? "bolt" : r.place ? "map" : "navigation";
             label: r.name;
             detail: r.detail;
             label-color: Bridge.dest-busy ? Theme.dim : Theme.text;
@@ -2963,7 +3029,8 @@ component ScreenDest inherits Rectangle {
             clicked => { Bridge.dest-pick(i); }
         }
         // Under the recent ones, quietly: Home and Work chosen again.
-        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.map-home-set: NavRow {
+        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.dest-near == 0
+            && Bridge.map-home-set: NavRow {
             ring-key: "dest-home";
             icon: "home";
             label: "Change Home";
@@ -2971,7 +3038,8 @@ component ScreenDest inherits Rectangle {
             more: false;
             clicked => { Bridge.dest-change(0); }
         }
-        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.map-work-set: NavRow {
+        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.dest-near == 0
+            && Bridge.map-work-set: NavRow {
             ring-key: "dest-work";
             icon: "work";
             label: "Change Work";

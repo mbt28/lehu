@@ -3036,6 +3036,76 @@ fn go_to_types_with_a_remote_and_picks_with_the_knob() {
     assert!(osd.host().has(&Call::MapGo(0)));
 }
 
+#[test]
+fn go_to_lists_the_nearest_fuel_parking_or_charging() {
+    use crate::host::Nearby;
+    let mut host = with_names();
+    host.map_nearby = vec![
+        (Nearby::Fuel, dest("Aral Bertrange", "Aral · 1.2 km")),
+        (Nearby::Fuel, dest("Shell Strassen", "Shell · 2.4 km")),
+        (Nearby::Charging, dest("Chargy Gare", "4 points, 22 kW · 900 m")),
+    ];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    // Nothing recent, but places to find: the list, with the kinds there
+    // are.
+    assert!(!br(&osd).get_dest_typing());
+    assert!(br(&osd).get_dest_can_fuel());
+    assert!(!br(&osd).get_dest_can_parking());
+    assert!(br(&osd).get_dest_can_charging());
+    assert_eq!(br(&osd).get_dest_near(), 0);
+    // The knob walks them in the list's order, between the search row and
+    // the destinations.
+    let mut stops = Vec::new();
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(stops, ["back", "dest-type", "near-1", "near-3"]);
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(ring(&osd), "near-1");
+    // A click lists the nearest fuel, nearest first; the ring stays.
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapNearest(Nearby::Fuel, 8)));
+    assert_eq!(br(&osd).get_dest_near(), 1);
+    assert_eq!(dest_rows(&osd, false), ["Aral Bertrange", "Shell Strassen"]);
+    assert_eq!(prop!(osd, get_dest_caption), "nearest first");
+    assert_eq!(ring(&osd), "near-1");
+    // Back: the recent ones again (none), still on Go to; Back again
+    // leaves.
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), DEST);
+    assert_eq!(br(&osd).get_dest_near(), 0);
+    assert!(dest_rows(&osd, false).is_empty());
+    assert_eq!(prop!(osd, get_dest_caption), "Type a street or a place");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), MAP);
+    // By touch: a tap on Charging lists them, a tap on one drives there.
+    goto(&mut osd, DEST);
+    br(&osd).invoke_dest_nearby(3);
+    tick(&mut osd);
+    assert_eq!(dest_rows(&osd, false), ["Chargy Gare"]);
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGo(0)));
+}
+
+#[test]
+fn choosing_home_offers_no_nearest_places() {
+    use crate::host::Nearby;
+    let mut host = with_names();
+    host.map_nearby = vec![(Nearby::Parking, dest("Knuedler", "400 spaces · 350 m"))];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(3);
+    tick(&mut osd);
+    assert!(br(&osd).get_dest_choosing());
+    assert!(br(&osd).get_dest_typing(), "nothing to choose from: typing");
+}
+
 // ── the map's menu, Home and Work ────────────────────────────────────────
 
 fn window(osd: &Osd<TestHost>) -> (u32, u32, u32, u32) {

@@ -16,8 +16,8 @@ use lehu_map::{
 };
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host, KnownDevice, Media,
-    MediaKey, NavArrow, NavCard, Power, Prompt, RouteStage, SystemNames, Update, UpdateOutcome,
-    UpdateStage,
+    MediaKey, NavArrow, NavCard, Nearby, Power, Prompt, RouteStage, SystemNames, Update,
+    UpdateOutcome, UpdateStage,
 };
 use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
@@ -938,27 +938,6 @@ impl AppHost {
         track.camera_ahead(ms, within).map(|(_, metres)| metres)
     }
 
-    /// Go to's list filled with the `limit` nearest points of interest of
-    /// a category (FoundKind::Fuel, Parking or Charging) to where we are,
-    /// the nearest first, as map_search fills it: the screens show them
-    /// with map_destinations and drive to one with map_go. Empty when
-    /// where we are is not known or the data has none.
-    #[allow(dead_code)] // for the screens, which do not ask yet
-    pub fn map_nearest(&mut self, kind: FoundKind, limit: usize) {
-        let near = self.map_here().0;
-        self.map_found = match (&self.map_router, near) {
-            (Some(r), Some(near)) => r.nearest(kind, near, limit),
-            _ => Vec::new(),
-        };
-        self.map_dests = self.map_found.iter().map(destination).collect();
-    }
-
-    /// There are points of interest of this category to find.
-    #[allow(dead_code)] // for the screens, which do not ask yet
-    pub fn map_can_find(&self, kind: FoundKind) -> bool {
-        self.map_router.as_ref().is_some_and(|r| r.count(kind) > 0)
-    }
-
     /// Once a minute: day or night by the sun, where we are (the drive's
     /// position, the map's, map.fake-position, else where the map was
     /// left), once the clock is set. The map turns to its night tiles or
@@ -1539,6 +1518,24 @@ impl Host for AppHost {
         self.map_dests = self.map_found.iter().map(destination).collect();
     }
 
+    /// Go to's list filled with the `limit` nearest points of interest of
+    /// a kind to where we are, the nearest first, as map_search fills it.
+    /// Empty when where we are is not known or the data has none.
+    fn map_nearest(&mut self, kind: Nearby, limit: usize) {
+        let near = self.map_here().0;
+        self.map_found = match (&self.map_router, near) {
+            (Some(r), Some(near)) => r.nearest(found_kind(kind), near, limit),
+            _ => Vec::new(),
+        };
+        self.map_dests = self.map_found.iter().map(destination).collect();
+    }
+
+    fn map_can_find(&self, kind: Nearby) -> bool {
+        self.map_router
+            .as_ref()
+            .is_some_and(|r| r.count(found_kind(kind)) > 0)
+    }
+
     fn map_destinations(&self) -> &[Destination] {
         &self.map_dests
     }
@@ -1964,12 +1961,21 @@ fn place_of(f: &Found) -> settings::MapPlace {
     }
 }
 
+/// What the screens' kind of place is in the map's data.
+fn found_kind(kind: Nearby) -> FoundKind {
+    match kind {
+        Nearby::Fuel => FoundKind::Fuel,
+        Nearby::Parking => FoundKind::Parking,
+        Nearby::Charging => FoundKind::Charging,
+    }
+}
+
 /// A destination as Go to shows it: the name, and under it the town (when
-/// it is not the name itself) and how far; a point of interest its
-/// category, its detail and how far ("Fuel · Aral · 1.2 km").
+/// it is not the name itself) and how far; a point of interest, listed
+/// under its kind, its detail and how far ("Aral · 1.2 km").
 fn destination(f: &Found) -> Destination {
     if !f.kind.label().is_empty() {
-        let mut parts = vec![f.kind.label().to_string()];
+        let mut parts = Vec::new();
         if !f.detail.is_empty() && f.detail != f.name {
             parts.push(f.detail.clone());
         }
@@ -2064,15 +2070,12 @@ mod guidance_tests {
             ..found("Station Aral Bertrange", "Bertrange", Some(1240))
         };
         let d = destination(&fuel);
-        assert_eq!(
-            (d.detail.as_str(), d.place),
-            ("Fuel · Aral · 1.2 km", false)
-        );
+        assert_eq!((d.detail.as_str(), d.place), ("Aral · 1.2 km", false));
         let parking = lehu_map::Found {
             kind: lehu_map::FoundKind::Parking,
             ..found("Parking", "Luxembourg", Some(300))
         };
-        assert_eq!(destination(&parking).detail, "Parking · 300 m");
+        assert_eq!(destination(&parking).detail, "300 m");
     }
 
     #[test]

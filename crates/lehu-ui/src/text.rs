@@ -71,6 +71,8 @@ fn fold(c: char) -> Fold {
         '\u{2010}'..='\u{2015}' | '\u{2212}' => Fold::Keep('-'),
         '\u{2026}' => Fold::Text("..."),
         '\u{D7}' => Fold::Keep('x'),
+        // The middle dot between a place's words: app.slint embeds it.
+        '\u{B7}' => Fold::Keep('\u{B7}'),
         // Latin letters with marks, to their base letter.
         'À'..='Å' | 'Ā' | 'Ă' | 'Ą' => Fold::Keep('A'),
         'à'..='å' | 'ā' | 'ă' | 'ą' => Fold::Keep('a'),

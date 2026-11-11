@@ -11,6 +11,11 @@
 //! goes back to the map once the route is there (the map then drives it),
 //! or says why there is none. Back and Cancel go back to the map.
 //!
+//! Under the search row, the kinds of place there are to find the nearest
+//! of (fuel, parking, charging): one chosen lists the nearest few in the
+//! recent ones' place, each with a few words and how far, picked as any
+//! destination; Back (or choosing it again) shows the recent ones again.
+//!
 //! The same screen chooses Home or Work ("Set Home"), from the map's menu
 //! or from the Change rows under the recent destinations: a pick then
 //! keeps the place, says so on the map's bar, and goes back to the map
@@ -21,13 +26,16 @@ use toml::Value;
 
 use super::map::FLASH_MS;
 use super::{Bridge, DEST, Host, MAP, State, clean};
-use crate::host::{MapSlot, RouteStage};
+use crate::host::{MapSlot, Nearby, RouteStage};
 use crate::{AppWindow, DestRow, Osk};
 
 /// What can be typed: a long street name and its town.
 const QUERY_MAX: usize = 48;
 /// Over the keyboard: the best few.
 const TOP: usize = 2;
+/// The nearest of a kind: a screen and a bit, the nearest within reach
+/// of a turn or two of the knob.
+const NEARBY: usize = 8;
 
 impl<H: Host> State<H> {
     /// The keyboard's keys are Go to's: its screen is up and no editor is.
@@ -50,9 +58,17 @@ impl<H: Host> State<H> {
         };
         bridge.set_dest_title(SharedString::from(title));
         bridge.set_dest_choosing(self.dest_choose.is_some());
+        self.dest_near = None;
+        bridge.set_dest_near(0);
+        let can = Nearby::ALL.map(|kind| self.host.map_can_find(kind));
+        bridge.set_dest_can_fuel(can[0]);
+        bridge.set_dest_can_parking(can[1]);
+        bridge.set_dest_can_charging(can[2]);
         let map = &self.host.settings().map;
-        let changes = self.dest_choose.is_none() && (map.home.is_some() || map.work.is_some());
-        let typing = self.host.map_destinations().is_empty() && !changes;
+        let choosing = self.dest_choose.is_some();
+        let changes = !choosing && (map.home.is_some() || map.work.is_some());
+        let near = !choosing && can.contains(&true);
+        let typing = self.host.map_destinations().is_empty() && !changes && !near;
         // A fresh list either way.
         self.dest_typing = !typing;
         self.show_dest(ui, typing);
@@ -78,6 +94,9 @@ impl<H: Host> State<H> {
         if typing && !self.dest_typing {
             ui.global::<Osk<'_>>().invoke_reset(); // letters, no ring
         }
+        if typing && self.dest_near.take().is_some() {
+            bridge.set_dest_near(0);
+        }
         if typing != self.dest_typing {
             // A new set of stops for the ring.
             self.focus_seed = true;
@@ -89,6 +108,40 @@ impl<H: Host> State<H> {
         self.show_query(&bridge);
         self.p_dests = None;
         self.pump_dest(&bridge);
+    }
+
+    /// A kind of place chosen: its nearest listed; chosen again, the
+    /// recent ones again.
+    pub(super) fn dest_nearby(&mut self, bridge: &Bridge<'_>, id: i32) {
+        let Some(kind) = Nearby::from_id(id) else {
+            return;
+        };
+        if self.dest_busy || self.dest_typing || !self.dest_keys(bridge) {
+            return;
+        }
+        if self.dest_near == Some(kind) {
+            self.dest_near_close(bridge);
+            return;
+        }
+        self.dest_near = Some(kind);
+        self.dest_error = false;
+        bridge.set_dest_near(kind.id());
+        self.host.map_nearest(kind, NEARBY);
+        self.pump_dest(bridge);
+    }
+
+    /// Back on the nearest of a kind: the recent ones again, true; false
+    /// when they are not listed.
+    pub(super) fn dest_near_close(&mut self, bridge: &Bridge<'_>) -> bool {
+        if self.dest_near.is_none() || self.dest_busy {
+            return false;
+        }
+        self.dest_near = None;
+        self.dest_error = false;
+        bridge.set_dest_near(0);
+        self.host.map_search("");
+        self.pump_dest(bridge);
+        true
     }
 
     /// The typing screen on a screen of the list (a key typed there, or
@@ -236,11 +289,14 @@ impl<H: Host> State<H> {
             self.p_dests = Some(found);
         }
         let none = self.host.map_destinations().is_empty();
-        let caption = match (self.dest_query.is_empty(), none) {
-            (true, false) => "Recent",
-            (true, true) => "Type a street or a place",
-            (false, true) => "No match",
-            (false, false) => "",
+        // The nearest of a kind: after its name ("Fuel · nearest first").
+        let caption = match (self.dest_near, self.dest_query.is_empty(), none) {
+            (Some(_), _, false) => "nearest first",
+            (Some(_), _, true) => "none nearby",
+            (None, true, false) => "Recent",
+            (None, true, true) => "Type a street or a place",
+            (None, false, true) => "No match",
+            (None, false, false) => "",
         };
         if self.p_dest_caption.update(caption) {
             bridge.set_dest_caption(SharedString::from(caption));

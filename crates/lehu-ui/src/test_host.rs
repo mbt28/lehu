@@ -11,7 +11,7 @@ use toml::Value;
 
 use crate::host::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host, KnownDevice, Media,
-    MediaKey, NavCard, Power, Prompt, RouteStage, Update,
+    MediaKey, NavCard, Nearby, Power, Prompt, RouteStage, Update,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +35,7 @@ pub enum Call {
     MapZoom(i32),
     MapLocate,
     MapSearch(String),
+    MapNearest(Nearby, usize),
     MapGo(usize),
     MapGoPlace(String),
     MapEndRoute,
@@ -95,6 +96,8 @@ pub struct TestHost {
     pub map_names: Vec<Destination>,
     pub map_recent: Vec<Destination>,
     pub map_found: Vec<Destination>,
+    /// The places of each kind there are, nearest first.
+    pub map_nearby: Vec<(Nearby, Destination)>,
     pub map_stages: std::collections::VecDeque<RouteStage>,
     pub map_route_note: String,
     pub map_on_route: bool,
@@ -179,6 +182,7 @@ impl TestHost {
             map_names: Vec::new(),
             map_recent: Vec::new(),
             map_found: Vec::new(),
+            map_nearby: Vec::new(),
             map_stages: std::collections::VecDeque::new(),
             map_route_note: String::new(),
             map_on_route: false,
@@ -491,6 +495,21 @@ impl Host for TestHost {
                 .cloned()
                 .collect()
         };
+    }
+
+    fn map_can_find(&self, kind: Nearby) -> bool {
+        self.map_nearby.iter().any(|(k, _)| *k == kind)
+    }
+
+    fn map_nearest(&mut self, kind: Nearby, limit: usize) {
+        self.calls.push(Call::MapNearest(kind, limit));
+        self.map_found = self
+            .map_nearby
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, d)| d.clone())
+            .take(limit)
+            .collect();
     }
 
     fn map_destinations(&self) -> &[Destination] {

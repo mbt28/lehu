@@ -151,6 +151,7 @@ enum Action {
     DestPick(i32),
     DestChange(i32),
     DestType,
+    DestNearby(i32),
     EditField(i32),
     OskKey(SharedString),
     OskBackspace,
@@ -434,6 +435,8 @@ struct State<H> {
     dest_error: bool,
     /// Go to chooses Home or Work rather than going somewhere.
     dest_choose: Option<MapSlot>,
+    /// The nearest of this kind are listed, in the recent ones' place.
+    dest_near: Option<crate::host::Nearby>,
     dest_rows: Rc<VecModel<DestRow>>,
     dest_top: Rc<VecModel<DestRow>>,
     p_dests: Option<Vec<Destination>>,
@@ -622,6 +625,7 @@ impl<H: Host> State<H> {
             dest_busy: false,
             dest_error: false,
             dest_choose: None,
+            dest_near: None,
             dest_rows: Rc::new(VecModel::default()),
             dest_top: Rc::new(VecModel::default()),
             p_dests: None,
@@ -725,8 +729,12 @@ impl<H: Host> State<H> {
         }
     }
 
-    /// One level up from the screen shown; false at home.
+    /// One level up from the screen shown; false at home. On Go to's
+    /// nearest of a kind, the recent ones again.
     fn back(&mut self, bridge: &Bridge<'_>) -> bool {
+        if bridge.get_screen() == DEST && self.dest_near_close(bridge) {
+            return true;
+        }
         match self.parent(bridge.get_screen()) {
             Some(parent) => {
                 bridge.set_screen(parent);
@@ -803,6 +811,7 @@ impl<H: Host> State<H> {
             Action::DestPick(index) => self.dest_pick(&bridge, index),
             Action::DestChange(slot) => self.dest_change(ui, slot),
             Action::DestType => self.dest_type(ui),
+            Action::DestNearby(id) => self.dest_nearby(&bridge, id),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
@@ -970,6 +979,7 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_dest_pick, |index| Action::DestPick(index));
     on!(on_dest_change, |slot| Action::DestChange(slot));
     on!(on_dest_type, || Action::DestType);
+    on!(on_dest_nearby, |id| Action::DestNearby(id));
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
     on!(on_osk_backspace, || Action::OskBackspace);
