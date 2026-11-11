@@ -6,8 +6,10 @@
 //! ```text
 //! /maps/<region>/   map.toml, tiles.pmtiles, labels.pack, roads.bin, ...
 //! /maps/voice/<lang>/  the spoken prompts' clips
-//! /maps/incoming/   a region being installed, before it is renamed into place
 //! ```
+//!
+//! The partition is written only on a PC (the card in its reader); LEHU
+//! never writes it, and it is mounted read only.
 //!
 //! `map.toml` describes the tile set (crate::tileset) and the folder:
 //! `data-version`, the layout it is in (a LEHU refuses a later one than
@@ -32,9 +34,8 @@ pub const DATA_VERSION: u32 = 1;
 
 /// Where the map partition is mounted.
 pub const MAPS_ROOT: &str = "/maps";
-/// Its folders that are not regions.
+/// Its folder that is not a region: the voice sets.
 pub const VOICE: &str = "voice";
-pub const INCOMING: &str = "incoming";
 /// Where map data lived before there was a map partition, used while the
 /// card has none.
 pub const OLD_MAP_DIR: &str = "/var/lib/lehu/maps";
@@ -73,8 +74,6 @@ pub enum Health {
     /// A file missing, of another size, or with another sha256; or no
     /// map.toml that reads. Why, for the log.
     Damaged(String),
-    /// Offered for download, not on the card (see [`Offer`]).
-    Available,
 }
 
 impl Health {
@@ -227,7 +226,7 @@ fn drop_cached(file: &fs::File, at: u64, len: usize) {
     }
 }
 
-/// A region on the card or on offer, for the Settings row.
+/// A region on the card, for the Settings row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Listed {
     /// Its folder's name under the map partition.
@@ -237,26 +236,15 @@ pub struct Listed {
     pub health: Health,
 }
 
-/// A region a download manifest offers (filled in once there is one).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Offer {
-    pub folder: String,
-    pub name: String,
-    pub data_version: u32,
-    /// All its files, bytes.
-    pub size: u64,
-}
-
-/// The folder under `root` that can hold a region: not hidden, not the
-/// voice sets nor the installs.
+/// The folder under `root` that can hold a region: not hidden (a PC's
+/// own, such as macOS's), not the voice sets.
 fn region_folder(name: &str) -> bool {
-    !name.starts_with('.') && name != VOICE && name != INCOMING
+    !name.starts_with('.') && name != VOICE
 }
 
 /// The regions under `root` (the map partition), by name, each with its
-/// fast check; then those `offers` has that the card does not, as
-/// available. A folder without map.toml is left out.
-pub fn list(root: &Path, checks: Option<&Checks>, offers: &[Offer]) -> Vec<Listed> {
+/// fast check. A folder without map.toml is left out.
+pub fn list(root: &Path, checks: Option<&Checks>) -> Vec<Listed> {
     let mut out: Vec<Listed> = fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -285,16 +273,6 @@ pub fn list(root: &Path, checks: Option<&Checks>, offers: &[Offer]) -> Vec<Liste
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then(a.folder.cmp(&b.folder)));
-    for o in offers {
-        if !out.iter().any(|l| l.folder == o.folder) && region_folder(&o.folder) {
-            out.push(Listed {
-                folder: o.folder.clone(),
-                dir: root.join(&o.folder),
-                name: o.name.clone(),
-                health: Health::Available,
-            });
-        }
-    }
     out
 }
 
@@ -302,7 +280,7 @@ pub fn list(root: &Path, checks: Option<&Checks>, offers: &[Offer]) -> Vec<Liste
 /// region on the map partition at `root`, else the folder from before
 /// there was one.
 pub fn default_dir(root: &Path, checks: Option<&Checks>) -> PathBuf {
-    list(root, checks, &[])
+    list(root, checks)
         .into_iter()
         .find(|l| l.health.usable())
         .map_or_else(|| PathBuf::from(OLD_MAP_DIR), |l| l.dir)
@@ -317,42 +295,6 @@ pub fn default_voice_dir(root: &Path) -> PathBuf {
     } else {
         PathBuf::from(OLD_VOICE_DIR)
     }
-}
-
-/// Put a region downloaded or copied to `staged` (under the partition's
-/// `incoming/`) in its place under `root`, as `<root>/<folder>`: checked
-/// whole first (version, sizes, sha256), then renamed, a region there
-/// before renamed aside first and removed after. The partition must be
-/// writable meanwhile. The region's new folder, or why not.
-pub fn install(staged: &Path, root: &Path, folder: &str) -> Result<PathBuf, String> {
-    if !region_folder(folder) || folder.contains('/') || folder.is_empty() {
-        return Err(format!("{folder:?} is not a region's folder name"));
-    }
-    let region = Region::read(staged)?;
-    match region.health(None) {
-        Health::Ready | Health::Unchecked => {}
-        Health::NeedsNewer(v) => return Err(format!("data version {v}: needs a newer LEHU")),
-        Health::Damaged(why) => return Err(why),
-        Health::Available => return Err("nothing there".into()),
-    }
-    region.verify()?;
-    let target = root.join(folder);
-    let aside = root.join(format!(".old-{folder}"));
-    let _ = fs::remove_dir_all(&aside);
-    let had = target.exists();
-    if had {
-        fs::rename(&target, &aside).map_err(|e| format!("{}: {e}", target.display()))?;
-    }
-    if let Err(e) = fs::rename(staged, &target) {
-        if had {
-            let _ = fs::rename(&aside, &target);
-        }
-        return Err(format!("{}: {e}", staged.display()));
-    }
-    if had {
-        let _ = fs::remove_dir_all(&aside);
-    }
-    Ok(target)
 }
 
 /// What the sha256 checks found, kept between starts: a line a region
@@ -532,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn the_regions_are_listed_by_name_with_those_on_offer() {
+    fn the_regions_on_the_card_are_listed_by_name() {
         let root = temp("list");
         region(&root.join("b-first"), FILES, 1);
         region(&root.join("a-newer"), FILES, DATA_VERSION + 1);
@@ -543,26 +485,12 @@ mod tests {
                 .replace("\"Test\"", "\"Zeta\""),
         )
         .unwrap();
-        // Not regions: the voice sets, the installs, hidden, no map.toml.
-        for d in ["voice/en", "incoming/x", ".old-x", "empty"] {
+        // Not regions: the voice sets, a PC's hidden folder, no map.toml.
+        for d in ["voice/en", ".Trashes/x", "empty"] {
             fs::create_dir_all(root.join(d)).unwrap();
         }
-        fs::write(root.join("incoming/x/map.toml"), TILES).unwrap();
-        let offers = [
-            Offer {
-                folder: "b-first".into(),
-                name: "Test".into(),
-                data_version: 1,
-                size: 8,
-            },
-            Offer {
-                folder: "hungary".into(),
-                name: "Hungary".into(),
-                data_version: 1,
-                size: 1 << 30,
-            },
-        ];
-        let listed = list(&root, None, &offers);
+        fs::write(root.join(".Trashes/x/map.toml"), TILES).unwrap();
+        let listed = list(&root, None);
         let seen: Vec<(&str, &str, &Health)> = listed
             .iter()
             .map(|l| (l.folder.as_str(), l.name.as_str(), &l.health))
@@ -572,7 +500,6 @@ mod tests {
             [
                 ("b-first", "Test", &Health::Unchecked),
                 ("a-newer", "Zeta", &Health::NeedsNewer(DATA_VERSION + 1)),
-                ("hungary", "Hungary", &Health::Available),
             ]
         );
         // The first usable one, when the settings name none; the folder
@@ -587,22 +514,5 @@ mod tests {
             default_voice_dir(&root.join("missing")),
             PathBuf::from(OLD_VOICE_DIR)
         );
-    }
-
-    #[test]
-    fn a_region_is_installed_whole_or_not_at_all() {
-        let root = temp("install");
-        region(&root.join("test"), &[("roads.bin", b"old")], 1);
-        let staged = root.join(INCOMING).join("test");
-        region(&staged, FILES, 1);
-        // Damaged on its way: refused, the old one stays.
-        fs::write(staged.join("roads.bin"), b"roads..!").unwrap();
-        assert!(install(&staged, &root, "test").is_err());
-        assert_eq!(fs::read(root.join("test/roads.bin")).unwrap(), b"old");
-        fs::write(staged.join("roads.bin"), b"roads...").unwrap();
-        assert!(install(&staged, &root, "../x").is_err());
-        assert_eq!(install(&staged, &root, "test"), Ok(root.join("test")));
-        assert_eq!(fs::read(root.join("test/roads.bin")).unwrap(), b"roads...");
-        assert!(!staged.exists() && !root.join(".old-test").exists());
     }
 }

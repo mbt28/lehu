@@ -321,8 +321,6 @@ pub enum RegionState {
     NeedsNewer,
     /// A file missing, cut short or changed: copy it again.
     Damaged,
-    /// Offered for download, not on the card.
-    Available,
 }
 
 impl RegionState {
@@ -337,7 +335,6 @@ impl RegionState {
             Self::Ready => "",
             Self::NeedsNewer => "Needs a newer LEHU",
             Self::Damaged => "Damaged",
-            Self::Available => "Not on the card",
         }
     }
 }
@@ -681,7 +678,7 @@ pub trait Host {
     fn map_reroute(&mut self) -> bool {
         false
     }
-    /// The map regions on the card (and on offer), read afresh: Settings >
+    /// The map regions on the card, read afresh: Settings >
     /// Map lists them. One is `current`: the one the map shows.
     fn map_regions(&mut self) -> Vec<MapRegion> {
         Vec::new()

@@ -915,7 +915,7 @@ impl AppHost {
             "Map damaged: copy the region again".to_string()
         })?;
         match region.health(Some(self.map_checks())) {
-            Health::Ready | Health::Available => Ok(()),
+            Health::Ready => Ok(()),
             Health::Unchecked => {
                 self.map_check_start(region);
                 Ok(())
@@ -1763,10 +1763,9 @@ impl Host for AppHost {
             Health::Ready | Health::Unchecked => RegionState::Ready,
             Health::NeedsNewer(_) => RegionState::NeedsNewer,
             Health::Damaged(_) => RegionState::Damaged,
-            Health::Available => RegionState::Available,
         };
         let root = std::path::Path::new(region::MAPS_ROOT);
-        let listed = region::list(root, Some(self.map_checks()), &[]);
+        let listed = region::list(root, Some(self.map_checks()));
         let mut out: Vec<lehu_ui::MapRegion> = listed
             .iter()
             .map(|l| lehu_ui::MapRegion {
