@@ -755,9 +755,10 @@ integers only:
 The names LEHU draws switch to their night colours too. The look was
 tuned against the night tiles the script draws (`--night`); the test
 `night_compare` puts the day, the night made from it and the drawn night
-side by side, and `night_lut_cost` times a tile (about 0.15-0.2 ms on a
-busy Raspberry Pi 5; tens of times that on the F1C200s, against about a
-millisecond for the engine's decode).
+side by side, and `night_lut_cost` times a tile: 0.11 ms on a Raspberry
+Pi 5 (a plain copy of the tile takes 6 µs), so an estimated 2 to 5 ms on
+the F1C200s, against about a millisecond for the engine's decode; once a
+tile, as it is decoded, never a frame.
 
 ## Night by the sun
 
