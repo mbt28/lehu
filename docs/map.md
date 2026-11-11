@@ -55,6 +55,54 @@ v/bin/python scripts/route-gpx.py luxembourg-latest.osm.pbf \
     49.6045,6.1300 49.6188,6.1440 drive.gpx --name "Gare to Kirchberg"
 ```
 
+## Spoken prompts
+
+While the map guides, LEHU says the turns, in English: early, about half
+a minute ahead ("In 500 metres, turn left" in town, "In 1 kilometre" on a
+motorway), near, about ten seconds or 200 m ahead ("In 200 metres, turn
+left"), and as the turn comes ("Now, turn left"; at a roundabout "Take
+the second exit"). Each is said once. When a turn comes soon after the
+last, the prompts that no longer fit are left out; when the next turn is
+closer than the near prompt's distance, it is told with this one ("In 200
+metres, turn left, then turn right") and only its last prompt is left to
+say. The destination is "You will reach your destination" ahead and "You
+have arrived at your destination" there. Distances are spoken round: 50 m
+steps up to 250 m, 100 m steps up to 900 m, then 1, 1.5 and 2 km.
+
+The prompts play through LEHU's own audio at the navigation level
+(`audio.navigation-level`), ducking the music as the phone's voice does.
+They do not talk over the phone: while a call, the phone's assistant or
+its own navigation is speaking, a prompt waits for half a second of quiet,
+and one that has waited a second and a half is dropped, since a turn
+announced late is worse than one not announced. `map.voice = false` turns
+them off.
+
+A prompt is put together from clips, WAV files of a phrase each ("In 500
+metres", "turn left", "then", "Take the second exit"), read from
+`map.voice-dir` (`/var/lib/lehu/voice/en` by default) as they are first
+needed. They are made on a PC by `scripts/voice-clips.py`, with
+[Piper](https://github.com/OHF-voice/piper1-gpl), an offline speech
+synthesizer, and a voice from its catalogue. `en_GB-cori-high`, a British
+English voice, is in the public domain: its recordings are LibriVox's and
+the model was trained from scratch on them. Nothing is installed system
+wide:
+
+```sh
+python3 -m venv voice-venv
+voice-venv/bin/pip install piper-tts
+voice-venv/bin/python -m piper.download_voices --data-dir voices en_GB-cori-high
+voice-venv/bin/python scripts/voice-clips.py voices/en_GB-cori-high.onnx voice/en \
+    --demo demo.wav
+```
+
+The script writes the forty clips, about 2.7 MB, into `voice/en`: 16-bit
+mono PCM at 24 kHz, half the mixer's rate, their silent ends trimmed and
+all at one loudness, so the board only copies them. `--demo` also writes
+a few whole prompts, put together as the board does, to hear on the PC.
+Copy the directory to the head unit as `map.voice-dir`, readable by
+LEHU's user. A clip that is missing is named once in the log, and the
+prompts that need it stay silent.
+
 ## Making a map
 
 The tiles are drawn on a PC from an OpenStreetMap extract, for example
@@ -171,8 +219,19 @@ engine, is decoded in software, which on the F1C200s takes about a quarter
 of a second. `scripts/map-tiles.py` writes baseline 4:2:0 tiles, which the
 engine takes.
 
+The prompts' timing is decided in `crates/lehu-map/src/voice.rs`, each
+tick of the bar (five times a second), in integer arithmetic on the
+metres to the turn and the speed. A phrase's clips are joined with a short
+pause into one segment and handed to the mixer's third input, which plays
+LEHU's own prompts beside the phone's music and voice.
+
 ## Licence
 
 Map data © OpenStreetMap contributors, under the
 [Open Database License](https://www.openstreetmap.org/copyright). The map
 screen shows the attribution.
+
+The spoken prompts made with the `en_GB-cori-high` Piper voice are in the
+public domain, as the voice is. Another voice comes with a licence of its
+own, in its model card: some of Piper's voices are for non-commercial use
+only.

@@ -22,6 +22,7 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use crate::audio::Audio;
+use crate::voice::Speaker;
 
 /// The map's bar follows a replayed drive this often (the map itself
 /// moves along it by itself, in step with the panel).
@@ -202,6 +203,10 @@ pub struct AppHost {
     map_guide: Option<NavCard>,
     /// The drive's speed, km/h, and the road's limit, for the bar.
     map_speed: Option<(u32, Option<u16>)>,
+    /// The spoken turn prompts along the drive (map.voice): what has been
+    /// said, and the clips. Kept while the map is closed, as the drive goes
+    /// on; its clips are not.
+    map_voice: Option<Speaker>,
     map_note: String,
     map_label: String,
 }
@@ -290,6 +295,7 @@ impl AppHost {
             map_route: None,
             map_guide: None,
             map_speed: None,
+            map_voice: None,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -732,9 +738,27 @@ impl AppHost {
             return;
         };
         let fix = track.at(now - start);
-        self.map_guide = track
-            .ahead(now - start)
-            .map(|a| guidance(&a, local_time_ms(self.zone_min)));
+        let ahead = track.ahead(now - start);
+        self.map_guide = ahead
+            .as_ref()
+            .map(|a| guidance(a, local_time_ms(self.zone_min)));
+        // The prompts, while the map guides.
+        let m = &self.settings.map;
+        if m.voice {
+            if self
+                .map_voice
+                .as_ref()
+                .is_none_or(|v| v.dir() != m.voice_dir)
+            {
+                self.map_voice = Some(Speaker::new(&m.voice_dir));
+            }
+            if let (Some(speaker), Some(a)) = (&mut self.map_voice, &ahead) {
+                let then = track.then(a).map(|(next, gap)| (next.turn, gap));
+                speaker.tick(a, fix.kmh, then, &self.audio);
+            }
+        } else {
+            self.map_voice = None;
+        }
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
         self.map_speed = Some((fix.kmh, fix.limit));
@@ -760,6 +784,9 @@ impl AppHost {
         self.map_view = self.map_view_now();
         if let Some(viewer) = self.map.take() {
             viewer.stop();
+        }
+        if let Some(speaker) = &mut self.map_voice {
+            speaker.release();
         }
         let v = self.map_view;
         let m = &self.settings.map;

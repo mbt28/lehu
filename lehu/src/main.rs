@@ -12,6 +12,7 @@ mod mem;
 mod run;
 mod session;
 mod status;
+mod voice;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

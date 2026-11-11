@@ -20,6 +20,9 @@
 //! Street and place names are either in the tiles or, for a set drawn with
 //! `--labels data`, drawn here over them (crate::labels), so that they
 //! stay the right way up when the map turns heading up.
+//!
+//! Along a guided drive, [`voice`] decides the spoken turn prompts, which
+//! the program plays from clips made on a PC.
 
 mod drive;
 mod glyphs;
@@ -32,12 +35,14 @@ mod tileset;
 mod track;
 mod view;
 mod viewer;
+pub mod voice;
 
 pub use drive::Drive;
 pub use tileset::TileSet;
 pub use track::{Ahead, Fix, Maneuver, Track, Turn};
 pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
 pub use viewer::{Marker, Route, Viewer};
+pub use voice::{Clip, Voice};
 
 #[cfg(test)]
 mod tests;

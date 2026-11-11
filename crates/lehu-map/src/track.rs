@@ -187,6 +187,18 @@ impl Track {
         })
     }
 
+    /// The turn after the one `ahead` names, and the metres between the
+    /// two: what a prompt says after "then". None after the last.
+    pub fn then(&self, ahead: &Ahead<'_>) -> Option<(&Maneuver, u32)> {
+        let i = self
+            .maneuvers
+            .iter()
+            .position(|m| std::ptr::eq(m, ahead.maneuver))?;
+        let next = self.maneuvers.get(i + 1)?;
+        let gap = self.metres[next.point] - self.metres[ahead.maneuver.point];
+        Some((next, gap.max(0.0) as u32))
+    }
+
     /// How long the drive takes, in milliseconds.
     pub fn duration(&self) -> u64 {
         self.points[self.points.len() - 1].2

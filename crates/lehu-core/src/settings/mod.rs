@@ -269,6 +269,11 @@ pub struct Map {
     /// the start again at its end. Empty: none; it outranks
     /// `fake_position`.
     pub fake_track: String,
+    /// Spoken turn prompts while the map guides along a drive.
+    pub voice: bool,
+    /// The prompts' clips, as scripts/voice-clips.py makes them: one WAV
+    /// file a phrase fragment.
+    pub voice_dir: String,
 }
 
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
@@ -446,6 +451,8 @@ impl Default for Map {
             y: 0,
             fake_position: String::new(),
             fake_track: String::new(),
+            voice: true,
+            voice_dir: "/var/lib/lehu/voice/en".into(),
         }
     }
 }
@@ -1008,6 +1015,20 @@ mod tests {
             Settings::default(),
             "config/lehu.toml differs from Settings::default()"
         );
+    }
+
+    #[test]
+    fn the_map_voice_is_on_unless_turned_off() {
+        let map = Settings::default().map;
+        assert!(map.voice);
+        assert_eq!(map.voice_dir, "/var/lib/lehu/voice/en");
+        let s: Settings =
+            toml::from_str("[map]\nvoice = false\nvoice-dir = \"/media/sd/voice/en\"\n").unwrap();
+        assert!(!s.map.voice);
+        assert_eq!(s.map.voice_dir, "/media/sd/voice/en");
+        assert_eq!(s.map.dir, "/var/lib/lehu/maps", "the rest stays");
+        assert!(toml::from_str::<Settings>("[map]\nvoice = \"loud\"").is_err());
+        assert!(toml::from_str::<Settings>("[map]\nvoice_dir = \"/x\"").is_err());
     }
 
     #[test]

@@ -177,6 +177,14 @@ fake-position = ""
 # it until it is dragged, and the Me key makes it follow again. It outranks
 # fake-position. Empty: none.
 fake-track = ""
+# Spoken turn prompts while the map guides along a drive ("In 500 metres,
+# turn left"), through LEHU's own audio at the navigation level, ducking the
+# music; held while the phone's voice plays (a call, its own prompts).
+voice = true
+# The prompts' clips: WAV files, one a phrase fragment, as
+# scripts/voice-clips.py makes them on a PC (see docs/map.md). Missing
+# clips: a line in the log, and the prompts stay silent.
+voice-dir = "/var/lib/lehu/voice/en"
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,
