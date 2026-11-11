@@ -212,6 +212,16 @@ speed-cameras = false
 # name = "Boulevard Royal"
 # town = "Luxembourg"
 # at = "49.61190, 6.12842"
+# Home and Work, routed to from the map's menu with one choice; set there
+# (or from Go to's Change Home / Change Work). Not set by default; the same
+# shape as a recent destination:
+# [map.home]
+# name = "Rue de la Gare"
+# town = "Luxembourg"
+# at = "49.60010, 6.13310"
+# A short soft chime when the speed stays more than 5 km/h over the road's
+# limit for 2 seconds; once, until the speed is back under it.
+speed-warning = true
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

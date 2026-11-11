@@ -300,6 +300,14 @@ pub struct Map {
     /// The destinations last driven to, the latest first, offered before
     /// anything is typed. Written by Map > Go to.
     pub recent: Vec<MapPlace>,
+    /// Home and Work, a choice away on the map's menu. Not set: the menu
+    /// offers to choose them. Written by the map's menu and Go to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<MapPlace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<MapPlace>,
+    /// A short chime when the speed stays over the road's limit.
+    pub speed_warning: bool,
 }
 
 /// A destination Map > Go to drove to: its name, the town it is in, and
@@ -494,6 +502,9 @@ impl Default for Map {
             avoid_motorways: false,
             speed_cameras: false,
             recent: Vec::new(),
+            home: None,
+            work: None,
+            speed_warning: true,
         }
     }
 }
@@ -616,6 +627,8 @@ impl Settings {
         all.display.width = Some(0);
         all.display.height = Some(0);
         all.audio.volume = Some(0);
+        all.map.home = Some(MapPlace::default());
+        all.map.work = Some(MapPlace::default());
         Table::try_from(all).expect("the schema serializes")
     }
 }
