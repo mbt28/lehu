@@ -59,6 +59,44 @@ impl Blob {
         })
     }
 
+    /// The bench's measure of what a search reads from the card: drop
+    /// the file's pages from memory (ours and the page cache's) and turn
+    /// read-ahead off, so each page touched from now on is read alone.
+    #[cfg(test)]
+    pub(crate) fn evict(&self, path: &Path) {
+        use std::os::fd::AsRawFd;
+        if let Self::Mapped { ptr, len } = *self {
+            // SAFETY: our own read-only mapping; dropping its pages only
+            // makes the next read fault them in again.
+            unsafe {
+                libc::madvise(ptr.cast_mut().cast(), len * 4, libc::MADV_DONTNEED);
+                libc::madvise(ptr.cast_mut().cast(), len * 4, libc::MADV_RANDOM);
+            }
+            if let Ok(f) = std::fs::File::open(path) {
+                // SAFETY: advice on a file we hold open.
+                unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+            }
+        }
+    }
+
+    /// The bytes of the file in memory now (the bench's, after
+    /// [`Self::evict`]: what was read since).
+    #[cfg(test)]
+    pub(crate) fn resident(&self) -> usize {
+        let Self::Mapped { ptr, len } = *self else {
+            return 0;
+        };
+        let page = 4096;
+        let pages = (len * 4).div_ceil(page);
+        let mut v = vec![0u8; pages];
+        // SAFETY: the mapping's own range, a byte a page.
+        let r = unsafe { libc::mincore(ptr.cast_mut().cast(), len * 4, v.as_mut_ptr()) };
+        if r != 0 {
+            return 0;
+        }
+        v.iter().filter(|&&b| b & 1 != 0).count() * page
+    }
+
     /// Bytes as the file has them (a test's own data).
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         if bytes.is_empty() || !bytes.len().is_multiple_of(4) {

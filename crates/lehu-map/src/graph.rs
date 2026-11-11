@@ -634,6 +634,11 @@ impl Graph {
         self.blob.words()
     }
 
+    #[cfg(test)]
+    pub(crate) fn blob(&self) -> &Blob {
+        &self.blob
+    }
+
     /// A node's point, world pixels.
     pub fn node(&self, n: u32) -> (i64, i64) {
         let at = self.node_at + n as usize * NODE;

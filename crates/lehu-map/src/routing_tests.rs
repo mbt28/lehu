@@ -1032,3 +1032,223 @@ fn routing_cost() {
         println!("search {q:?}: {} in {ms:.1} ms; first {first}", found.len());
     }
 }
+
+/// Routes across a country, as the board finds them: what each costs in
+/// time, junctions settled and bytes of roads.bin read from the card (the
+/// file's pages dropped from memory first, read-ahead off).
+/// `LEHU_ROUTE_DIR=<dir> <test binary> country_routes --ignored
+/// --nocapture`; `LEHU_DRIVES="name:lat,lon:lat,lon;..."` names other
+/// drives than Hungary's.
+#[test]
+#[ignore]
+fn country_routes() {
+    use std::time::Instant;
+    let dir = std::env::var("LEHU_ROUTE_DIR").expect("LEHU_ROUTE_DIR");
+    let dir = std::path::Path::new(&dir);
+    let roads = dir.join(crate::graph::ROADS_FILE);
+    let drives = std::env::var("LEHU_DRIVES").unwrap_or_else(|_| {
+        "Budapest-Debrecen:47.4979,19.0540:47.5316,21.6273;\
+         Sopron-Szeged:47.6817,16.5845:46.2530,20.1414;\
+         Gyor-Pecs:47.6875,17.6504:46.0727,18.2323;\
+         Ujpest-Kelenfold:47.5600,19.0900:47.4640,19.0200"
+            .into()
+    });
+    let deg = |p: &str| {
+        let (lat, lon) = p.split_once(',').unwrap();
+        crate::view::world_from_degrees(lat.trim().parse().unwrap(), lon.trim().parse().unwrap())
+            .unwrap()
+    };
+    type Drive = (String, (i64, i64), (i64, i64));
+    let drives: Vec<Drive> = drives
+        .split(';')
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| {
+            let mut it = d.trim().split(':');
+            let name = it.next().unwrap().to_string();
+            (name, deg(it.next().unwrap()), deg(it.next().unwrap()))
+        })
+        .collect();
+    let modes = [
+        ("fastest", RouteOptions::default()),
+        (
+            "shortest",
+            RouteOptions {
+                by: RouteBy::Shortest,
+                avoid_motorways: false,
+            },
+        ),
+        (
+            "no motorways",
+            RouteOptions {
+                by: RouteBy::Fastest,
+                avoid_motorways: true,
+            },
+        ),
+    ];
+    // LEHU_NEAR=<metres>: the search's near either end (0 the plain one).
+    let near = std::env::var("LEHU_NEAR").map_or(crate::NEAR_M, |m| m.parse().unwrap());
+    let open = |near: u32| {
+        let g = Graph::open(dir).unwrap().with_near(near);
+        let c = Cameras::open(dir, &g);
+        Router::new(g, None).with_cameras(c)
+    };
+    let r = open(near);
+    let plain = open(0);
+    let began = Instant::now();
+    r.prepare();
+    println!(
+        "{} junctions, {} of main roads, {} cameras; check {:.0} ms; near {near} m",
+        r.graph().nodes(),
+        r.graph().layer_junctions(),
+        r.cameras(),
+        began.elapsed().as_secs_f64() * 1000.0
+    );
+    for (mode, options) in modes {
+        for (name, from, to) in &drives {
+            // The best of all, to compare with.
+            if let Ok(best) = plain.route_with(*from, None, *to, &options) {
+                println!(
+                    "{mode:>12} {name:<18} {:6.1} km {:5.1} min: every road everywhere",
+                    f64::from(best.metres()) / 1000.0,
+                    best.duration() as f64 / 60_000.0,
+                );
+            }
+            // Cold: what the board reads from the card, for the search
+            // alone and then for the whole route (its line, turns, limits
+            // and cameras too).
+            let g = r.graph();
+            plain.graph().blob().evict(&roads);
+            g.blob().evict(&roads);
+            let mut work = crate::graph::Work::default();
+            let (Some(s), Some(e)) = (g.snap(from.0, from.1), g.snap(to.0, to.1)) else {
+                println!("{mode:>12} {name:<18} not on the network");
+                continue;
+            };
+            let _ = g.route_with(&s, None, &e, &options, &mut work);
+            let searched = g.blob().resident();
+            plain.graph().blob().evict(&roads);
+            g.blob().evict(&roads);
+            let began = Instant::now();
+            let track = r.route_with(*from, None, *to, &options);
+            let cold = began.elapsed().as_secs_f64() * 1000.0;
+            let read = g.blob().resident();
+            // Warm: the search itself, the best of three.
+            let mut warm = f64::MAX;
+            for _ in 0..3 {
+                let began = Instant::now();
+                let _ = r.route_with(*from, None, *to, &options);
+                warm = warm.min(began.elapsed().as_secs_f64() * 1000.0);
+            }
+            let settled = r.last_settled();
+            match track {
+                Ok(t) => println!(
+                    "{mode:>12} {name:<18} {:6.1} km {:5.1} min {:4} turns {:2} cameras: \
+                     {settled:7} settled {warm:6.1} ms warm {cold:6.1} ms cold, \
+                     {:5} KB read searching, {:5} KB in all",
+                    f64::from(t.metres()) / 1000.0,
+                    t.duration() as f64 / 60_000.0,
+                    t.maneuvers().len(),
+                    t.cameras().len(),
+                    searched / 1024,
+                    read / 1024
+                ),
+                Err(e) => println!("{mode:>12} {name:<18} {e}"),
+            }
+        }
+    }
+}
+
+/// The layer's routes against the best of all, between junctions drawn
+/// at random across the network: none may cost less (the search would be
+/// wrong), and how much more each costs. `LEHU_ROUTE_DIR=<dir>
+/// LEHU_PAIRS=<n> <test binary> layer_against_plain --ignored --nocapture`.
+#[test]
+#[ignore]
+fn layer_against_plain() {
+    let dir = std::env::var("LEHU_ROUTE_DIR").expect("LEHU_ROUTE_DIR");
+    let pairs: usize = std::env::var("LEHU_PAIRS").map_or(200, |n| n.parse().unwrap());
+    let dir = std::path::Path::new(&dir);
+    let layered = Graph::open(dir).unwrap();
+    let plain = Graph::open(dir).unwrap().with_near(0);
+    layered.check().unwrap();
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut work = crate::graph::Work::default();
+    for (mode, options) in [
+        ("fastest", RouteOptions::default()),
+        (
+            "shortest",
+            RouteOptions {
+                by: RouteBy::Shortest,
+                avoid_motorways: false,
+            },
+        ),
+        (
+            "no motorways",
+            RouteOptions {
+                by: RouteBy::Fastest,
+                avoid_motorways: true,
+            },
+        ),
+    ] {
+        let (mut same, mut worse, mut sum, mut most) = (0, 0, 0.0, 1.0f64);
+        let (mut settled_l, mut settled_p) = (0u64, 0u64);
+        for _ in 0..pairs {
+            let pick = |r: u64| {
+                let p = layered.node((r % layered.nodes() as u64) as u32);
+                layered.snap(p.0, p.1).unwrap()
+            };
+            // Every other pair near each other: nodes near in the file
+            // are near on the map.
+            let a = next();
+            let b = if a % 2 == 0 {
+                next()
+            } else {
+                (a % layered.nodes() as u64 + next() % 6000).saturating_sub(3000)
+            };
+            let (s, e) = (pick(a), pick(b));
+            let (Some(l), Some(p)) = (
+                layered.route_with(&s, None, &e, &options, &mut work),
+                plain.route_with(&s, None, &e, &options, &mut work),
+            ) else {
+                panic!("{mode}: no route from {s:?} to {e:?}");
+            };
+            assert!(
+                l.cost >= p.cost,
+                "{mode}: {} beats the best, {}",
+                l.cost,
+                p.cost
+            );
+            let ratio = l.cost as f64 / p.cost.max(1) as f64;
+            if l.cost == p.cost {
+                same += 1;
+            } else {
+                worse += 1;
+            }
+            sum += ratio;
+            most = most.max(ratio);
+            if ratio > 1.03 {
+                let km = f64::from(crate::metres_between((s.x, s.y), (e.x, e.y))) / 1000.0;
+                println!(
+                    "  {mode}: {:.1} % dearer, {km:.0} km apart",
+                    (ratio - 1.0) * 100.0
+                );
+            }
+            settled_l += u64::from(l.settled);
+            settled_p += u64::from(p.settled);
+        }
+        println!(
+            "{mode:>12}: {same} the best, {worse} dearer; on average {:.2} % dearer, at most \
+             {:.1} %; {} settled on average, {} without the layer",
+            (sum / pairs as f64 - 1.0) * 100.0,
+            (most - 1.0) * 100.0,
+            settled_l / pairs as u64,
+            settled_p / pairs as u64
+        );
+    }
+}
