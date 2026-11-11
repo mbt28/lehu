@@ -80,28 +80,49 @@ pub struct Ahead<'a> {
     pub left_ms: u64,
 }
 
+/// A speed camera on the route: how far along it, metres from the start,
+/// and the speed limit it checks when known.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RouteCamera {
+    pub metres: f64,
+    pub limit: Option<u16>,
+}
+
 /// The drive: points in world pixels at `WORLD_Z`, each with its time in
 /// milliseconds from the first, the metres along the route to it, and the
-/// speed limit of the road it is on; the turns, in order.
+/// speed limit of the road it is on; the turns, in order; the speed
+/// cameras along it, in order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     points: Vec<(i64, i64, u64)>,
     metres: Vec<f64>,
     limits: Vec<Option<u16>>,
     maneuvers: Vec<Maneuver>,
+    cameras: Vec<RouteCamera>,
     /// Driven once, it stays at its end (a route); else it goes round.
     ends: bool,
 }
 
 /// A route as the board's router found it, to be driven: its points along
 /// the roads (world pixels at `WORLD_Z`), for each step between two points
-/// the road's speed (centimetres a second) and speed limit, and the turns,
-/// each at its point, the arrival last.
+/// the road's speed (centimetres a second) and speed limit, the turns,
+/// each at its point, the arrival last, and the speed cameras it passes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Leg {
     pub points: Vec<(i64, i64)>,
     pub steps: Vec<LegStep>,
     pub turns: Vec<(usize, Turn, String)>,
+    pub cameras: Vec<LegCamera>,
+}
+
+/// A speed camera a [`Leg`] passes: the step it is on (between point
+/// `step` and the next), where it is, and the limit it checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LegCamera {
+    pub step: usize,
+    pub x: i64,
+    pub y: i64,
+    pub limit: Option<u16>,
 }
 
 /// One step of a [`Leg`]: the road's speed and its speed limit.
@@ -173,6 +194,7 @@ impl Track {
             metres,
             limits,
             maneuvers,
+            cameras: Vec::new(),
             ends: false,
         })
     }
@@ -254,13 +276,45 @@ impl Track {
                 point: at[*i],
             })
             .collect();
+        // A camera's distance: to its step's first point, then on to it.
+        let mut cameras: Vec<RouteCamera> = leg
+            .cameras
+            .iter()
+            .filter(|c| c.step < n - 1)
+            .map(|c| RouteCamera {
+                metres: metres[at[c.step]] + ground_px(p[c.step], (c.x, c.y)).min(m[c.step]),
+                limit: c.limit,
+            })
+            .collect();
+        cameras.sort_by(|a, b| a.metres.total_cmp(&b.metres));
         Ok(Self {
             points,
             metres,
             limits,
             maneuvers,
+            cameras,
             ends: true,
         })
+    }
+
+    /// The speed cameras along the route, in order.
+    pub fn cameras(&self) -> &[RouteCamera] {
+        &self.cameras
+    }
+
+    /// The next speed camera `ms` after the drive started: its index in
+    /// [`Self::cameras`] and the metres to it, when it is `within` metres
+    /// or less ahead. A camera just passed (by less than a step's
+    /// rounding) counts as passed.
+    pub fn camera_ahead(&self, ms: u64, within: u32) -> Option<(usize, u32)> {
+        if self.cameras.is_empty() {
+            return None;
+        }
+        let (_, here) = self.along(ms);
+        let i = self.cameras.partition_point(|c| c.metres < here);
+        let c = self.cameras.get(i)?;
+        let metres = (c.metres - here).max(0.0) as u32;
+        (metres <= within).then_some((i, metres))
     }
 
     /// Driven once, it stays at its end (a route found on the board).
@@ -297,6 +351,22 @@ impl Track {
     /// what is left of the route; None for a track without turns.
     pub fn ahead(&self, ms: u64) -> Option<Ahead<'_>> {
         let t = self.time(ms);
+        let (i, here) = self.along(ms);
+        // The first turn not yet passed: its point is ahead of the step.
+        let maneuver = self.maneuvers.iter().find(|m| m.point >= i)?;
+        let end = self.metres[self.metres.len() - 1];
+        Some(Ahead {
+            maneuver,
+            metres: (self.metres[maneuver.point] - here).max(0.0) as u32,
+            left_metres: (end - here).max(0.0) as u32,
+            left_ms: self.duration() - t,
+        })
+    }
+
+    /// Where the drive is `ms` after it started: the track point it heads
+    /// for, and the metres along the route.
+    fn along(&self, ms: u64) -> (usize, f64) {
+        let t = self.time(ms);
         let i = self
             .points
             .partition_point(|p| p.2 <= t)
@@ -307,16 +377,10 @@ impl Track {
         } else {
             1.0
         };
-        let here = self.metres[i - 1] + (self.metres[i] - self.metres[i - 1]) * f;
-        // The first turn not yet passed: its point is ahead of the step.
-        let maneuver = self.maneuvers.iter().find(|m| m.point >= i)?;
-        let end = self.metres[self.metres.len() - 1];
-        Some(Ahead {
-            maneuver,
-            metres: (self.metres[maneuver.point] - here).max(0.0) as u32,
-            left_metres: (end - here).max(0.0) as u32,
-            left_ms: self.duration() - t,
-        })
+        (
+            i,
+            self.metres[i - 1] + (self.metres[i] - self.metres[i - 1]) * f,
+        )
     }
 
     /// The turn after the one `ahead` names, and the metres between the

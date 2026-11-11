@@ -196,6 +196,12 @@ route-by = "fastest"
 # Keep off motorways (and their links) where another road goes: they cost
 # five times over, so a place only a motorway reaches is still reached.
 avoid-motorways = false
+# Say "Speed camera ahead" before a speed camera on the route (300 to 500 m
+# ahead, by the speed), from the cameras OpenStreetMap has, which
+# scripts/map-graph.py puts in roads.bin. Off unless asked for: warning of
+# speed cameras is against the law in some countries (France, Germany,
+# Switzerland among them); turn it on only where it is allowed.
+speed-cameras = false
 # The destinations last driven to, offered before anything is typed;
 # written by Map > Go to, the latest first. For example:
 # [[map.recent]]

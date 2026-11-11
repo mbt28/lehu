@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::graph::{Graph, RoadPath, RouteBy, RouteOptions, Work};
 use crate::search::{Found as Place, Places};
-use crate::track::{Leg, LegStep, Track, Turn, metres_per_px};
+use crate::track::{Leg, LegCamera, LegStep, Track, Turn, metres_per_px};
 
 /// The turn at a junction is measured over this much road either side.
 const TURN_SPAN_M: f64 = 15.0;
@@ -178,10 +178,16 @@ impl Line {
     }
 }
 
-/// The points of the route, its steps' speeds and limits, and its turns.
+/// The points of the route, its steps' speeds and limits, its turns and
+/// the speed cameras along it.
 pub(crate) fn leg(graph: &Graph, path: &RoadPath) -> Leg {
     let line = line(graph, path);
     let turns = turns(graph, &line);
+    let cameras = if graph.cameras() > 0 {
+        cameras(graph, path, &line)
+    } else {
+        Vec::new()
+    };
     let steps = line
         .edge
         .iter()
@@ -198,7 +204,84 @@ pub(crate) fn leg(graph: &Graph, path: &RoadPath) -> Leg {
         points: line.pts,
         steps,
         turns,
+        cameras,
     }
+}
+
+/// The speed cameras the route passes that watch the way it goes, in
+/// order, each on the step of the line nearest it.
+fn cameras(graph: &Graph, path: &RoadPath, line: &Line) -> Vec<LegCamera> {
+    // The pieces of edges the route drives: (edge, towards b, from, to)
+    // in decimetres from the edge's a.
+    let (s, t) = (path.start, path.end);
+    let mut runs: Vec<(u32, bool, u32, u32)> = Vec::new();
+    let whole = |e: u32| graph.edge(e).dm;
+    if path.direct {
+        let (lo, hi) = (s.from_a_dm.min(t.from_a_dm), s.from_a_dm.max(t.from_a_dm));
+        runs.push((s.edge, path.start_forward, lo, hi));
+    } else {
+        runs.push(if path.start_forward {
+            (s.edge, true, s.from_a_dm, whole(s.edge))
+        } else {
+            (s.edge, false, 0, s.from_a_dm)
+        });
+        runs.extend(path.arcs.iter().map(|&(e, back)| (e, !back, 0, whole(e))));
+        runs.push(if path.end_forward {
+            (t.edge, true, 0, t.from_a_dm)
+        } else {
+            (t.edge, false, t.from_a_dm, whole(t.edge))
+        });
+    }
+    let mut out = Vec::new();
+    // The line's steps, walked once along the runs.
+    let mut from = 0;
+    for (edge, forward, lo, hi) in runs {
+        let Some(first) = (from..line.edge.len()).find(|&i| line.edge[i] == edge) else {
+            continue;
+        };
+        let end = (first..line.edge.len())
+            .find(|&i| line.edge[i] != edge)
+            .unwrap_or(line.edge.len());
+        from = end;
+        let mut here: Vec<LegCamera> = graph
+            .cameras_on(edge)
+            .filter(|c| (lo..=hi).contains(&c.from_a_dm))
+            .filter(|c| if forward { c.forward } else { c.backward })
+            .map(|c| {
+                // The step it is on: the one whose piece passes nearest.
+                let step = (first..end)
+                    .min_by_key(|&i| {
+                        let p = nearest_point(line.pts[i], line.pts[i + 1], (c.x, c.y));
+                        let (dx, dy) = (i128::from(p.0 - c.x), i128::from(p.1 - c.y));
+                        dx * dx + dy * dy
+                    })
+                    .unwrap_or(first);
+                LegCamera {
+                    step,
+                    x: c.x,
+                    y: c.y,
+                    limit: c.limit,
+                }
+            })
+            .collect();
+        // In the order they are driven past.
+        if !forward {
+            here.reverse();
+        }
+        out.extend(here);
+    }
+    out
+}
+
+/// The point of the segment a-b nearest p.
+fn nearest_point(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> (i64, i64) {
+    let (dx, dy) = ((b.0 - a.0) as f64, (b.1 - a.1) as f64);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 {
+        return a;
+    }
+    let f = (((p.0 - a.0) as f64 * dx + (p.1 - a.1) as f64 * dy) / len2).clamp(0.0, 1.0);
+    (a.0 + (dx * f) as i64, a.1 + (dy * f) as i64)
 }
 
 /// The route's points along the roads, from the start's point to the

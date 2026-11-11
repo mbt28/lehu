@@ -99,14 +99,15 @@ voice-venv/bin/python scripts/voice-clips.py voices/en_GB-cori-high.onnx voice/e
     --demo demo.wav
 ```
 
-The script writes the forty clips, about 2.7 MB, into `voice/en`: 16-bit
+The script writes the forty-one clips, about 2.8 MB, into `voice/en`: 16-bit
 mono PCM at 24 kHz, half the mixer's rate, their silent ends trimmed and
 all at one loudness, so the board only copies them. `--demo` also writes
 a few whole prompts, put together as the board does, to hear on the PC.
 Copy the directory to the head unit as `map.voice-dir`, readable by
 LEHU's user. A clip that is missing is named once in the log, and the
 prompts that need it stay silent. Routes found on the board (below) are
-spoken the same way.
+spoken the same way, and so is the speed camera warning ("Speed camera
+ahead", the clip `speed-camera`).
 
 ## Going somewhere
 
@@ -155,6 +156,27 @@ the motorways were marked (`roads.bin` version 1) cannot tell them apart:
 there avoiding them changes nothing. The screens change the options by
 persisting these two keys; `AppHost::map_route_options` is what a route
 is found with.
+
+### Speed cameras
+
+With `map.speed-cameras = true`, LEHU says "Speed camera ahead" once
+before each fixed speed camera on the route: twelve seconds of driving
+ahead of it, but no nearer than 300 m and no further than 500 m (300 m up
+to 90 km/h, 433 m at 130). The phrase takes a second and a half, and
+slowing from 130 to 90 km/h comfortably takes seven seconds more, so
+twelve leave room; in town 300 m is before the junction or two that come
+first. It is off by default: warning of speed cameras is against the law
+in some countries (France, Germany and Switzerland among them), so turn
+it on only where it is allowed. It needs the prompts on (`map.voice`).
+`AppHost::map_camera_ahead(within)` gives the metres to the next camera on
+the route within that distance, for a sign on the screen.
+
+The cameras are OpenStreetMap's (`highway=speed_camera`), each taken to
+the nearest road within 50 m. A camera watches the traffic its
+enforcement relations say (from one node to another), else the way its
+`direction=forward` or `backward` says when it is a node of the road,
+else both ways; its limit is its `maxspeed`. Luxembourg has 39, all on
+roads kept.
 
 ### Routing data
 

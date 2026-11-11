@@ -13,6 +13,9 @@
 //! The destination is "you will reach your destination" ahead, "you have
 //! arrived at your destination" there.
 //!
+//! [`CameraWatch`] says "speed camera ahead" once before each speed camera
+//! on a route, when the driver has asked for it.
+//!
 //! A prompt is a list of [`Clip`]s, each a WAV file the board plays one
 //! after the other (scripts/voice-clips.py makes them on a PC). Distances
 //! are spoken as a driver hears them: 50 metres steps up to 250, then 100
@@ -35,6 +38,9 @@ pub enum Clip {
     Now,
     Then,
     Arrived,
+    /// "Speed camera ahead": said before a camera on the route, when the
+    /// warning is on (map.speed-cameras).
+    Camera,
 }
 
 impl Clip {
@@ -62,6 +68,7 @@ impl Clip {
             Clip::Now => "now".into(),
             Clip::Then => "then".into(),
             Clip::Arrived => "arrived".into(),
+            Clip::Camera => "speed-camera".into(),
         }
     }
 }
@@ -271,6 +278,48 @@ impl Voice {
     }
 }
 
+/// The warning before a speed camera is said this many seconds of driving
+/// ahead of it, but no nearer than the first distance and no further than
+/// the second: the phrase takes a second and a half, and slowing from 130
+/// to 90 km/h at an easy 1.5 m/s² takes seven more and 230 m, so twelve
+/// seconds leave room; in town 300 m is still before the junction or two
+/// that come first, and past 500 m a warning is forgotten before the
+/// camera comes.
+const CAMERA_LEAD_S: u32 = 12;
+const CAMERA_LEAD_M: (u32, u32) = (300, 500);
+
+/// How far ahead of a speed camera its warning is said, at `kmh`.
+pub fn camera_lead(kmh: u32) -> u32 {
+    travel(kmh, CAMERA_LEAD_S * 1000).clamp(CAMERA_LEAD_M.0, CAMERA_LEAD_M.1)
+}
+
+/// The speed camera warnings along one route: each camera's said once, as
+/// it comes within [`camera_lead`].
+#[derive(Clone, Debug, Default)]
+pub struct CameraWatch {
+    /// The last camera warned of, by its index on the route.
+    told: Option<usize>,
+}
+
+impl CameraWatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// True when "speed camera ahead" is due now, `ms` into the drive at
+    /// `kmh`.
+    pub fn tick(&mut self, track: &crate::Track, ms: u64, kmh: u32) -> bool {
+        let Some((i, _)) = track.camera_ahead(ms, camera_lead(kmh)) else {
+            return false;
+        };
+        if self.told.is_some_and(|t| t >= i) {
+            return false;
+        }
+        self.told = Some(i);
+        true
+    }
+}
+
 /// Every clip a prompt can ask for, by name: what scripts/voice-clips.py
 /// must make.
 pub fn every_clip() -> Vec<String> {
@@ -291,7 +340,7 @@ pub fn every_clip() -> Vec<String> {
     for n in 1..=MAX_EXIT {
         clips.extend([Clip::Do(Turn::Roundabout(n)), Clip::Exit(n)]);
     }
-    clips.extend([Clip::Now, Clip::Then, Clip::Arrived]);
+    clips.extend([Clip::Now, Clip::Then, Clip::Arrived, Clip::Camera]);
     clips.into_iter().map(Clip::name).collect()
 }
 
@@ -504,7 +553,7 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/voice-clips.py");
         let script = std::fs::read_to_string(path).unwrap();
         let clips = every_clip();
-        assert_eq!(clips.len(), 15 + 10 + 12 + 3);
+        assert_eq!(clips.len(), 15 + 10 + 12 + 4);
         for name in clips {
             assert!(
                 script.contains(&format!("\"{name}\"")),
@@ -559,5 +608,70 @@ mod tests {
         assert_eq!(next.turn, Turn::Arrive);
         assert!((825..=845).contains(&gap), "{gap}");
         assert!(track.then(&track.ahead(100_000).unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_camera_is_warned_of_once_and_earlier_when_fast() {
+        assert_eq!(camera_lead(0), 300);
+        assert_eq!(camera_lead(50), 300);
+        assert_eq!(camera_lead(110), 366);
+        assert_eq!(camera_lead(130), 433);
+        assert_eq!(camera_lead(200), 500);
+        // 3 km straight east at 36 km/h, cameras at 1 and 2 km.
+        let p = |east: f64| {
+            (
+                555_000_000 + (east / crate::graph::build::M_PER_PX) as i64,
+                368_000_000,
+            )
+        };
+        let leg = crate::Leg {
+            points: vec![p(0.0), p(1500.0), p(3000.0)],
+            steps: vec![
+                crate::LegStep {
+                    cm_s: 1000,
+                    limit: Some(50)
+                };
+                2
+            ],
+            turns: vec![(2, Turn::Arrive, String::new())],
+            cameras: vec![
+                crate::LegCamera {
+                    step: 0,
+                    x: p(1000.0).0,
+                    y: p(1000.0).1,
+                    limit: Some(50),
+                },
+                crate::LegCamera {
+                    step: 1,
+                    x: p(2000.0).0,
+                    y: p(2000.0).1,
+                    limit: None,
+                },
+            ],
+        };
+        let track = crate::Track::from_route(&leg).unwrap();
+        let c = track.cameras();
+        assert_eq!(c.len(), 2);
+        // Where they are along it, as the track measures the ground.
+        let m = |east: f64| f64::from(crate::metres_between(p(0.0), p(east)));
+        assert!((c[0].metres - m(1000.0)).abs() < 2.0, "{c:?}");
+        assert!((c[1].metres - m(2000.0)).abs() < 2.0, "{c:?}");
+        assert_eq!(c[0].limit, Some(50));
+        let mut watch = CameraWatch::new();
+        let mut said = Vec::new();
+        for ms in (0..track.duration()).step_by(200) {
+            if watch.tick(&track, ms, 36) {
+                said.push(track.camera_ahead(ms, 1000).unwrap());
+            }
+        }
+        // Each once, 300 m before it (a tick is 2 m).
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said.iter().all(|&(_, m)| (297..=300).contains(&m)),
+            "{said:?}"
+        );
+        assert_eq!((said[0].0, said[1].0), (0, 1));
+        // Past the last, nothing ahead.
+        assert_eq!(track.camera_ahead(track.duration(), 5000), None);
     }
 }

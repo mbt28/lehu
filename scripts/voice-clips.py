@@ -78,6 +78,7 @@ CLIPS = {
     "arrived": "You have arrived at your destination.",
     "now": "Now,",
     "then": "then",
+    "speed-camera": "Speed camera ahead.",
 }
 
 # What the board puts between two clips (lehu/src/voice.rs GAP_MS).
@@ -97,6 +98,7 @@ DEMO = [
     ["exit-2"],
     ["in-200", "arrive-ahead"],
     ["arrived"],
+    ["speed-camera"],
 ]
 
 

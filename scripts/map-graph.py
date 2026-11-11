@@ -70,6 +70,8 @@ ROADS_VERSION = 2
 PLACES_VERSION = 1
 # The classes a route avoiding motorways keeps off.
 MOTORWAY = ("motorway", "motorway_link")
+# A speed camera further than this from any road is left out, metres.
+CAMERA_SNAP_M = 50
 
 
 def world(lat, lon):
@@ -123,8 +125,13 @@ class Extract(osmium.SimpleHandler):
         self.uses = {}  # node id -> how many times a road passes it
         self.ends = set()  # the nodes a road starts or ends at
         self.places = []  # (name, kind, lat, lon)
+        self.cameras = []  # (node id, lat, lon, direction tag, speed limit or None)
+        self.enforcements = []  # (device node id, from node id, to node id, limit)
 
     def node(self, n):
+        if n.tags.get("highway") == "speed_camera" and n.location.valid():
+            self.cameras.append((n.id, n.location.lat, n.location.lon,
+                                 n.tags.get("direction", ""), rg.limit(n.tags)))
         kind = n.tags.get("place")
         name = n.tags.get("name")
         if kind in PLACE_RANK and name and n.location.valid():
@@ -148,6 +155,20 @@ class Extract(osmium.SimpleHandler):
         self.ends.add(nodes[0])
         self.ends.add(nodes[-1])
         self.ways.append((nodes, forward, backward, kmh, name, ring, lim, w.tags.get("highway")))
+
+    def relation(self, r):
+        # A speed camera's enforcement: the device, and the traffic it
+        # watches, from one node to another.
+        if r.tags.get("type") != "enforcement" or r.tags.get("enforcement") not in (
+                "maxspeed", "average_speed"):
+            return
+        role = {}
+        for m in r.members:
+            if m.type == "n" and m.role in ("device", "from", "to"):
+                role.setdefault(m.role, m.ref)
+        if "device" in role:
+            self.enforcements.append((role["device"], role.get("from"), role.get("to"),
+                                      rg.limit(r.tags)))
 
 
 def split(ex):
@@ -327,6 +348,8 @@ def write_roads(path, ex, edges, keep):
         cell_edges += c
     cell_first.append(len(cell_edges))
 
+    camera_words = place_cameras(ex, edges, world_of, cells, (x0, y0, cols, rows))
+
     # The search's lower bound on the time from anywhere to the goal: the
     # straight line at the top speed, a world pixel counted as the fewest
     # metres it is anywhere on the network (at its northernmost point).
@@ -347,11 +370,12 @@ def write_roads(path, ex, edges, keep):
     sections = [
         u32s(node_words), u32s(arc_words), u32s(edge_words), u32s(shape_x), u32s(shape_y),
         u32s(kind_words), u32s(cell_first), u32s(cell_edges), names.padded(),
+        u32s([w for c in camera_words for w in c]),
     ]
     header = ROADS_MAGIC + u32s([
         ROADS_VERSION, len(order), len(arc_words) // 3, len(edges), len(shape_x), len(kinds),
         len(cell_edges), len(names.blob), x0, y0, GRID_SHIFT, cols, rows, h_q16, round(top),
-        0, round(top_other), 0,
+        len(camera_words), round(top_other), 0,
     ])
     assert len(header) == 80
     with open(path + ".tmp", "wb") as f:
@@ -359,7 +383,104 @@ def write_roads(path, ex, edges, keep):
         for s in sections:
             f.write(s)
     os.replace(path + ".tmp", path)
-    return len(order), len(edges), len(shape_x), len(kinds), cols * rows, h_q16, top
+    return len(order), len(edges), len(shape_x), len(kinds), cols * rows, len(camera_words), top
+
+
+def place_cameras(ex, edges, world_of, cells, grid):
+    """The speed cameras on the roads kept, each at the nearest point of
+    the nearest road within CAMERA_SNAP_M: (x, y, edge, decimetres from
+    its a, the ways it watches (1 a to b, 2 b to a), speed limit or 0), in
+    the order of their edges and along each. The ways come from the
+    camera's enforcement relations (from one node to another), else its
+    direction=forward/backward when it is a node of that road, else both."""
+    x0, y0, cols, rows = grid
+    watched = {}
+    limits = {}
+    for device, frm, to, lim in ex.enforcements:
+        if frm in ex.where and to in ex.where:
+            watched.setdefault(device, []).append((world(*ex.where[frm]), world(*ex.where[to])))
+        if lim:
+            limits.setdefault(device, lim)
+    out = []
+    lost = 0
+    for node, lat, lon, direction, lim in ex.cameras:
+        cx, cy = world(lat, lon)
+        m_per_px = EQUATOR / WORLD * math.cos(math.radians(lat))
+        best = None
+        gx, gy = (cx - x0) >> GRID_SHIFT, (cy - y0) >> GRID_SHIFT
+        seen = set()
+        for yy in range(gy - 1, gy + 2):
+            for xx in range(gx - 1, gx + 2):
+                if not (0 <= xx < cols and 0 <= yy < rows):
+                    continue
+                for e in cells[yy * cols + xx]:
+                    if e in seen:
+                        continue
+                    seen.add(e)
+                    a, b, between = edges[e][0], edges[e][1], edges[e][2]
+                    pts = [world_of[a]] + [world(*ex.where[n]) for n in between] + [world_of[b]]
+                    for k, ((px, py), (qx, qy)) in enumerate(zip(pts, pts[1:])):
+                        dx, dy = qx - px, qy - py
+                        l2 = dx * dx + dy * dy
+                        t = 0.0 if l2 == 0 else max(0.0, min(1.0, ((cx - px) * dx + (cy - py) * dy) / l2))
+                        sx, sy = px + dx * t, py + dy * t
+                        d2 = (sx - cx) ** 2 + (sy - cy) ** 2
+                        if best is None or d2 < best[0]:
+                            best = (d2, e, k, t, pts)
+        if best is None or math.sqrt(best[0]) * m_per_px > CAMERA_SNAP_M:
+            lost += 1
+            continue
+        _, e, k, t, pts = best
+        a, b, between, metres_, _, _, _, _ = edges[e]
+        seg = [math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(pts, pts[1:])]
+        total = sum(seg)
+        before = sum(seg[:k]) + seg[k] * t
+        dm = max(1, round(metres_ * 10))
+        from_a = min(dm, round(before / total * dm)) if total > 0 else 0
+        (px, py), (qx, qy) = pts[k], pts[k + 1]
+        sx, sy = int(px + (qx - px) * t), int(py + (qy - py) * t)
+        ways = 0
+        for (fx, fy), (tx, ty) in watched.get(node, ()):
+            ways |= 1 if (tx - fx) * (qx - px) + (ty - fy) * (qy - py) > 0 else 2
+        # The road the camera is a node of: its own way, so forward is a to b.
+        on_road = node in between
+        if not ways and on_road and direction == "forward":
+            ways = 1
+        elif not ways and on_road and direction == "backward":
+            ways = 2
+        if not ways:
+            ways = 3
+        out.append([sx, sy, e, from_a, ways, lim or limits.get(node) or 0])
+    out.sort(key=lambda c: (c[2], c[3]))
+    if lost:
+        print(f"{lost} speed cameras further than {CAMERA_SNAP_M} m from a road kept, left out",
+              flush=True)
+    return out
+
+
+def same_pois(pois):
+    """The points of interest without the ones mapped twice: of two of a
+    category within POI_SAME_M with the same name (or one unnamed), the
+    named one is kept."""
+    kept = []
+    grid = {}
+    cell = 1 << 12  # world pixels, about 100 m
+    for p in sorted(pois, key=lambda p: not p[5]):
+        category, name, _, lat, lon, named = p
+        x, y = world(lat, lon)
+        m_per_px = EQUATOR / WORLD * math.cos(math.radians(lat))
+        twin = False
+        for gx in range(x // cell - 1, x // cell + 2):
+            for gy in range(y // cell - 1, y // cell + 2):
+                for q in grid.get((gx, gy), ()):
+                    qx, qy = world(q[3], q[4])
+                    if (q[0] == category and (q[1] == name or not named)
+                            and math.hypot(qx - x, qy - y) * m_per_px < POI_SAME_M):
+                        twin = True
+        if not twin:
+            kept.append(p)
+            grid.setdefault((x // cell, y // cell), []).append(p)
+    return kept
 
 
 def write_places(path, ex, keep_nodes):
@@ -463,9 +584,10 @@ def main():
     keep = strongest(nodes, edges)
     print(f"{len(nodes)} junctions, {len(keep)} of them connected both ways", flush=True)
     roads = os.path.join(a.out, "roads.bin")
-    n, e, s, k, c, h, top = write_roads(roads, ex, edges, keep)
+    n, e, s, k, c, cams, top = write_roads(roads, ex, edges, keep)
     print(f"{roads}: {n} junctions, {e} roads, {s} shape points, {k} road names, "
-          f"{c} grid cells, top {top:.0f} km/h; {os.path.getsize(roads) / 1e6:.1f} MB", flush=True)
+          f"{c} grid cells, {cams} speed cameras, top {top:.0f} km/h; "
+          f"{os.path.getsize(roads) / 1e6:.1f} MB", flush=True)
     # A street is found on the part of the network a route can reach.
     on_network = set(keep)
     for a_, b_, between, *_r in edges:

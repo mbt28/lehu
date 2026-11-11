@@ -50,10 +50,12 @@ pub use graph::{Camera, Graph, ROADS_FILE, RouteBy, RouteOptions, Snap};
 pub use route::Router;
 pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
 pub use tileset::TileSet;
-pub use track::{Ahead, Fix, Leg, LegStep, Maneuver, Track, Turn, metres_between};
+pub use track::{
+    Ahead, Fix, Leg, LegCamera, LegStep, Maneuver, RouteCamera, Track, Turn, metres_between,
+};
 pub use view::{View, WORLD_Z, degrees_from_world, parse_position, world_from_degrees};
 pub use viewer::{Marker, Route, Viewer};
-pub use voice::{Clip, Voice};
+pub use voice::{CameraWatch, Clip, Voice, camera_lead};
 
 #[cfg(test)]
 mod routing_tests;

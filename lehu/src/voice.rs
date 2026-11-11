@@ -52,10 +52,15 @@ impl Speaker {
 
     /// With each new position: the prompt due, if any, to the mixer.
     pub fn tick(&mut self, ahead: &Ahead<'_>, kmh: u32, then: Option<(Turn, u32)>, audio: &Audio) {
-        let Some(clips) = self.voice.tick(ahead, kmh, then) else {
-            return;
-        };
-        if let Some(segment) = self.phrase(&clips) {
+        if let Some(clips) = self.voice.tick(ahead, kmh, then) {
+            self.say(&clips, audio);
+        }
+    }
+
+    /// A phrase of these clips, to the mixer now (silent when a clip is
+    /// missing).
+    pub fn say(&mut self, clips: &[Clip], audio: &Audio) {
+        if let Some(segment) = self.phrase(clips) {
             log::info!(
                 "map: says {} ({} ms)",
                 clips.iter().map(|c| c.name()).collect::<Vec<_>>().join(" "),

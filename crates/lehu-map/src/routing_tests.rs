@@ -341,6 +341,55 @@ fn version_1_road_data_still_routes() {
 }
 
 #[test]
+fn a_route_carries_the_cameras_that_watch_its_way() {
+    // One street of 2 km, 0 to 1, then on to 2; a camera 500 m along it
+    // watching eastwards, one at 1500 m watching both ways, one on the
+    // second street watching westwards only.
+    let nodes = [at(0.0, 0.0), at(2000.0, 0.0), at(3000.0, 0.0)];
+    let dm = |east: f64| (east * 10.0) as u32;
+    let cam = |east: f64, edge: u32, from_a: f64, ways: u32, limit: u32| {
+        let (x, y) = at(east, 0.0);
+        [x as u32, y as u32, edge, dm(from_a), ways, limit]
+    };
+    let cameras = [
+        cam(500.0, 0, 500.0, 1, 50),
+        cam(1500.0, 0, 1500.0, 3, 0),
+        cam(2500.0, 1, 500.0, 2, 70),
+    ];
+    let bytes = write_with(
+        &nodes,
+        &[road(0, 1, "Est"), road(1, 2, "Ouest")],
+        &cameras,
+        2,
+    );
+    let g = Graph::from_bytes(&bytes).unwrap();
+    g.check().unwrap();
+    assert_eq!(g.cameras(), 3);
+    assert_eq!(g.cameras_on(0).count(), 2);
+    assert_eq!(g.cameras_on(1).next().unwrap().limit, Some(70));
+    let r = Router::new(g, None);
+    let east = r.route(at(10.0, 0.0), None, at(2990.0, 0.0)).unwrap();
+    let c = east.cameras();
+    assert_eq!(c.len(), 2, "{c:?}");
+    // Along the route from the start, 10 m in.
+    let from = |m: f64| f64::from(crate::metres_between(at(10.0, 0.0), at(m, 0.0)));
+    assert!((c[0].metres - from(500.0)).abs() < 3.0, "{c:?}");
+    assert!((c[1].metres - from(1500.0)).abs() < 3.0, "{c:?}");
+    assert_eq!((c[0].limit, c[1].limit), (Some(50), None));
+    let west = r.route(at(2990.0, 0.0), None, at(10.0, 0.0)).unwrap();
+    let c: Vec<_> = west.cameras().iter().map(|c| c.limit).collect();
+    assert_eq!(c, [Some(70), None]);
+    // Starting past a camera: not on the route.
+    let late = r.route(at(1000.0, 0.0), None, at(1900.0, 0.0)).unwrap();
+    assert_eq!(late.cameras().len(), 1);
+    // A camera on an edge that is not there: found by the check.
+    let mut bad = cameras;
+    bad[2][2] = 9;
+    let bytes = write_with(&nodes, &[road(0, 1, "Est"), road(1, 2, "Ouest")], &bad, 2);
+    assert!(Graph::from_bytes(&bytes).unwrap().check().is_err());
+}
+
+#[test]
 fn no_route_is_said_in_words() {
     // Two roads that never meet: one way out of the first, into nothing.
     let nodes = [
@@ -384,6 +433,7 @@ fn a_route_is_driven_at_its_speeds_and_slowed_in_turns() {
             (1, Turn::Right, "Rue B".into()),
             (2, Turn::Arrive, String::new()),
         ],
+        cameras: Vec::new(),
     };
     let track = Track::from_route(&leg).unwrap();
     // 200 m at 20 km/h: 36 s.
@@ -419,6 +469,7 @@ fn a_route_is_driven_at_its_speeds_and_slowed_in_turns() {
             2
         ],
         turns: vec![(2, Turn::Arrive, String::new())],
+        cameras: Vec::new(),
     })
     .unwrap();
     assert!(
@@ -575,18 +626,39 @@ fn routing_cost() {
             deg(50.1210, 6.0019),
         ),
     ];
+    let modes = [
+        ("fastest", RouteOptions::default()),
+        (
+            "shortest",
+            RouteOptions {
+                by: RouteBy::Shortest,
+                avoid_motorways: false,
+            },
+        ),
+        (
+            "no motorways",
+            RouteOptions {
+                by: RouteBy::Fastest,
+                avoid_motorways: true,
+            },
+        ),
+    ];
+    println!("{} speed cameras", r.graph().cameras());
     for round in 0..2 {
-        for (name, from, to) in drives {
-            let began = Instant::now();
-            let track = r.route(from, None, to).unwrap();
-            println!(
-                "{}route {name}: {:.1} km, {} min, {} turns in {:.0} ms",
-                if round == 0 { "first " } else { "" },
-                f64::from(track.metres()) / 1000.0,
-                track.duration() / 60_000,
-                track.maneuvers().len(),
-                began.elapsed().as_secs_f64() * 1000.0
-            );
+        for (mode, options) in modes {
+            for (name, from, to) in drives {
+                let began = Instant::now();
+                let track = r.route_with(from, None, to, &options).unwrap();
+                println!(
+                    "{}{mode} {name}: {:.1} km, {} min, {} turns, {} cameras in {:.0} ms",
+                    if round == 0 { "first " } else { "" },
+                    f64::from(track.metres()) / 1000.0,
+                    track.duration() / 60_000,
+                    track.maneuvers().len(),
+                    track.cameras().len(),
+                    began.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
     }
     let here = Some(deg(49.6116, 6.1300));

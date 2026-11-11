@@ -225,6 +225,8 @@ pub struct AppHost {
     /// said, and the clips. Kept while the map is closed, as the drive goes
     /// on; its clips are not.
     map_voice: Option<Speaker>,
+    /// The speed cameras warned of along the drive (map.speed-cameras).
+    map_cameras: lehu_map::CameraWatch,
     map_note: String,
     map_label: String,
     /// Map > Go to: the road network and the names (looked for each time
@@ -326,6 +328,7 @@ impl AppHost {
             map_guide: None,
             map_speed: None,
             map_voice: None,
+            map_cameras: lehu_map::CameraWatch::new(),
             map_note: String::new(),
             map_label: String::new(),
             map_router: None,
@@ -842,7 +845,35 @@ impl AppHost {
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
         self.map_speed = Some((fix.kmh, fix.limit));
+        self.map_camera_tick(now - start, fix.kmh);
         self.map_arrived();
+    }
+
+    /// "Speed camera ahead", once a camera on the route, when it is asked
+    /// for (map.speed-cameras) and the prompts are on.
+    fn map_camera_tick(&mut self, ms: u64, kmh: u32) {
+        if !self.settings.map.speed_cameras {
+            return;
+        }
+        let (Some(track), Some(speaker)) = (&self.map_track, &mut self.map_voice) else {
+            return;
+        };
+        if self.map_cameras.tick(track, ms, kmh) {
+            speaker.say(&[lehu_map::Clip::Camera], &self.audio);
+        }
+    }
+
+    /// Metres to the next speed camera on the route when it is `within`
+    /// metres or less, and the warning is on (map.speed-cameras): for a
+    /// sign on the screen. Cheap: a search over the route's cameras.
+    #[allow(dead_code)] // for the screens, which do not ask yet
+    pub fn map_camera_ahead(&self, within: u32) -> Option<u32> {
+        if !self.settings.map.speed_cameras {
+            return None;
+        }
+        let (track, start) = (self.map_track.as_ref()?, self.map_track_start?);
+        let ms = lehu_core::clock::now_ms().saturating_sub(start);
+        track.camera_ahead(ms, within).map(|(_, metres)| metres)
     }
 
     /// How Go to's routes are chosen, from the settings (map.route-by,
@@ -863,6 +894,7 @@ impl AppHost {
     /// afresh.
     fn map_quiet(&mut self) {
         self.map_voice = None;
+        self.map_cameras = lehu_map::CameraWatch::new();
     }
 
     /// A route of ours arrived a while ago: it ends.
