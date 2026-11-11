@@ -829,6 +829,97 @@ fn off_the_grid_the_frame_is_land() {
     assert!(far[64 * 32..].chunks(2).all(|p| p == [8, 9]));
 }
 
+#[test]
+fn at_any_angle_every_pixel_is_the_one_under_it() {
+    // Chroma that differs at every pair, and a missing tile.
+    let mut tiles = pattern_tiles();
+    for (t, tile) in tiles.iter_mut().enumerate() {
+        for (i, pair) in tile[256 * 256..]
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            *pair = [(i % 253) as u8, (i / 128 + t * 37) as u8];
+        }
+    }
+    let grid = nv12::Grid {
+        tiles: vec![
+            Some(&tiles[0][..]),
+            Some(&tiles[1][..]),
+            None,
+            Some(&tiles[3][..]),
+        ],
+        cols: 2,
+        rows: 2,
+        side: 256,
+        land: (7, 8, 9),
+    };
+    let sample = |gx: i64, gy: i64, chroma: bool| -> [u8; 2] {
+        if !(0..512).contains(&gx) || !(0..512).contains(&gy) {
+            return if chroma { [8, 9] } else { [7, 0] };
+        }
+        let Some(t) = grid.tiles[(gy / 256 * 2 + gx / 256) as usize] else {
+            return if chroma { [8, 9] } else { [7, 0] };
+        };
+        let (x, y) = ((gx % 256) as usize, (gy % 256) as usize);
+        if chroma {
+            let at = 65536 + (y / 2) * 256 + (x & !1);
+            [t[at], t[at + 1]]
+        } else {
+            [t[y * 256 + x], 0]
+        }
+    };
+    let (w, h, pitch) = (200u32, 120u32, 208usize);
+    let chroma = pitch * h as usize;
+    for degrees in [17.0f64, 133.0, 200.0, 301.0] {
+        let r = degrees.to_radians();
+        let up = ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64);
+        let (across, down) = ((-up.1, up.0), (-up.0, -up.1));
+        let origin = (250 << 16, 270 << 16);
+        let anchor = (100, 80);
+        let mut out = vec![0u8; chroma + pitch * h as usize / 2];
+        nv12::rotate(
+            &grid,
+            &mut out,
+            pitch,
+            chroma,
+            (w, h),
+            origin,
+            anchor,
+            across,
+            down,
+        );
+        let at = |u: i64, v: i64| {
+            (
+                origin.0 + (u - anchor.0) * across.0 + (v - anchor.1) * down.0,
+                origin.1 + (u - anchor.0) * across.1 + (v - anchor.1) * down.1,
+            )
+        };
+        for v in 0..i64::from(h) {
+            for u in 0..i64::from(w) {
+                let (x, y) = at(u, v);
+                let want = sample(x >> 16, y >> 16, false)[0];
+                assert_eq!(
+                    out[v as usize * pitch + u as usize],
+                    want,
+                    "{degrees}° luma {u},{v}"
+                );
+            }
+        }
+        for cv in 0..i64::from(h) / 2 {
+            for cu in 0..i64::from(w) / 2 {
+                let (x, y) = at(2 * cu, 2 * cv);
+                let x = x + (across.0 + down.0) / 2;
+                let y = y + (across.1 + down.1) / 2;
+                let o = chroma + cv as usize * pitch + 2 * cu as usize;
+                let want = sample(x >> 16, y >> 16, true);
+                assert_eq!(out[o..o + 2], want, "{degrees}° chroma {cu},{cv}");
+            }
+        }
+    }
+}
+
 /// A heading-up frame from a real tile set, as a picture to look at:
 /// `LEHU_MAP_DIR=<tiles> LEHU_SHOTS=<dir> cargo test -p lehu-map turned_shot -- --ignored`.
 #[test]

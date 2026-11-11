@@ -27,5 +27,10 @@ panic = "abort"
 strip = true
 debug = false
 
+# The map turns every pixel of the panel five times a second while it
+# follows a drive heading up: its loops want speed more than size.
+[profile.release.package.lehu-map]
+opt-level = 3
+
 [profile.dev]
 opt-level = 1
