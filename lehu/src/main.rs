@@ -5,6 +5,7 @@
 
 mod art;
 mod audio;
+mod chime;
 mod host;
 mod input;
 mod media;

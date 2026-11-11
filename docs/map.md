@@ -240,6 +240,15 @@ enforcement relations say (from one node to another), else the way its
 else both ways; its limit is its `maxspeed`. Luxembourg has 39, all on
 roads kept.
 
+### Speed limit
+
+Where the road's speed limit is known, the bar shows its sign beside the
+speed, the speed in red when it is over. When the speed stays more than
+5 km/h over it for 2 seconds, a short soft chime plays once, through the
+same audio as the prompts (waiting while the phone speaks); it chimes
+again only after the speed came back to the limit, or on a road with
+another limit. `map.speed-warning = false` turns the chime off.
+
 ### Routing data
 
 `scripts/map-graph.py` writes the road network and the names from the

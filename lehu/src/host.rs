@@ -25,6 +25,7 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use crate::audio::Audio;
+use crate::chime::{self, SpeedWatch};
 use crate::voice::Speaker;
 
 /// The map's bar follows a replayed drive this often (the map itself
@@ -260,6 +261,9 @@ pub struct AppHost {
     map_to: (String, String),
     /// The arrival, shown in the guidance's place until then.
     map_arrival: Option<(NavCard, u64)>,
+    /// The speeding chime: when it is due, and its samples once made.
+    map_speeding: SpeedWatch,
+    map_chime: Vec<i16>,
 }
 
 impl AppHost {
@@ -361,6 +365,8 @@ impl AppHost {
             sun_checked_at: None,
             map_to: (String::new(), String::new()),
             map_arrival: None,
+            map_speeding: SpeedWatch::new(),
+            map_chime: Vec::new(),
         }
     }
 
@@ -843,8 +849,8 @@ impl AppHost {
     }
 
     /// Each turn of the loop: where a replayed drive (or a route of ours)
-    /// is, for the Me key, the bar and the card and the prompts (the map
-    /// moves along it by itself). It goes on while
+    /// is, for the Me key, the bar and the card, the prompts and the
+    /// speeding chime (the map moves along it by itself). It goes on while
     /// the map is closed, at a slower pace; the map itself is not needed.
     pub fn map_tick(&mut self) {
         let now = lehu_core::clock::now_ms();
@@ -890,6 +896,13 @@ impl AppHost {
             }
         } else {
             self.map_voice = None;
+        }
+        if self.map_speeding.tick(now, fix.kmh, fix.limit) && m.speed_warning {
+            if self.map_chime.is_empty() {
+                self.map_chime = chime::samples();
+            }
+            log::info!("map: {} km/h where the limit is {:?}", fix.kmh, fix.limit);
+            self.audio.prompt(chime::segment(&self.map_chime));
         }
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
