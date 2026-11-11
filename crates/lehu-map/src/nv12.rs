@@ -625,3 +625,167 @@ pub fn rotate(
         }
     }
 }
+
+/// An NV12 picture to draw on: its bytes, its rows `pitch` bytes apart,
+/// its chroma from byte `chroma`, `size` pixels.
+pub struct Surface<'a> {
+    pub pixels: &'a mut [u8],
+    pub pitch: usize,
+    pub chroma: usize,
+    pub size: (u32, u32),
+}
+
+/// A label's picture, upright: `w` x `h` bytes, row by row, 0 where it is
+/// clear, else an index into the lumas it is stamped with (`label_lumas`);
+/// `anchor` is the point stamped at the label's place, in 1/16 pixels.
+pub struct Stamp<'a> {
+    pub w: usize,
+    pub h: usize,
+    pub px: &'a [u8],
+    pub anchor: (i64, i64),
+}
+
+/// The lumas a label is stamped with: index 1 is the halo, 255 the text,
+/// those between the text's edge over the halo.
+pub fn label_lumas(text: [u8; 3], halo: [u8; 3]) -> [u8; 256] {
+    let (t, h) = (i32::from(ycc(text).0), i32::from(ycc(halo).0));
+    let mut lut = [0u8; 256];
+    for (i, o) in lut.iter_mut().enumerate().skip(1) {
+        let cover = (i as i32 - 1) * 255 / 254;
+        *o = ((h * (255 - cover) + t * cover + 127) / 255) as u8;
+    }
+    lut
+}
+
+/// Stamp `s` on `out`, only inside `clip` (left, top, right, bottom, in
+/// pixels), its anchor at `at` (1/16 pixels), its rows running along `way`
+/// (65536 long; x right, y down): its luma through `lumas`, and the
+/// chroma pair `pair` for each two by two block whose middle it covers.
+/// Nearest sample, in integers: each output pixel samples the stamp at
+///   anchor + ((p - at) . way, (p - at) . way turned a quarter clockwise)
+/// in 16.16 fixed point, a row's samples one add apart; only the columns
+/// of a row that the stamp can cover are visited, found with a reciprocal
+/// worked out once (the CPU has no divide). Written, never read.
+pub fn stamp(
+    out: &mut Surface<'_>,
+    clip: (i64, i64, i64, i64),
+    s: &Stamp<'_>,
+    at: (i64, i64),
+    way: (i64, i64),
+    lumas: &[u8; 256],
+    pair: [u8; 2],
+) {
+    let (w, h) = (i64::from(out.size.0), i64::from(out.size.1));
+    let (cl, ct) = (clip.0.max(0), clip.1.max(0));
+    let (cr, cb) = (clip.2.min(w), clip.3.min(h));
+    if cl >= cr || ct >= cb || s.w == 0 || s.h == 0 || s.px.len() < s.w * s.h {
+        return;
+    }
+    let (c, sn) = way;
+    if c == 0 && sn == 0 {
+        return;
+    }
+    // The stamp's corners on the picture (1/16 px), for the rows it spans.
+    let corner = |u: i64, v: i64| {
+        let (u, v) = (u * 16 - s.anchor.0, v * 16 - s.anchor.1);
+        (
+            at.0 + ((u * c - v * sn) >> 16),
+            at.1 + ((u * sn + v * c) >> 16),
+        )
+    };
+    let (sw, sh) = (s.w as i64, s.h as i64);
+    let corners = [corner(0, 0), corner(sw, 0), corner(0, sh), corner(sw, sh)];
+    let xs = corners.iter().map(|p| p.0);
+    let ys = corners.iter().map(|p| p.1);
+    let x0 = ((xs.clone().min().unwrap_or(0) >> 4) - 1).max(cl);
+    let x1 = ((xs.max().unwrap_or(0) >> 4) + 2).min(cr);
+    let y0 = ((ys.clone().min().unwrap_or(0) >> 4) - 1).max(ct);
+    let y1 = ((ys.max().unwrap_or(0) >> 4) + 2).min(cb);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let (lim_u, lim_v) = (sw << 16, sh << 16);
+    let (a0, a1) = (s.anchor.0 << 12, s.anchor.1 << 12);
+    let rec = |k: i64| if k == 0 { 0 } else { (1i64 << 32) / k.abs() };
+    let (rec_c, rec_s) = (rec(c), rec(sn));
+    let (rec_c2, rec_s2) = (rec(2 * c), rec(2 * sn));
+    let (ci, si) = (c as i32, sn as i32);
+    let (wu, hu) = (lim_u as u32, lim_v as u32);
+    let sample = |u: i32, v: i32| -> u8 {
+        if (u as u32) < wu && (v as u32) < hu {
+            s.px[(v >> 16) as usize * s.w + (u >> 16) as usize]
+        } else {
+            0
+        }
+    };
+    let (pitch, chroma) = (out.pitch, out.chroma);
+    for y in y0..y1 {
+        // Where column 0 of this row samples, in 16.16.
+        let dy = y * 16 + 8 - at.1;
+        let dx = 8 - at.0;
+        let ub = ((dx * c + dy * sn) >> 4) + a0;
+        let vb = ((dy * c - dx * sn) >> 4) + a1;
+        let (a, b) = columns(ub, c, rec_c, lim_u, (x0, x1));
+        let (a, b) = columns(vb, -sn, rec_s, lim_v, (a, b));
+        if a >= b {
+            continue;
+        }
+        let o = y as usize * pitch;
+        let Some(line) = out.pixels.get_mut(o + a as usize..o + b as usize) else {
+            continue;
+        };
+        let mut u = (ub + a * c) as i32;
+        let mut v = (vb - a * sn) as i32;
+        for p in line {
+            let i = sample(u, v);
+            if i != 0 {
+                *p = lumas[usize::from(i)];
+            }
+            u = u.wrapping_add(ci);
+            v = v.wrapping_sub(si);
+        }
+    }
+    // The chroma: a pair a block, sampled at the block's middle.
+    let (bx0, bx1) = (x0 / 2, (x1 + 1) / 2);
+    for by in (y0 / 2)..((y1 + 1) / 2) {
+        let dy = by * 32 + 16 - at.1;
+        let dx = 16 - at.0;
+        let ub = ((dx * c + dy * sn) >> 4) + a0;
+        let vb = ((dy * c - dx * sn) >> 4) + a1;
+        let (a, b) = columns(ub, 2 * c, rec_c2, lim_u, (bx0, bx1));
+        let (a, b) = columns(vb, -2 * sn, rec_s2, lim_v, (a, b));
+        if a >= b {
+            continue;
+        }
+        let o = chroma + by as usize * pitch;
+        let Some(line) = out.pixels.get_mut(o + 2 * a as usize..o + 2 * b as usize) else {
+            continue;
+        };
+        let mut u = (ub + a * 2 * c) as i32;
+        let mut v = (vb - a * 2 * sn) as i32;
+        for p in line.as_chunks_mut::<2>().0 {
+            if sample(u, v) != 0 {
+                *p = pair;
+            }
+            u = u.wrapping_add(2 * ci);
+            v = v.wrapping_sub(2 * si);
+        }
+    }
+}
+
+/// The columns `x` of `range` where `0 <= a + x * k < limit` can hold: the
+/// exact ones and one more each side, from `rec` (2^32 / |k|), by
+/// multiplying. All of `range` when `k` is 0 and `a` is inside, else none.
+fn columns(a: i64, k: i64, rec: i64, limit: i64, (x0, x1): (i64, i64)) -> (i64, i64) {
+    if k == 0 {
+        return if (0..limit).contains(&a) {
+            (x0, x1)
+        } else {
+            (x0, x0)
+        };
+    }
+    let p = (-a * rec) >> 32;
+    let q = ((limit - a) * rec) >> 32;
+    let (lo, hi) = if k > 0 { (p, q) } else { (-q, -p) };
+    ((lo - 1).max(x0), (hi + 2).min(x1))
+}

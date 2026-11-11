@@ -5,7 +5,8 @@
 
     scripts/map-tiles.py EXTRACT.osm.pbf OUT [--zoom 8-16] [--name NAME]
                          [--bbox W,S,E,N] [--jobs N] [--quality 80]
-                         [--font FONT.ttf] [--no-labels]
+                         [--font FONT.ttf] [--labels draw|data|both|none]
+                         [--label-zoom 8-18] [--no-tiles] [--night]
 
 OUT gets one 256 x 256 baseline JPEG per tile, OUT/<z>/<x>/<y>.jpg, and
 OUT/map.toml, which tells LEHU the zoom levels, the area and where to open.
@@ -21,6 +22,35 @@ collide and a label across a tile's edge continues on the next tile. The
 font is LEHU's own (crates/lehu-ui/ui/fonts/font.ttf) unless --font names
 another. It needs pyosmium and Pillow
 (python3 -m venv v && v/bin/pip install osmium pillow).
+
+With --labels data the names are not drawn into the tiles but written as
+data, for LEHU to draw itself at the size the panel wants and upright
+whichever way the map is turned: OUT/labels/<z>/<bx>/<by>.txt, one file a
+block of 8 x 8 tiles (bx, by: the block's first tile's x and y, divided by
+8), placed for every zoom from the first to two past the last (the zooms
+LEHU enlarges tiles to), or those --label-zoom names. Each line is a
+label, its fields apart by tabs:
+
+    kind  x  y  angle  size  text
+
+kind is s (a street) or p (a place); x and y the middle of the label's
+box, in pixels of the zoom (whole, from the world's top left); angle the
+street's way in degrees, clockwise from east, -89 to 90 (0 for a place);
+size the text's size in pixels (its em); text the name, UTF-8. Lines
+starting with # are comments. Each label lies in the block of its middle,
+and none reaches more than LABEL_REACH pixels from it. A block without
+labels has no file; OUT/labels/<z>/areas.txt lists the blocks each pass
+covered, a line "bx0 by0 bx1 by1" (first to last, both included) a pass.
+Where a zoom has neither a block's file nor the block in its areas, LEHU
+draws the labels of a zoom or two out, so a pass over a smaller area at
+deeper zooms (--bbox) can follow one over the whole extract, its blocks
+replacing the first pass's. --no-tiles writes only the label data, for
+tiles drawn before. The box is the
+text's advance (no kerning) by its size, from 0.75 of the size above the
+baseline to 0.25 below, with LABEL_HALO pixels of halo round it; labels of
+a zoom keep LABEL_GAP pixels apart, and a place keeps clear the square
+round its box's circle, so it can stay level on a turned map. The data is
+the same for the day and the night tiles: LEHU picks the colours.
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0: LEHU shows the
 attribution with the map.
@@ -149,6 +179,18 @@ PLACE_NODES = []  # (kind, name, point in zoom-0 pixels)
 LABELS = {}  # zoom -> [(text, size, colour, centre (2x zoom pixels), angle, bbox)]
 LABEL_BUCKETS = {}  # zoom -> {(tile x, tile y): [label index]}
 FONT_PATH = DEFAULT_FONT
+
+# Names as data (--labels data), drawn by LEHU at these sizes in pixels on
+# the panel, whatever the zoom.
+LABEL_STREET_SIZE = 22
+LABEL_PLACE_SIZE = {"city": 24, "town": 24, "village": 22, "suburb": 22, "hamlet": 20}
+LABEL_HALO = 2  # LEHU's halo round the text
+LABEL_GAP = 6  # pixels kept clear between two labels
+LABEL_REPEAT = 400  # pixels between two labels of the same street
+LABEL_REACH = 512  # no part of a label further than this from its middle
+LABEL_BLOCK = 3  # a file holds 2**LABEL_BLOCK x 2**LABEL_BLOCK tiles
+OVERZOOM = 2  # zooms LEHU goes past the last, the tiles enlarged
+DATA_LABELS = {}  # zoom -> [(kind, text, size, centre (zoom pixels), angle)]
 
 
 def night():
@@ -470,6 +512,129 @@ def place_labels(z0, z1):
         print(f"  zoom {z}: {len(placed)} labels", flush=True)
 
 
+def place_label_data(zooms, area):
+    """Every zoom's labels as data, for LEHU: placed as `place_labels` does,
+    at the sizes LEHU draws them, only those near `area` (zoom-0 pixels)."""
+    fonts = {}
+
+    def advance(text, size):
+        # Glyph by glyph, no kerning: as LEHU lays text out.
+        if size not in fonts:
+            fonts[size] = ImageFont.truetype(FONT_PATH, size)
+        f = fonts[size]
+        return sum(f.getlength(ch) for ch in text)
+
+    order = {r[0]: i for i, r in enumerate(reversed(ROADS))}
+    streets = sorted(STREETS, key=lambda s: (order[s[0]], -len(s[2])))
+    places = sorted(PLACE_NODES, key=lambda p: PLACES[p[0]][3])
+    gap, halo = LABEL_GAP, LABEL_HALO
+    for z in zooms:
+        scale = 2 ** z
+        # The blocks over the area, whole, and as far again as a label
+        # reaches: every label of theirs placed as a pass over the whole
+        # extract would.
+        x0, y0, x1, y1 = tile_range(area, z)
+        side = (TILE << LABEL_BLOCK) / scale
+        b = 1 << LABEL_BLOCK
+        m = LABEL_REACH / scale
+        near = ((x0 // b) * side - m, (y0 // b) * side - m,
+                (x1 // b + 1) * side + m, (y1 // b + 1) * side + m)
+        grid = Grid()
+        placed = []
+        for kind, name, (x, y) in places:
+            first, last, _, _ = PLACES[kind]
+            if not first <= z <= last or not (near[0] <= x <= near[2] and near[1] <= y <= near[3]):
+                continue
+            size = LABEL_PLACE_SIZE[kind]
+            w, h = advance(name, size) + 2 * halo, size + 2 * halo
+            # Level on the panel however the map turns: it keeps clear the
+            # square round the circle its box turns in.
+            r = math.hypot(w, h) / 2 + gap
+            if r > LABEL_REACH:
+                continue
+            cx, cy = x * scale, y * scale
+            box = (cx - r, cy - r, cx + r, cy + r)
+            if grid.free(box):
+                grid.add(box)
+                placed.append(("p", name, size, (cx, cy), 0))
+        last_at = {}
+        size = LABEL_STREET_SIZE
+        for cls, name, pts in streets:
+            if z < STREET_NAMES[cls]:
+                continue
+            b = bbox(pts)
+            if b[2] < near[0] or b[0] > near[2] or b[3] < near[1] or b[1] > near[3]:
+                continue
+            w, h = advance(name, size) + 2 * halo, size + 2 * halo
+            if math.hypot(w, h) / 2 > LABEL_REACH:
+                continue
+            line = [(p[0] * scale, p[1] * scale) for p in pts]
+            found = straight_run(line, w * 1.15)
+            if found is None:
+                continue
+            (cx, cy), angle = found
+            angle = round(angle)
+            if angle <= -90:
+                angle += 180
+            seen = last_at.get(name, ())
+            if any(math.hypot(cx - px, cy - py) < LABEL_REPEAT for px, py in seen):
+                continue
+            box = rotated_box(cx, cy, w + 2 * gap, h + 2 * gap, angle)
+            if not grid.free(box):
+                continue
+            grid.add(box)
+            last_at.setdefault(name, []).append((cx, cy))
+            placed.append(("s", name, size, (cx, cy), angle))
+        DATA_LABELS[z] = placed
+        print(f"  zoom {z}: {len(placed)} labels as data", flush=True)
+
+
+def write_label_data(out, zooms, area):
+    """The labels of `zooms` as files under OUT/labels, one a block of
+    tiles, for the blocks over `area` (zoom-0 pixels) that have any,
+    replacing those there; the blocks covered added to the zoom's
+    areas.txt."""
+    side = TILE << LABEL_BLOCK
+    files = 0
+    size = 0
+    for z in zooms:
+        root = os.path.join(out, "labels", str(z))
+        x0, y0, x1, y1 = tile_range(area, z)
+        bx0, by0, bx1, by1 = x0 >> LABEL_BLOCK, y0 >> LABEL_BLOCK, x1 >> LABEL_BLOCK, y1 >> LABEL_BLOCK
+        blocks = {(bx, by): [] for bx in range(bx0, bx1 + 1) for by in range(by0, by1 + 1)}
+        for kind, text, tsize, (cx, cy), angle in DATA_LABELS[z]:
+            bx, by = int(cx // side), int(cy // side)
+            if not (bx0 <= bx <= bx1 and by0 <= by <= by1):
+                continue
+            text = " ".join(text.split())
+            blocks.setdefault((bx, by), []).append(
+                f"{kind}\t{round(cx)}\t{round(cy)}\t{angle}\t{tsize}\t{text}\n")
+        for (bx, by), lines in blocks.items():
+            d = os.path.join(root, str(bx))
+            path = os.path.join(d, f"{by}.txt")
+            if not lines:
+                # None here now: an earlier pass's go.
+                if os.path.exists(path):
+                    os.remove(path)
+                continue
+            os.makedirs(d, exist_ok=True)
+            data = ("# lehu-labels 1\n" + "".join(lines)).encode()
+            with open(path + ".tmp", "wb") as f:
+                f.write(data)
+            os.replace(path + ".tmp", path)
+            files += 1
+            size += len(data)
+        os.makedirs(root, exist_ok=True)
+        areas = os.path.join(root, "areas.txt")
+        line = f"{bx0} {by0} {bx1} {by1}\n"
+        old = open(areas).read().splitlines(keepends=True) if os.path.exists(areas) else []
+        if line not in old:
+            with open(areas + ".tmp", "w") as f:
+                f.write("".join(old) + line)
+            os.replace(areas + ".tmp", areas)
+    print(f"label data: {files} files, {size // 1024} KiB", flush=True)
+
+
 _LABEL_IMAGES = {}
 
 
@@ -600,7 +765,15 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--quality", type=int, default=80)
     ap.add_argument("--font", default=DEFAULT_FONT, help="the labels' TrueType font")
-    ap.add_argument("--no-labels", action="store_true", help="no street or place names")
+    ap.add_argument("--labels", choices=("draw", "data", "both", "none"), default="draw",
+                    help="street and place names drawn into the tiles, written as data "
+                         "for LEHU to draw (labels/), both, or none")
+    ap.add_argument("--no-labels", action="store_true", help="the same as --labels none")
+    ap.add_argument("--label-zoom", default=None,
+                    help="first-last zoom of the label data; the tiles' first to two past "
+                         "their last if absent")
+    ap.add_argument("--no-tiles", action="store_true",
+                    help="only the label data, for tiles drawn before (no tiles, no map.toml)")
     ap.add_argument("--night", action="store_true",
                     help="the night palette (LEHU shows the set in <map>/night at night)")
     a = ap.parse_args()
@@ -608,12 +781,19 @@ def main():
         night()
     global FONT_PATH
     FONT_PATH = a.font
-    labels = not a.no_labels
+    mode = "none" if a.no_labels else a.labels
+    labels = mode != "none"
     if labels and not os.path.exists(FONT_PATH):
         sys.exit(f"no font at {FONT_PATH}: give --font")
     z0, z1 = (int(v) for v in a.zoom.split("-"))
     if not 0 <= z0 <= z1 <= 19:
         sys.exit("zoom: first-last, 0..19")
+    if a.label_zoom:
+        l0, l1 = (int(v) for v in a.label_zoom.split("-"))
+    else:
+        l0, l1 = z0, z1 + OVERZOOM
+    if not 0 <= l0 <= l1 <= 22:
+        sys.exit("label-zoom: first-last, 0..22")
 
     t = time.time()
     if a.bbox:
@@ -628,11 +808,18 @@ def main():
     print(f"{len(FEATURES)} features, {len(STREETS)} named streets, "
           f"{len(PLACE_NODES)} places in {time.time() - t:.0f} s", flush=True)
     index()
-    if labels:
+    if mode in ("draw", "both"):
         place_labels(z0, z1)
 
     left, top = world(w, n)
     right, bottom = world(e, s)
+    if mode in ("data", "both"):
+        zooms = range(l0, l1 + 1)
+        place_label_data(zooms, (left, top, right, bottom))
+        write_label_data(a.out, zooms, (left, top, right, bottom))
+    if a.no_tiles:
+        print(f"done in {time.time() - t:.0f} s", flush=True)
+        return
     jobs = []
     for z in range(z0, z1 + 1):
         x0, y0, x1, y1 = tile_range((left, top, right, bottom), z)

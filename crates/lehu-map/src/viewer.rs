@@ -20,7 +20,8 @@ use lehu_drm::{Canvas, Display, Show};
 
 use crate::drive::{Drive, NEAR_TURN_M, Steer};
 use crate::hw::HwJpeg;
-use crate::nv12;
+use crate::labels::Names;
+use crate::nv12::{self, Surface};
 use crate::sprite::Sprites;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
@@ -47,7 +48,7 @@ pub enum Marker {
 /// How far along the route the drive is: the track point it heads for,
 /// and where it is. The route behind it is drawn grey.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Progress {
+pub(crate) struct Progress {
     step: usize,
     at: (i64, i64),
 }
@@ -149,6 +150,11 @@ impl Viewer {
             set.min_zoom,
             set.max_zoom,
         );
+        // Names as data, drawn here; else they are in the tiles.
+        let names = Names::open(set.dir());
+        if names.is_some() {
+            log::info!("map: the names are drawn over the tiles");
+        }
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 want: view,
@@ -200,7 +206,7 @@ impl Viewer {
             };
             thread::Builder::new()
                 .name("map".into())
-                .spawn(move || run(&shared, &display, tiles, frames, panel, (cols, rows)))
+                .spawn(move || run(&shared, &display, tiles, names, frames, panel, (cols, rows)))
                 .map_err(|e| format!("map thread: {e}"))?
         };
         let driver = {
@@ -484,6 +490,7 @@ fn run(
     shared: &Shared,
     display: &Display,
     mut tiles: Tiles,
+    mut names: Option<Names>,
     frames: Frames,
     panel: (u32, u32),
     (cols, rows): (u32, u32),
@@ -593,6 +600,7 @@ fn run(
                 let started = Instant::now();
                 if let Some(i) = compose_free(
                     &mut tiles,
+                    names.as_mut(),
                     &mut canvases,
                     &mut held,
                     &recent,
@@ -654,7 +662,8 @@ fn run(
                     let started = Instant::now();
                     up_held[i] = Some(render_up(
                         &mut tiles,
-                        &mut ups[i],
+                        names.as_mut(),
+                        &mut surface(&mut ups[i]),
                         &want,
                         h,
                         baked,
@@ -733,7 +742,14 @@ fn run(
                 let (pitch, chroma) = (canvas.pitch(), canvas.chroma_offset());
                 let size = (canvas.width(), canvas.height());
                 if let Some(old) = h.marker {
+                    // To even pixels, as the tiles are put back.
                     let rect = marker_rect(&h.layout, old);
+                    let rect = (
+                        rect.0 & !1,
+                        rect.1 & !1,
+                        (rect.2 + 1) & !1,
+                        (rect.3 + 1) & !1,
+                    );
                     tiles.compose_rect(&h.layout, canvas.pixels(), pitch, chroma, rect);
                     if let Some(line) = route.as_deref() {
                         draw_route(
@@ -746,6 +762,9 @@ fn run(
                             line,
                             progress,
                         );
+                    }
+                    if let Some(n) = names.as_mut() {
+                        draw_names(n, &mut surface(canvas), &h.layout, rect, tiles.night());
                     }
                 }
                 draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, baked);
@@ -764,6 +783,7 @@ fn run(
                 let (decoded, software, enlarged) = (tiles.decoded, tiles.software, tiles.enlarged);
                 let Some(index) = compose_free(
                     &mut tiles,
+                    names.as_mut(),
                     &mut canvases,
                     &mut held,
                     &recent,
@@ -953,7 +973,7 @@ fn fine(zoom: u8, v: i64) -> i64 {
 /// (65536 long) is up, the point `p` (1/65536 pixels) at `anchor` (its
 /// pixels), drawn from row `top` down.
 #[derive(Clone, Copy, Debug)]
-struct UpHeld {
+pub(crate) struct UpHeld {
     zoom: u8,
     p: (i64, i64),
     h: (i64, i64),
@@ -1020,14 +1040,26 @@ impl UpHeld {
     }
 }
 
+/// A canvas to draw on.
+fn surface(c: &mut Canvas) -> Surface<'_> {
+    let (pitch, chroma, size) = (c.pitch(), c.chroma_offset(), (c.width(), c.height()));
+    Surface {
+        pixels: c.pixels(),
+        pitch,
+        chroma,
+        size,
+    }
+}
+
 /// A heading-up frame of `view` on `out`, rows `top` (made even) down:
 /// the tiles turned so that `h` points up, the view's point at `anchor`;
-/// then the route and the marker (if it is to be drawn in), turned the
-/// same way. What the frame then holds.
+/// then the route, the names over it, and the marker (if it is to be
+/// drawn in), turned the same way. What the frame then holds.
 #[allow(clippy::too_many_arguments)]
-fn render_up(
+pub(crate) fn render_up(
     tiles: &mut Tiles,
-    out: &mut Canvas,
+    names: Option<&mut Names>,
+    out: &mut Surface<'_>,
     view: &View,
     h: (i64, i64),
     marker: Option<Marker>,
@@ -1036,8 +1068,8 @@ fn render_up(
     anchor: (i64, i64),
     top: u32,
 ) -> UpHeld {
-    let size = (out.width(), out.height());
-    let (pitch, chroma) = (out.pitch(), out.chroma_offset());
+    let size = out.size;
+    let (pitch, chroma) = (out.pitch, out.chroma);
     let top = top & !1;
     let held = UpHeld {
         zoom: view.zoom,
@@ -1072,7 +1104,7 @@ fn render_up(
         let skip = top as usize * pitch;
         nv12::rotate(
             &grid,
-            &mut out.pixels()[skip..],
+            &mut out.pixels[skip..],
             pitch,
             chroma - (top as usize / 2) * pitch,
             (size.0, size.1 - top),
@@ -1086,7 +1118,7 @@ fn render_up(
         let points: Vec<(i64, i64)> = line.iter().map(|&q| held.sixteenth(q)).collect();
         let split = progress.map(|q| (q.step, held.sixteenth(q.at)));
         draw_split(
-            out.pixels(),
+            out.pixels,
             pitch,
             chroma,
             size,
@@ -1095,16 +1127,38 @@ fn render_up(
             split,
         );
     }
+    if let Some(n) = names {
+        // The part drawn, on the map, in world pixels.
+        let s = i32::from(WORLD_Z - view.zoom.min(WORLD_Z)) - 16;
+        let world = |v: i64| if s >= 0 { v << s } else { v >> -s };
+        let xs = corners.iter().map(|c| c.0);
+        let ys = corners.iter().map(|c| c.1);
+        let area = (
+            world(xs.clone().min().unwrap_or(0)),
+            world(ys.clone().min().unwrap_or(0)),
+            world(xs.max().unwrap_or(0)),
+            world(ys.max().unwrap_or(0)),
+        );
+        n.draw(
+            out,
+            (0, t, w, ht),
+            view.zoom,
+            area,
+            tiles.night(),
+            |q| held.sixteenth(q),
+            |m| held.turn(m),
+        );
+    }
     match marker {
         Some(Marker::Dot(x, y)) => {
             let at = held.sixteenth((x, y));
-            nv12::dot(out.pixels(), pitch, chroma, size, (at.0 >> 4, at.1 >> 4));
+            nv12::dot(out.pixels, pitch, chroma, size, (at.0 >> 4, at.1 >> 4));
         }
         Some(Marker::Arrow(x, y, m)) => {
             let at = held.sixteenth((x, y));
             let turned = held.turn((i64::from(m.0), i64::from(m.1)));
             nv12::arrow(
-                out.pixels(),
+                out.pixels,
                 pitch,
                 chroma,
                 size,
@@ -1159,6 +1213,34 @@ fn draw_split(
     }
 }
 
+/// The names on a north-up canvas of `layout`, only inside `clip` (its
+/// pixels), along the ways they have on the map.
+pub(crate) fn draw_names(
+    names: &mut Names,
+    out: &mut Surface<'_>,
+    layout: &Layout,
+    clip: (i64, i64, i64, i64),
+    night: bool,
+) {
+    let s = WORLD_Z - layout.zoom.min(WORLD_Z);
+    let world = |px: i64, tile: i64| (px + tile * TILE) << s;
+    let area = (
+        world(clip.0, layout.tx),
+        world(clip.1, layout.ty),
+        world(clip.2, layout.tx),
+        world(clip.3, layout.ty),
+    );
+    names.draw(
+        out,
+        clip,
+        layout.zoom,
+        area,
+        night,
+        |p| layout.sixteenth(p),
+        |m| m,
+    );
+}
+
 /// The part of a canvas a marker covers, in its pixels: left, top, right,
 /// bottom.
 fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
@@ -1169,11 +1251,12 @@ fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
 }
 
 /// Compose `layout` into a canvas that is neither on scanout nor just
-/// replaced, with the marker at `position`, and say which; None when there
-/// is none such.
+/// replaced, with the route, the names and the marker at `position`, and
+/// say which; None when there is none such.
 #[allow(clippy::too_many_arguments)]
 fn compose_free(
     tiles: &mut Tiles,
+    names: Option<&mut Names>,
     canvases: &mut [Canvas],
     held: &mut [Option<Held>],
     recent: &[Option<usize>; 2],
@@ -1200,6 +1283,10 @@ fn compose_free(
             line,
             progress,
         );
+    }
+    if let Some(n) = names {
+        let whole = (0, 0, i64::from(size.0), i64::from(size.1));
+        draw_names(n, &mut surface(canvas), layout, whole, tiles.night());
     }
     draw_marker(canvas.pixels(), pitch, chroma, size, layout, position);
     held[index] = Some(Held {

@@ -87,9 +87,51 @@ The tiles are drawn by the script, never fetched from OpenStreetMap's tile
 servers: their usage policy forbids offline use. The drawing is plain:
 land use, water, buildings, roads and railways, with the names of streets
 (from zoom 13 for primary roads and up, 14 for secondary and tertiary
-roads, 15 for the rest) and of places, in LEHU's own font. The names are placed once for the whole map at each zoom, so they
-never overlap and run on across a tile's edge. `--no-labels` leaves them
-out; `--font` takes another TrueType font.
+roads, 15 for the rest, 17 for service roads and paths) and of places, in
+LEHU's own font. The names are placed once for the whole map at each zoom,
+so they never overlap and run on across a tile's edge. `--font` takes
+another TrueType font.
+
+## Names
+
+The names can be drawn into the tiles (`--labels draw`, the default) or
+left to LEHU (`--labels data`; `both` does both, `none` or `--no-labels`
+neither). Names in the tiles are small (12 pixels), turn with the map
+heading up and can then read upside down. Names LEHU draws itself are 20
+to 24 pixels on the panel at every zoom, are drawn over the tiles and the
+route, and always read the right way up: a street's name lies along the
+street, turned half round when it would read upside down, and a place's
+name stays level on the panel.
+
+With `--labels data` the script places the names for the size LEHU draws
+them, for every zoom from the first to two past the last (the zooms LEHU
+enlarges the tiles to; `--label-zoom` names others), none overlapping
+another, and writes them to `labels/` beside the tiles: a small text file
+a block of 8 x 8 tiles, `labels/<z>/<bx>/<by>.txt`, each line a label
+(kind, place, angle, size and text; the script's header describes the
+format). The same data serves the day and the night tiles: LEHU picks the
+colours, dark text on a white halo by day, light on a dark halo at night.
+Where a zoom has not covered a block (`labels/<z>/areas.txt`) LEHU draws
+the names of a zoom or two out, so a pass over a city at deeper zooms can follow one over the whole
+country. A set without `labels/` has its names in the tiles, and LEHU
+draws none.
+
+The Luxembourg example with names as data, the city deeper:
+
+```sh
+P="v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf"
+CITY="--zoom 15-16 --bbox 6.02,49.56,6.22,49.67"
+$P maps --zoom 8-14 --labels data --label-zoom 8-16
+$P maps $CITY --labels data
+$P maps/night --zoom 8-14 --labels none --night
+$P maps/night $CITY --labels none --night
+```
+
+The second pass writes a `map.toml` for its own zooms and area: set
+`min-zoom` and `bounds` back to the first pass's (and the same in
+`night/`). `--no-tiles` writes only the label data, to place the names
+again without drawing the tiles again. The data is small: 320 KB in 780
+files for the example (3.4 MB on the card, a 4 KB block a file).
 
 ## How it works
 
@@ -112,6 +154,13 @@ degree or the road ahead runs out. The arrow is on a display plane of its
 own above the map, so the map moves under it without being redrawn; on a
 display without such a plane it is drawn into the map instead. The phone's decoder makes way while the map is shown,
 since both need video memory.
+
+Names LEHU draws itself are laid out from the font's glyphs, each
+rasterized once a size (by swash, the rasterizer the screens' toolkit
+links in already) and widened into its halo; a name's picture is kept
+while it is drawn. On a canvas or a turned frame each pixel the name can
+cover samples its picture in integer fixed point, the right way up, so the
+names add a few milliseconds to a frame.
 
 The canvas is NV12, the video plane's own format, so the display's scaler
 does the colour conversion. Tiles are decoded by the video engine when the

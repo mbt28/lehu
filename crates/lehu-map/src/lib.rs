@@ -16,9 +16,15 @@
 //! memory. Everything runs on a thread of its own, so the screens and the
 //! input never wait for a decode. Coordinates are integers: world pixels
 //! at zoom 22.
+//!
+//! Street and place names are either in the tiles or, for a set drawn with
+//! `--labels data`, drawn here over them (crate::labels), so that they
+//! stay the right way up when the map turns heading up.
 
 mod drive;
+mod glyphs;
 mod hw;
+mod labels;
 mod nv12;
 mod sprite;
 mod tiles;

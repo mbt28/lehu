@@ -1074,3 +1074,491 @@ fn heading_up_cost() {
         worst
     );
 }
+
+/// A 200 x 100 NV12 canvas of one colour, and its pitch and chroma.
+fn plain(y: u8, c: [u8; 2]) -> Vec<u8> {
+    let mut buf = vec![y; 200 * 100];
+    buf.extend([c[0], c[1]].repeat(100 * 50));
+    buf
+}
+
+fn surface(buf: &mut [u8]) -> nv12::Surface<'_> {
+    nv12::Surface {
+        pixels: buf,
+        pitch: 200,
+        chroma: 200 * 100,
+        size: (200, 100),
+    }
+}
+
+/// The box of the lumas that are not `y`: left, top, right, bottom.
+fn changed(buf: &[u8], y: u8) -> Option<(usize, usize, usize, usize)> {
+    let mut b: Option<(usize, usize, usize, usize)> = None;
+    for (i, &v) in buf[..200 * 100].iter().enumerate() {
+        if v != y {
+            let (x, r) = (i % 200, i / 200);
+            b = Some(match b {
+                None => (x, r, x, r),
+                Some(o) => (o.0.min(x), o.1.min(r), o.2.max(x), o.3.max(r)),
+            });
+        }
+    }
+    b
+}
+
+fn way(degrees: f64) -> (i64, i64) {
+    let r = degrees.to_radians();
+    (
+        (r.cos() * 65536.0).round() as i64,
+        (r.sin() * 65536.0).round() as i64,
+    )
+}
+
+#[test]
+fn a_name_is_dark_text_on_a_white_halo_and_nothing_else_changes() {
+    let mut glyphs = crate::glyphs::Glyphs::new().unwrap();
+    let sprite = glyphs.sprite("Hal", 22);
+    // As wide as three letters and their halo, about the size high.
+    assert!((30..80).contains(&sprite.w), "{}", sprite.w);
+    assert!((20..36).contains(&sprite.h), "{}", sprite.h);
+    let lumas = nv12::label_lumas([60, 60, 60], [255, 255, 255]);
+    let (text, halo) = (ycc([60, 60, 60]).0, ycc([255, 255, 255]).0);
+    assert_eq!((lumas[255], lumas[1]), (text, halo));
+    let mut buf = plain(100, [90, 160]);
+    let at = (100 * 16, 50 * 16);
+    nv12::stamp(
+        &mut surface(&mut buf),
+        (0, 0, 200, 100),
+        &sprite.stamp(),
+        at,
+        (65536, 0),
+        &lumas,
+        [128, 128],
+    );
+    let lumas_seen: Vec<u8> = buf[..20000].iter().copied().filter(|&v| v != 100).collect();
+    assert!(lumas_seen.contains(&text) && lumas_seen.contains(&halo));
+    assert!(lumas_seen.iter().all(|&v| (text..=halo).contains(&v)));
+    // Centred on its place, the box of its ink with the halo.
+    let b = changed(&buf, 100).unwrap();
+    assert_eq!((b.2 - b.0 + 1, b.3 - b.1 + 1), (sprite.w, sprite.h));
+    assert!((b.0 + b.2).abs_diff(200) <= 4, "{b:?}");
+    // The chroma: the halo's where it covers, else as it was.
+    let pairs = buf[20000..].as_chunks::<2>().0;
+    assert!(pairs.contains(&[128, 128]));
+    assert!(pairs.iter().all(|p| *p == [128, 128] || *p == [90, 160]));
+}
+
+#[test]
+fn a_name_keeps_to_its_clip() {
+    let mut glyphs = crate::glyphs::Glyphs::new().unwrap();
+    let sprite = glyphs.sprite("Grand-Rue", 22);
+    let lumas = nv12::label_lumas([60, 60, 60], [255, 255, 255]);
+    let mut buf = plain(100, [90, 160]);
+    nv12::stamp(
+        &mut surface(&mut buf),
+        (0, 0, 100, 100),
+        &sprite.stamp(),
+        (100 * 16, 50 * 16),
+        way(20.0),
+        &lumas,
+        [128, 128],
+    );
+    let b = changed(&buf, 100).unwrap();
+    assert!(b.0 < 80 && b.2 == 99, "{b:?}");
+    for r in 0..50 {
+        let row = &buf[20000 + r * 200..20000 + (r + 1) * 200];
+        assert!(
+            row[100..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .all(|p| *p == [90, 160])
+        );
+    }
+}
+
+/// What `stamp` does, the plain way: every pixel and block of the canvas
+/// samples the stamp, none skipped.
+fn stamp_everywhere(
+    buf: &mut [u8],
+    s: &nv12::Stamp<'_>,
+    at: (i64, i64),
+    (c, sn): (i64, i64),
+    lumas: &[u8; 256],
+) {
+    let sample = |px: i64, py: i64| -> u8 {
+        let (dx, dy) = (px - at.0, py - at.1);
+        let u = ((dx * c + dy * sn) >> 4) + (s.anchor.0 << 12);
+        let v = ((dy * c - dx * sn) >> 4) + (s.anchor.1 << 12);
+        if u < 0 || v < 0 || (u >> 16) as usize >= s.w || (v >> 16) as usize >= s.h {
+            return 0;
+        }
+        s.px[(v >> 16) as usize * s.w + (u >> 16) as usize]
+    };
+    for y in 0..100i64 {
+        for x in 0..200i64 {
+            let i = sample(x * 16 + 8, y * 16 + 8);
+            if i != 0 {
+                buf[(y * 200 + x) as usize] = lumas[usize::from(i)];
+            }
+        }
+    }
+    for by in 0..50i64 {
+        for bx in 0..100i64 {
+            if sample(bx * 32 + 16, by * 32 + 16) != 0 {
+                let o = 20000 + (by * 200 + 2 * bx) as usize;
+                buf[o..o + 2].copy_from_slice(&[128, 128]);
+            }
+        }
+    }
+}
+
+#[test]
+fn at_any_angle_a_name_covers_what_it_would_pixel_by_pixel() {
+    let mut glyphs = crate::glyphs::Glyphs::new().unwrap();
+    let sprite = glyphs.sprite("Avenue de la Gare", 20);
+    let lumas = nv12::label_lumas([200, 204, 210], [24, 26, 30]);
+    for degrees in (0..360)
+        .step_by(7)
+        .map(f64::from)
+        .chain([90.0, 180.0, 270.0])
+    {
+        let w = way(degrees);
+        // Not on a pixel's middle, and partly off the canvas.
+        let at = (97 * 16 + 5, 61 * 16 + 11);
+        let mut fast = plain(100, [90, 160]);
+        let mut slow = fast.clone();
+        nv12::stamp(
+            &mut surface(&mut fast),
+            (0, 0, 200, 100),
+            &sprite.stamp(),
+            at,
+            w,
+            &lumas,
+            [128, 128],
+        );
+        stamp_everywhere(&mut slow, &sprite.stamp(), at, w, &lumas);
+        assert!(fast == slow, "{degrees}°");
+    }
+}
+
+#[test]
+fn a_name_turned_half_round_covers_the_same_place() {
+    let mut glyphs = crate::glyphs::Glyphs::new().unwrap();
+    let sprite = glyphs.sprite("Rue Notre-Dame", 22);
+    let lumas = nv12::label_lumas([60, 60, 60], [255, 255, 255]);
+    let at = (100 * 16, 50 * 16);
+    let boxes: Vec<_> = [(65536, 0), (-65536, 0)]
+        .into_iter()
+        .map(|w| {
+            let mut buf = plain(100, [90, 160]);
+            nv12::stamp(
+                &mut surface(&mut buf),
+                (0, 0, 200, 100),
+                &sprite.stamp(),
+                at,
+                w,
+                &lumas,
+                [128, 128],
+            );
+            changed(&buf, 100).unwrap()
+        })
+        .collect();
+    // About its place: the one box the other mirrored, to a pixel.
+    let (a, b) = (boxes[0], boxes[1]);
+    assert!(
+        (a.0 + b.2).abs_diff(199) <= 1 && (a.2 + b.0).abs_diff(199) <= 1,
+        "{a:?} {b:?}"
+    );
+    assert!(
+        (a.1 + b.3).abs_diff(99) <= 1 && (a.3 + b.1).abs_diff(99) <= 1,
+        "{a:?} {b:?}"
+    );
+}
+
+/// NV12 (limited range, BT.601) to RGB: the `w` x `h` part at (`x0`,
+/// `y0`).
+fn nv12_rgb(
+    out: &[u8],
+    pitch: usize,
+    chroma: usize,
+    (x0, y0): (usize, usize),
+    (w, h): (usize, usize),
+) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for y in y0..y0 + h {
+        for x in x0..x0 + w {
+            let yy = (i32::from(out[y * pitch + x]) - 16) * 298;
+            let c = chroma + (y / 2) * pitch + (x & !1);
+            let (u, v) = (i32::from(out[c]) - 128, i32::from(out[c + 1]) - 128);
+            let k = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
+            rgb.extend([k(yy + 409 * v), k(yy - 100 * u - 208 * v), k(yy + 516 * u)]);
+        }
+    }
+    rgb
+}
+
+fn save_png(path: &Path, rgb: &[u8], (w, h): (u32, u32)) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(rgb).unwrap();
+}
+
+/// The heading-up frame, as the viewer has it for an 800 x 480 panel: 32
+/// pixels each side, 160 rows more; the window 16 rows above its bottom,
+/// the view's point at 50 % across and 69 % down the window.
+const UP_FRAME: (u32, u32) = (864, 640);
+const UP_WINDOW: (usize, usize) = (32, 144);
+const UP_ANCHOR: (i64, i64) = (32 + 400, 144 + 331);
+
+fn heading(degrees: f64) -> (i64, i64) {
+    let r = degrees.to_radians();
+    ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64)
+}
+
+/// Heading-up frames with the names drawn over them, from a set drawn with
+/// `--labels data`, as the panel shows them, and a north-up canvas:
+/// `LEHU_MAP_DIR=<tiles> LEHU_SHOTS=<dir> cargo test -p lehu-map labelled_shot -- --ignored`.
+#[test]
+#[ignore]
+fn labelled_shot() {
+    let dir = std::path::PathBuf::from(std::env::var("LEHU_MAP_DIR").unwrap());
+    let shots = std::path::PathBuf::from(std::env::var("LEHU_SHOTS").unwrap());
+    let set = TileSet::open(&dir).unwrap();
+    let night = set.night().map(|n| n.unwrap());
+    let mut tiles = Tiles::new(set, night, None);
+    let mut names = crate::labels::Names::open(&dir).expect("label data");
+    let (w, h) = UP_FRAME;
+    let pitch = w as usize;
+    let chroma = pitch * h as usize;
+    let mut buf = vec![0u8; chroma + pitch * h as usize / 2];
+    // Luxembourg City, by the station, and the old town; and Esch, out
+    // of the city's deeper zooms in the example set.
+    let places = [
+        ("gare", 49.6000, 6.1335),
+        ("centre", 49.6116, 6.1300),
+        ("esch", 49.4958, 5.9806),
+    ];
+    for (night, shades) in [(false, "day"), (true, "night")] {
+        tiles.set_night(night);
+        for (place, lat, lon) in places {
+            let (x, y) = crate::world_from_degrees(lat, lon).unwrap();
+            for zoom in [16u8, 17, 18] {
+                for (name, degrees) in [("north", 0.0), ("east", 90.0), ("sw", 225.0), ("s", 180.0)]
+                {
+                    if night && (zoom != 17 || degrees != 225.0) {
+                        continue;
+                    }
+                    let view = View { zoom, x, y };
+                    crate::viewer::render_up(
+                        &mut tiles,
+                        Some(&mut names),
+                        &mut nv12::Surface {
+                            pixels: &mut buf,
+                            pitch,
+                            chroma,
+                            size: (w, h),
+                        },
+                        &view,
+                        heading(degrees),
+                        Some(crate::Marker::Arrow(x, y, (0, -1024))),
+                        None,
+                        None,
+                        UP_ANCHOR,
+                        0,
+                    );
+                    let rgb = nv12_rgb(&buf, pitch, chroma, UP_WINDOW, (800, 480));
+                    let file = shots.join(format!("names-{shades}-{place}-z{zoom}-{name}.png"));
+                    save_png(&file, &rgb, (800, 480));
+                }
+            }
+        }
+    }
+    // North up, as composed.
+    tiles.set_night(false);
+    let (x, y) = crate::world_from_degrees(49.6116, 6.1300).unwrap();
+    let view = View { zoom: 17, x, y };
+    let layout = Layout::around(&view, (800, 480), 5, 3);
+    let (cw, chh) = (5 * 256usize, 3 * 256usize);
+    let mut canvas = vec![0u8; cw * chh * 3 / 2];
+    tiles.compose(&layout, &mut canvas, cw, cw * chh);
+    crate::viewer::draw_names(
+        &mut names,
+        &mut nv12::Surface {
+            pixels: &mut canvas,
+            pitch: cw,
+            chroma: cw * chh,
+            size: (cw as u32, chh as u32),
+        },
+        &layout,
+        (0, 0, cw as i64, chh as i64),
+        false,
+    );
+    let rgb = nv12_rgb(&canvas, cw, cw * chh, (0, 0), (cw, chh));
+    save_png(
+        &shots.join("names-north-up-z17.png"),
+        &rgb,
+        (cw as u32, chh as u32),
+    );
+}
+
+/// What the names cost on a heading-up frame, on the machine it runs on:
+/// `<test binary> labels_cost --ignored --nocapture`, and with
+/// `LEHU_MAP_DIR=<tiles drawn with --labels data>` whole frames with and
+/// without them, at Luxembourg City.
+#[test]
+#[ignore]
+fn labels_cost() {
+    use std::time::Instant;
+    const STREETS: [&str; 20] = [
+        "Boulevard Royal",
+        "Avenue de la Liberté",
+        "Rue de la Gare",
+        "Grand-Rue",
+        "Rue Notre-Dame",
+        "Boulevard de la Pétrusse",
+        "Avenue Émile Reuter",
+        "Rue du Fossé",
+        "Côte d'Eich",
+        "Rue de Strasbourg",
+        "Boulevard d'Avranches",
+        "Rue Michel Rodange",
+        "Avenue de la Porte-Neuve",
+        "Rue Philippe II",
+        "Rue des Capucins",
+        "Montée de Clausen",
+        "Rue de Hollerich",
+        "Route d'Esch",
+        "Rue Sigismond",
+        "Boulevard Prince Henri",
+    ];
+    // Forty names over the frame at zoom 17, every way, and two places.
+    let map = temp("labels-cost");
+    let (bx, by) = (1000i64, 700i64);
+    let dir = map.join(format!("labels/17/{bx}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ox, oy) = (bx * 2048, by * 2048);
+    let mut text = String::new();
+    for i in 0..40i64 {
+        let (x, y) = (ox + 60 + (i % 5) * 190, oy + 40 + (i / 5) * 78);
+        text += &format!(
+            "s\t{x}\t{y}\t{}\t22\t{}\n",
+            (i * 37) % 180 - 89,
+            STREETS[i as usize % 20]
+        );
+    }
+    text += &format!("p\t{}\t{}\t0\t24\tLuxembourg\n", ox + 500, oy + 330);
+    text += &format!("p\t{}\t{}\t0\t22\tLimpertsberg\n", ox + 300, oy + 600);
+    std::fs::write(dir.join(format!("{by}.txt")), text).unwrap();
+    let mut names = crate::labels::Names::open(&map).unwrap();
+    let (w, h) = UP_FRAME;
+    let pitch = w as usize;
+    let chroma = pitch * h as usize;
+    let mut buf = vec![0u8; chroma + pitch * h as usize / 2];
+    let s = WORLD_Z - 17;
+    let centre = ((ox + 500) << s, (oy + 330) << s);
+    let mut draw = |names: &mut crate::labels::Names, degrees: f64| {
+        let r = degrees.to_radians();
+        let (c, sn) = ((r.cos() * 65536.0) as i64, (r.sin() * 65536.0) as i64);
+        let before = names.drawn;
+        names.draw(
+            &mut nv12::Surface {
+                pixels: &mut buf,
+                pitch,
+                chroma,
+                size: (w, h),
+            },
+            (0, 0, i64::from(w), i64::from(h)),
+            17,
+            (
+                centre.0 - (600 << s),
+                centre.1 - (600 << s),
+                centre.0 + (600 << s),
+                centre.1 + (600 << s),
+            ),
+            false,
+            |p| {
+                let (dx, dy) = ((p.0 - centre.0) >> (s - 4), (p.1 - centre.1) >> (s - 4));
+                (
+                    UP_ANCHOR.0 * 16 + ((dx * c - dy * sn) >> 16),
+                    UP_ANCHOR.1 * 16 + ((dx * sn + dy * c) >> 16),
+                )
+            },
+            |m| ((m.0 * c - m.1 * sn) >> 16, (m.0 * sn + m.1 * c) >> 16),
+        );
+        names.drawn - before
+    };
+    let started = Instant::now();
+    let n = draw(&mut names, 0.0);
+    println!(
+        "names: {n} laid out and drawn, first time: {:.1} ms",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    let frames = 10;
+    for degrees in [0.0f64, 30.0, 90.0, 200.0] {
+        let started = Instant::now();
+        let mut n = 0;
+        for _ in 0..frames {
+            n = draw(&mut names, degrees);
+        }
+        let ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        println!("names turned {degrees}°: {n} drawn, {ms:.2} ms a frame");
+    }
+    let _ = std::fs::remove_dir_all(&map);
+    let Ok(dir) = std::env::var("LEHU_MAP_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let set = TileSet::open(&dir).unwrap();
+    let mut tiles = Tiles::new(
+        set,
+        None,
+        crate::hw::HwJpeg::open(256, 256 * 1024).ok().map(|h| h.0),
+    );
+    let mut names = crate::labels::Names::open(&dir).expect("label data");
+    let (x, y) = crate::world_from_degrees(49.6116, 6.1300).unwrap();
+    for zoom in [16u8, 17, 18] {
+        let view = View { zoom, x, y };
+        for degrees in [0.0f64, 30.0] {
+            let mut frame = |names: Option<&mut crate::labels::Names>| {
+                crate::viewer::render_up(
+                    &mut tiles,
+                    names,
+                    &mut nv12::Surface {
+                        pixels: &mut buf,
+                        pitch,
+                        chroma,
+                        size: (w, h),
+                    },
+                    &view,
+                    heading(degrees),
+                    None,
+                    None,
+                    None,
+                    UP_ANCHOR,
+                    0,
+                );
+            };
+            // The tiles decoded and the names laid out first.
+            frame(Some(&mut names));
+            let time = |f: &mut dyn FnMut()| {
+                let started = Instant::now();
+                for _ in 0..5 {
+                    f();
+                }
+                started.elapsed().as_secs_f64() * 1000.0 / 5.0
+            };
+            let bare = time(&mut || frame(None));
+            let before = names.drawn;
+            let named = time(&mut || frame(Some(&mut names)));
+            println!(
+                "zoom {zoom}, turned {degrees}°: {:.1} ms a frame, {:.1} with {} names",
+                bare,
+                named,
+                (names.drawn - before) / 5
+            );
+        }
+    }
+}

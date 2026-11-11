@@ -157,6 +157,11 @@ impl Tiles {
         true
     }
 
+    /// The night tiles are shown.
+    pub fn night(&self) -> bool {
+        self.night
+    }
+
     /// The tile, and how many times it was enlarged.
     fn load(&mut self, (z, x, y): Key) -> Option<(Box<[u8]>, u8)> {
         match self.set.read(z, x, y, &mut self.path, &mut self.file) {

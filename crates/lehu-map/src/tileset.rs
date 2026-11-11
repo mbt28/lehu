@@ -56,6 +56,11 @@ impl TileSet {
         self.max_zoom.saturating_add(OVERZOOM).min(WORLD_Z)
     }
 
+    /// The set's directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// The tiles are JPEG files (else PNG).
     pub fn is_jpeg(&self) -> bool {
         self.ext == "jpg"
