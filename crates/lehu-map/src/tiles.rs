@@ -56,6 +56,9 @@ pub struct Tiles {
     /// The other set, day or night, when there is one: `set_night` swaps.
     other: Option<TileSet>,
     night: bool,
+    /// Night made from the day tiles, while it is night and there is no
+    /// night set.
+    lut: Option<nv12::Night>,
     hw: Option<HwJpeg>,
     entries: Vec<Entry>,
     clock: u64,
@@ -83,6 +86,7 @@ impl Tiles {
             set,
             other: night,
             night: false,
+            lut: None,
             hw,
             entries: Vec::with_capacity(CACHED + MISSING),
             clock: 0,
@@ -143,20 +147,29 @@ impl Tiles {
     }
 
     /// Show the night tiles, or the day's; false when that changes
-    /// nothing (no night tiles, or already so). Every tile kept is let go.
+    /// nothing (already so). Without night tiles, night is made from the
+    /// day's ([`nv12::Night`]). Every tile kept is let go.
     pub fn set_night(&mut self, night: bool) -> bool {
-        if night == self.night || self.other.is_none() {
+        if night == self.night {
             return false;
         }
         if let Some(other) = self.other.take() {
             self.other = Some(std::mem::replace(&mut self.set, other));
+        } else {
+            self.lut = night.then(|| nv12::Night::new(self.set.land));
         }
         self.night = night;
         self.entries.clear();
-        let (y, cb, cr) = nv12::ycc(self.set.land);
+        let (y, cb, cr) = self.land();
         self.land_y = vec![y; SIDE].into_boxed_slice();
         self.land_c = [cb, cr].repeat(SIDE / 2).into_boxed_slice();
         true
+    }
+
+    /// The colour where there is no tile, as it shows now.
+    fn land(&self) -> (u8, u8, u8) {
+        let land = nv12::ycc(self.set.land);
+        self.lut.as_ref().map_or(land, |l| l.ycc(land))
     }
 
     /// The night tiles are shown.
@@ -180,6 +193,9 @@ impl Tiles {
             match hw.decode(&self.file, &mut out) {
                 Ok(()) => {
                     self.decoded += 1;
+                    if let Some(lut) = &self.lut {
+                        lut.apply(&mut out, SIDE);
+                    }
                     return Some((out, 0));
                 }
                 Err(HwError::Refused) => {}
@@ -202,6 +218,9 @@ impl Tiles {
         self.decoded += 1;
         self.software += 1;
         nv12::from_rgb(&picture.rgb, SIDE, &mut out);
+        if let Some(lut) = &self.lut {
+            lut.apply(&mut out, SIDE);
+        }
         Some((out, 0))
     }
 
@@ -317,7 +336,7 @@ impl Tiles {
                 break;
             }
         }
-        let (y, cb, cr) = nv12::ycc(self.set.land);
+        let (y, cb, cr) = self.land();
         nv12::Grid {
             tiles: slots
                 .iter()

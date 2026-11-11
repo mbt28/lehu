@@ -36,6 +36,8 @@ mod graph;
 mod hw;
 mod labels;
 mod nv12;
+mod pmtiles;
+pub mod region;
 mod route;
 mod search;
 mod sprite;
@@ -61,5 +63,7 @@ pub use voice::{CameraWatch, Clip, Voice, camera_lead};
 
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod store_tests;
 #[cfg(test)]
 mod tests;

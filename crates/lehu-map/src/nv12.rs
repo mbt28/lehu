@@ -59,6 +59,164 @@ pub fn from_rgb(rgb: &[u8], side: usize, dst: &mut [u8]) {
     }
 }
 
+/// Night made from day tiles, for a region without night tiles of its own:
+/// each tile once, as it is decoded, through a few tables.
+///
+/// The land turns the night land's dark blue-grey. What is lighter than the
+/// land by day (white roads) is lighter than it at night, steeply, so the
+/// roads stand out; what is darker (woods, water, buildings, names drawn
+/// into older tiles) a little lighter than the night land, less and less
+/// so the darker it was. That much is a table on the luma alone. But the
+/// major roads are coloured, and by day no lighter than the land; so a two
+/// by two block whose chroma is warmer than the land's (red more than blue,
+/// as the roads' orange, yellow and pink are, and no area's colour is) has
+/// its luma lifted, up to the roads' brightness at night, and keeps its
+/// colour; any other keeps only some of its colour's distance from the
+/// land's, about the night land's tint, so woods and water stay dim.
+/// Integers and tables only: a lookup a byte, a few a block.
+#[derive(Clone)]
+pub struct Night {
+    y: [u8; 256],
+    /// The chroma of a warm block, and of another.
+    warm_cb: [u8; 256],
+    warm_cr: [u8; 256],
+    cool_cb: [u8; 256],
+    cool_cr: [u8; 256],
+    /// The luma lift of a block by its warmth: Cr - Cb + 256.
+    lift: [u8; 512],
+}
+
+/// The night land (as `scripts/map-tiles.py --night` draws it).
+pub const NIGHT_LAND: [u8; 3] = [30, 34, 40];
+
+/// Luma steps at night for one by day, sixteenths: above the land's,
+/// below it near the land's, and below it further off (past
+/// `NIGHT_NEAR`).
+const NIGHT_UP: i32 = 52;
+const NIGHT_DOWN: i32 = 8;
+const NIGHT_FAR: i32 = 2;
+const NIGHT_NEAR: i32 = 30;
+/// A block is warm past this much more Cr - Cb than the land's; its luma
+/// is lifted by `NIGHT_LIFT` sixteenths a step past it, up to
+/// `NIGHT_ROAD` (the roads at night).
+const NIGHT_WARM: i32 = 12;
+const NIGHT_LIFT: i32 = 64;
+const NIGHT_ROAD: i32 = 128;
+/// Warmer than this (past the land's), a block is lifted less and less.
+const NIGHT_RED: i32 = 56;
+/// Of the chroma's distance from the land's, kept: sixteenths, warm and
+/// not.
+const NIGHT_WARM_KEEP: i32 = 16;
+const NIGHT_COOL_KEEP: i32 = 7;
+
+impl Night {
+    /// The tables for a set whose land is `land` (RGB) by day.
+    pub fn new(land: [u8; 3]) -> Self {
+        let (ly, lcb, lcr) = ycc(land);
+        let (ny, ncb, ncr) = ycc(NIGHT_LAND);
+        let (ly, ny) = (i32::from(ly), i32::from(ny));
+        let mut night = Self {
+            y: [0; 256],
+            warm_cb: [0; 256],
+            warm_cr: [0; 256],
+            cool_cb: [0; 256],
+            cool_cr: [0; 256],
+            lift: [0; 512],
+        };
+        let pull = |v: i32, land: u8, night: u8, keep: i32| {
+            let c = i32::from(night) + ((v - i32::from(land)) * keep) / 16;
+            c.clamp(16, 240) as u8
+        };
+        for v in 0..256i32 {
+            let d = v - ly;
+            let n = if d >= 0 {
+                ny + (d * NIGHT_UP + 8) / 16
+            } else {
+                let near = (-d).min(NIGHT_NEAR);
+                let far = (-d - NIGHT_NEAR).max(0);
+                ny + (near * NIGHT_DOWN + far * NIGHT_FAR + 8) / 16
+            };
+            let i = v as usize;
+            night.y[i] = n.clamp(16, 235) as u8;
+            night.warm_cb[i] = pull(v, lcb, ncb, NIGHT_WARM_KEEP);
+            night.warm_cr[i] = pull(v, lcr, ncr, NIGHT_WARM_KEEP);
+            night.cool_cb[i] = pull(v, lcb, ncb, NIGHT_COOL_KEEP);
+            night.cool_cr[i] = pull(v, lcr, ncr, NIGHT_COOL_KEEP);
+        }
+        let land_warmth = i32::from(lcr) - i32::from(lcb);
+        for (i, l) in night.lift.iter_mut().enumerate() {
+            let warmth = i as i32 - 256 - land_warmth;
+            let mut lift = ((warmth - NIGHT_WARM).max(0) * NIGHT_LIFT / 16).min(255);
+            // Redder than any road: the footpaths' thin red lines, kept
+            // dim as the night tiles have them.
+            if warmth > NIGHT_RED {
+                lift = lift.min((NIGHT_ROAD - (warmth - NIGHT_RED) * 6).max(0));
+            }
+            *l = lift as u8;
+        }
+        night
+    }
+
+    /// A limited-range luma and chroma pair at night, as `apply` makes
+    /// a block of it.
+    pub fn ycc(&self, (y, cb, cr): (u8, u8, u8)) -> (u8, u8, u8) {
+        let lift = self.lift[usize::from(cr) + 256 - usize::from(cb)];
+        let n = self.y[usize::from(y)];
+        let n = n.max(n.saturating_add(lift).min(NIGHT_ROAD as u8));
+        if lift > 0 {
+            (
+                n,
+                self.warm_cb[usize::from(cb)],
+                self.warm_cr[usize::from(cr)],
+            )
+        } else {
+            (
+                n,
+                self.cool_cb[usize::from(cb)],
+                self.cool_cr[usize::from(cr)],
+            )
+        }
+    }
+
+    /// An NV12 tile `side` pixels a side (its luma, then its Cb, Cr
+    /// pairs) made night, in place.
+    pub fn apply(&self, tile: &mut [u8], side: usize) {
+        if tile.len() < side * side * 3 / 2 {
+            return;
+        }
+        let (luma, chroma) = tile.split_at_mut(side * side);
+        let road = NIGHT_ROAD as u8;
+        // Two rows of luma and their row of chroma pairs at a time, a two
+        // by two block at a time: no index to check in the loop.
+        let rows = luma
+            .chunks_exact_mut(2 * side)
+            .map(|r| r.split_at_mut(side));
+        for (pairs, (top, bottom)) in chroma.chunks_exact_mut(side).zip(rows) {
+            let blocks = pairs
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(top.as_chunks_mut::<2>().0)
+                .zip(bottom.as_chunks_mut::<2>().0);
+            for ((pair, t), b) in blocks {
+                let [cb, cr] = *pair;
+                let lift = self.lift[usize::from(cr) + 256 - usize::from(cb)];
+                let night = |v: u8| {
+                    let n = self.y[usize::from(v)];
+                    n.max(n.saturating_add(lift).min(road))
+                };
+                *t = [night(t[0]), night(t[1])];
+                *b = [night(b[0]), night(b[1])];
+                *pair = if lift > 0 {
+                    [self.warm_cb[usize::from(cb)], self.warm_cr[usize::from(cr)]]
+                } else {
+                    [self.cool_cb[usize::from(cb)], self.cool_cr[usize::from(cr)]]
+                };
+            }
+        }
+    }
+}
+
 /// The position dot: its fill and ring, and their radii in pixels.
 const DOT: [u8; 3] = [26, 115, 232];
 const RING: [u8; 3] = [255, 255, 255];

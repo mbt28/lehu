@@ -13,6 +13,8 @@ lehu-image = { path = "../lehu-image" }
 libc = "0.2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
+# A region's files checked against their sha256 (crate::region).
+sha2 = { version = "0.10", default-features = false }
 # The names' glyphs: the rasterizer Slint's software renderer links in
 # already, with its features, so it is there once.
 swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }

@@ -121,6 +121,16 @@ impl Blob {
         }
     }
 
+    /// The bytes from byte `at`, `len` of them.
+    pub(crate) fn byte_range(&self, at: usize, len: usize) -> Option<&[u8]> {
+        let words = self.words();
+        // SAFETY: a u32 slice seen as bytes: same memory, any bit pattern
+        // is a valid u8.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 4) };
+        bytes.get(at..at.checked_add(len)?)
+    }
+
     /// The bytes from word `at`, `len` of them: a section of text.
     pub(crate) fn bytes(&self, at: usize, len: usize) -> Option<&[u8]> {
         let words = self.words().get(at..)?;

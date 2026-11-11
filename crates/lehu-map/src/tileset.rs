@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
-//! A directory of tiles and its `map.toml`.
+//! A directory of tiles and its `map.toml`: the tiles packed in one file
+//! (`tiles.pmtiles`, crate::pmtiles) when the directory has it, else a
+//! file a tile, `<z>/<x>/<y>.jpg`.
 
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::pmtiles::{self, Pack};
+use crate::region::DATA_VERSION;
 use crate::view::WORLD_Z;
 
 /// A tile file larger than this is not a tile (the decoder's own bound).
@@ -26,13 +31,31 @@ struct Meta {
     start_zoom: Option<u8>,
     attribution: String,
     land: Option<[u8; 3]>,
+    /// The region folder's layout (crate::region); absent before there
+    /// was one.
+    data_version: Option<u32>,
 }
+
+/// The packed tiles, shared by the set's copies; equal when it is the
+/// same file.
+#[derive(Clone, Debug)]
+struct Packed(Arc<Pack>);
+
+impl PartialEq for Packed {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.path() == other.0.path()
+    }
+}
+
+impl Eq for Packed {}
 
 /// The tiles under one directory, as its `map.toml` describes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TileSet {
     dir: PathBuf,
     ext: &'static str,
+    /// The tiles in one file, when the directory has it.
+    pack: Option<Packed>,
     pub name: String,
     pub min_zoom: u8,
     pub max_zoom: u8,
@@ -66,6 +89,11 @@ impl TileSet {
         self.ext == "jpg"
     }
 
+    /// The tiles are packed in one file (else a file a tile).
+    pub fn is_packed(&self) -> bool {
+        self.pack.is_some()
+    }
+
     /// The night tiles, `night/` under this set's directory, when there
     /// are; the error when they are there but will not open.
     pub fn night(&self) -> Option<Result<Self, String>> {
@@ -73,7 +101,8 @@ impl TileSet {
         dir.join("map.toml").exists().then(|| Self::open(&dir))
     }
 
-    /// Read `<dir>/map.toml`. The error says what is wrong, for the screen.
+    /// Read `<dir>/map.toml`, and open `<dir>/tiles.pmtiles` when it is
+    /// there. The error says what is wrong, for the screen.
     pub fn open(dir: &Path) -> Result<Self, String> {
         let path = dir.join("map.toml");
         let text = match fs::read_to_string(&path) {
@@ -83,11 +112,24 @@ impl TileSet {
             }
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        Self::parse(dir, &text).map_err(|e| format!("{}: {e}", path.display()))
+        let mut set = Self::parse(dir, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let packed = dir.join(pmtiles::FILE);
+        if packed.exists() {
+            if set.ext != "jpg" {
+                return Err(format!("{}: packed tiles are JPEG", path.display()));
+            }
+            set.pack = Some(Packed(Arc::new(Pack::open(&packed)?)));
+        }
+        Ok(set)
     }
 
     pub(crate) fn parse(dir: &Path, text: &str) -> Result<Self, String> {
         let meta: Meta = toml::from_str(text).map_err(|e| e.message().to_string())?;
+        if let Some(v) = meta.data_version.filter(|&v| v > DATA_VERSION) {
+            return Err(format!(
+                "data version {v}: Map needs a newer LEHU (this one reads {DATA_VERSION})"
+            ));
+        }
         let ext = match meta.format.as_str() {
             "jpg" | "jpeg" => "jpg",
             "png" => "png",
@@ -114,6 +156,7 @@ impl TileSet {
         Ok(Self {
             dir: dir.to_path_buf(),
             ext,
+            pack: None,
             name: meta.name,
             min_zoom: meta.min_zoom,
             max_zoom: meta.max_zoom,
@@ -135,6 +178,12 @@ impl TileSet {
         path: &mut PathBuf,
         buf: &mut Vec<u8>,
     ) -> io::Result<bool> {
+        if let Some(Packed(pack)) = &self.pack {
+            let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+                return Ok(false);
+            };
+            return pack.read(z, x, y, buf, MAX_TILE_BYTES);
+        }
         path.clear();
         path.push(&self.dir);
         path.push(z.to_string());

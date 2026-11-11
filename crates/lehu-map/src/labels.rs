@@ -22,12 +22,16 @@
 //! `bx0 by0 bx1 by1` (first to last) a pass. A block a zoom has not
 //! covered has the labels of a zoom or two out (fewer, as far apart again).
 //!
-//! A set without `labels/` has its names in the tiles: nothing is drawn.
+//! A region packed by `scripts/map-tiles.py --pack` has the same files in
+//! one, `<map>/labels.pack` ([`PACK`]), mapped and read where they lie: an
+//! index of the blocks and the zooms' areas, then their text as it is. A
+//! set with neither has its names in the tiles: nothing is drawn.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::blob::Blob;
 use crate::glyphs::{Glyphs, HALO};
 use crate::nv12::{self, Surface};
 use crate::view::{TILE, WORLD_Z};
@@ -47,6 +51,95 @@ const FALLBACK: u8 = 2;
 
 /// The largest file read as a block.
 const MAX_BYTES: u64 = 256 * 1024;
+
+/// The label files packed in one, in a region folder.
+pub const PACK: &str = "labels.pack";
+const PACK_MAGIC: &[u8; 8] = b"LEHULABP";
+const PACK_VERSION: u32 = 1;
+/// Words before the index, and in each of its entries.
+const PACK_HEAD: usize = 4;
+const PACK_ENTRY: usize = 5;
+/// An index entry's kind: the zoom's areas.txt (else a block).
+const PACK_AREAS: u32 = 256;
+
+/// `labels.pack` mapped: "LEHULABP", the version, the number of entries;
+/// the entries, five words each, in order (z + 256 for a zoom's areas,
+/// bx, by, the text's byte offset in the file, its length); then the text.
+pub(crate) struct Pack {
+    blob: Blob,
+    entries: usize,
+}
+
+impl Pack {
+    pub(crate) fn open(path: &Path) -> Result<Self, String> {
+        let blob = Blob::map(path)?;
+        Self::new(blob).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub(crate) fn new(blob: Blob) -> Result<Self, String> {
+        let words = blob.words();
+        if words.len() < PACK_HEAD || blob.byte_range(0, 8) != Some(PACK_MAGIC.as_slice()) {
+            return Err("not a labels pack".into());
+        }
+        if words[2] != PACK_VERSION {
+            return Err(format!(
+                "labels pack version {}: {PACK_VERSION} only",
+                words[2]
+            ));
+        }
+        let entries = words[3] as usize;
+        if entries > (words.len() - PACK_HEAD) / PACK_ENTRY {
+            return Err("its index runs past its end".into());
+        }
+        Ok(Self { blob, entries })
+    }
+
+    fn entry(&self, i: usize) -> &[u32] {
+        let at = PACK_HEAD + i * PACK_ENTRY;
+        &self.blob.words()[at..at + PACK_ENTRY]
+    }
+
+    /// The text of entry (`kind`, `bx`, `by`): None when there is none,
+    /// an error when it does not read.
+    fn text(&self, kind: u32, bx: i64, by: i64) -> Option<Result<&str, String>> {
+        let (Ok(bx), Ok(by)) = (u32::try_from(bx), u32::try_from(by)) else {
+            return None;
+        };
+        let key = (kind, bx, by);
+        let (mut lo, mut hi) = (0, self.entries);
+        while lo < hi {
+            let mid = usize::midpoint(lo, hi);
+            let e = self.entry(mid);
+            match (e[0], e[1], e[2]).cmp(&key) {
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+                std::cmp::Ordering::Equal => {
+                    let (at, len) = (e[3] as usize, e[4] as usize);
+                    if len as u64 > MAX_BYTES {
+                        return Some(Err("a block too large".into()));
+                    }
+                    return Some(
+                        self.blob
+                            .byte_range(at, len)
+                            .ok_or_else(|| "a block past the end".to_string())
+                            .and_then(|b| {
+                                std::str::from_utf8(b).map_err(|_| "a block not UTF-8".into())
+                            }),
+                    );
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Where a set's label files are.
+enum Source {
+    /// `<map>/labels/`, a file a block.
+    Dir(PathBuf),
+    /// `<map>/labels.pack`.
+    Pack(Pack),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -156,7 +249,7 @@ fn parse_areas(text: &str) -> Vec<Area> {
 
 /// The label files of a set, read as they are wanted and kept a while.
 pub struct Store {
-    dir: PathBuf,
+    source: Source,
     blocks: Vec<Block>,
     /// Each zoom's areas, read when first wanted.
     areas: Vec<(u8, Vec<Area>)>,
@@ -167,11 +260,27 @@ pub struct Store {
 }
 
 impl Store {
-    /// The labels of the set in `map`, when it has them.
+    /// The labels of the set in `map`, when it has them: packed, else a
+    /// file a block.
     pub fn open(map: &Path) -> Option<Self> {
-        let dir = map.join("labels");
-        dir.is_dir().then(|| Self {
-            dir,
+        let packed = map.join(PACK);
+        let source = if packed.exists() {
+            match Pack::open(&packed) {
+                Ok(p) => Source::Pack(p),
+                Err(e) => {
+                    log::warn!("map: {e}; the names are not drawn");
+                    return None;
+                }
+            }
+        } else {
+            let dir = map.join("labels");
+            if !dir.is_dir() {
+                return None;
+            }
+            Source::Dir(dir)
+        };
+        Some(Self {
+            source,
             blocks: Vec::with_capacity(BLOCKS),
             areas: Vec::new(),
             clock: 0,
@@ -183,8 +292,23 @@ impl Store {
     /// The file of block (`bx`, `by`) of zoom `z`: None when there is
     /// none.
     fn file(&mut self, (z, bx, by): Key) -> Option<Vec<Label>> {
-        let path = self
-            .dir
+        let dir = match &self.source {
+            Source::Dir(dir) => dir,
+            Source::Pack(pack) => {
+                return match pack.text(u32::from(z), bx, by)? {
+                    Ok(text) => {
+                        self.read += 1;
+                        Some(parse(text, z))
+                    }
+                    Err(e) => {
+                        self.failed += 1;
+                        log::warn!("map: labels {z}/{bx}/{by}: {e}");
+                        Some(Vec::new())
+                    }
+                };
+            }
+        };
+        let path = dir
             .join(z.to_string())
             .join(bx.to_string())
             .join(format!("{by}.txt"));
@@ -213,9 +337,16 @@ impl Store {
         let i = match self.areas.iter().position(|a| a.0 == z) {
             Some(i) => i,
             None => {
-                let path = self.dir.join(z.to_string()).join("areas.txt");
-                let areas =
-                    fs::read_to_string(path).map_or_else(|_| Vec::new(), |t| parse_areas(&t));
+                let areas = match &self.source {
+                    Source::Dir(dir) => {
+                        fs::read_to_string(dir.join(z.to_string()).join("areas.txt"))
+                            .map_or_else(|_| Vec::new(), |t| parse_areas(&t))
+                    }
+                    Source::Pack(pack) => match pack.text(PACK_AREAS | u32::from(z), 0, 0) {
+                        Some(Ok(t)) => parse_areas(t),
+                        _ => Vec::new(),
+                    },
+                };
                 self.areas.push((z, areas));
                 self.areas.len() - 1
             }
@@ -425,6 +556,84 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// `labels.pack` as `scripts/map-tiles.py --pack` writes it, from
+    /// files (z + 256 x kind, bx, by, text).
+    fn pack(files: &[(u32, u32, u32, &str)]) -> Vec<u8> {
+        let mut files = files.to_vec();
+        files.sort_by_key(|f| (f.0, f.1, f.2));
+        let mut at = 16 + 20 * files.len();
+        let mut out = b"LEHULABP".to_vec();
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+        for (k, bx, by, text) in &files {
+            for w in [*k, *bx, *by, at as u32, text.len() as u32] {
+                out.extend_from_slice(&w.to_le_bytes());
+            }
+            at += text.len();
+        }
+        for f in &files {
+            out.extend_from_slice(f.3.as_bytes());
+        }
+        out.resize(out.len().next_multiple_of(4), 0);
+        out
+    }
+
+    #[test]
+    fn packed_labels_read_as_the_files_they_were_packed_from() {
+        // Zoom 12's block (0, 0); zoom 13 covers (0, 0) to (0, 1) with no
+        // labels in (0, 1); zoom 14 not at all, so a block of it has
+        // zoom 13's labels that lie in it (or 12's).
+        let files: [(u32, u32, u32, &str); 4] = [
+            (12, 0, 0, "s\t100\t100\t0\t22\tTwelve\n"),
+            (
+                13,
+                0,
+                0,
+                "# lehu-labels 1\ns\t300\t300\t0\t22\tThirteen\np\t1000\t1000\t0\t22\tPlace\n",
+            ),
+            (13 | PACK_AREAS, 0, 0, "0 0 0 1\n"),
+            (12 | PACK_AREAS, 0, 0, "0 0 0 0\n"),
+        ];
+        let loose = temp("loose");
+        for (k, bx, by, text) in files {
+            let z = k & 0xff;
+            let path = if k & PACK_AREAS != 0 {
+                loose.join(format!("labels/{z}/areas.txt"))
+            } else {
+                loose.join(format!("labels/{z}/{bx}/{by}.txt"))
+            };
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        let packed = temp("packed");
+        fs::write(packed.join(PACK), pack(&files)).unwrap();
+        let mut a = Store::open(&loose).unwrap();
+        let mut b = Store::open(&packed).unwrap();
+        assert!(matches!(b.source, Source::Pack(_)));
+        let mut seen = 0;
+        for zoom in 11..=15u8 {
+            let s = WORLD_Z - zoom;
+            for area in [
+                (0, 0, 400 << s, 400 << s),
+                (0, 2048 << s, 400 << s, 2400 << s),
+            ] {
+                let x: Vec<Label> = a.near(zoom, area).into_iter().cloned().collect();
+                let y: Vec<Label> = b.near(zoom, area).into_iter().cloned().collect();
+                assert_eq!(x, y, "zoom {zoom}, {area:?}");
+                seen += x.len();
+            }
+        }
+        assert!(seen >= 3, "{seen}");
+        assert_eq!((b.read, b.failed), (a.read, a.failed));
+        // Not a pack, or one of another version: no names, not a crash.
+        fs::write(packed.join(PACK), b"LEHULABP\x02\0\0\0\0\0\0\0").unwrap();
+        assert!(Store::open(&packed).is_none());
+        fs::write(packed.join(PACK), b"labels??").unwrap();
+        assert!(Store::open(&packed).is_none());
+        let _ = fs::remove_dir_all(&loose);
+        let _ = fs::remove_dir_all(&packed);
     }
 
     #[test]

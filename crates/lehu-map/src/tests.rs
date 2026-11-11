@@ -9,7 +9,7 @@ use crate::tiles::{LAND, Tiles};
 use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View, WORLD_Z};
 
-const META: &str = r#"
+pub(crate) const META: &str = r#"
 name = "Test"
 format = "png"
 tile-size = 256
@@ -23,7 +23,7 @@ attribution = "© OpenStreetMap contributors"
 
 const BOUNDS: [i64; 4] = [100_000_000, 200_000_000, 300_000_000, 400_000_000];
 
-fn temp(name: &str) -> PathBuf {
+pub(crate) fn temp(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lehu-map-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -197,7 +197,7 @@ fn scrolling_keeps_the_canvas_until_the_window_leaves_it() {
     assert_eq!(l.window(&z, panel), None);
 }
 
-fn write_png(path: &Path, rgb: [u8; 3]) {
+pub(crate) fn write_png(path: &Path, rgb: [u8; 3]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let file = std::fs::File::create(path).unwrap();
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), 256, 256);
@@ -209,7 +209,13 @@ fn write_png(path: &Path, rgb: [u8; 3]) {
 }
 
 /// The luma and the chroma pair at pixel (`x`, `y`) of an NV12 canvas.
-fn nv12_at(canvas: &[u8], pitch: usize, chroma: usize, x: usize, y: usize) -> (u8, u8, u8) {
+pub(crate) fn nv12_at(
+    canvas: &[u8],
+    pitch: usize,
+    chroma: usize,
+    x: usize,
+    y: usize,
+) -> (u8, u8, u8) {
     let c = chroma + (y / 2) * pitch + (x & !1);
     (canvas[y * pitch + x], canvas[c], canvas[c + 1])
 }
@@ -1307,7 +1313,7 @@ fn a_name_turned_half_round_covers_the_same_place() {
 
 /// NV12 (limited range, BT.601) to RGB: the `w` x `h` part at (`x0`,
 /// `y0`).
-fn nv12_rgb(
+pub(crate) fn nv12_rgb(
     out: &[u8],
     pitch: usize,
     chroma: usize,
@@ -1327,7 +1333,7 @@ fn nv12_rgb(
     rgb
 }
 
-fn save_png(path: &Path, rgb: &[u8], (w, h): (u32, u32)) {
+pub(crate) fn save_png(path: &Path, rgb: &[u8], (w, h): (u32, u32)) {
     let file = std::fs::File::create(path).unwrap();
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
     enc.set_color(png::ColorType::Rgb);
