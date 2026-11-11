@@ -23,9 +23,11 @@ pub const TILE_BYTES: usize = SIDE * SIDE * 3 / 2;
 /// map's land colour.
 pub const LAND: [u8; 3] = [242, 239, 233];
 
-/// Tiles kept decoded: a canvas is 15, so a step in any direction or a
-/// zoom back finds most of what it needs (96 KiB each).
-pub const CACHED: usize = 36;
+/// Tiles kept decoded (96 KiB each, taken as they are needed): a canvas
+/// is 15; a turned frame two zooms past the set's last wants up to 36, and
+/// the tiles a zoom and two zooms out they are enlarged from, all at once.
+/// Fewer, and they push each other out while one frame is drawn.
+pub const CACHED: usize = 64;
 
 /// Tiles remembered as missing, besides: a few bytes each, kept apart so
 /// that a trip over empty land does not push decoded tiles out.
