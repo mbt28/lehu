@@ -948,18 +948,6 @@ impl AppHost {
         }
     }
 
-    /// Metres to the next speed camera on the route when it is `within`
-    /// metres or less, and the warning is on (map.speed-cameras): for a
-    /// sign on the screen. Cheap: a search over the route's cameras.
-    #[allow(dead_code)] // for the screens, which do not ask yet
-    pub fn map_camera_ahead(&self, within: u32) -> Option<u32> {
-        if !self.settings.map.speed_cameras {
-            return None;
-        }
-        let (track, start) = (self.map_track.as_ref()?, self.map_track_start?);
-        let ms = lehu_core::clock::now_ms().saturating_sub(start);
-        track.camera_ahead(ms, within).map(|(_, metres)| metres)
-    }
 
     /// Once a minute: day or night by the sun, where we are (the drive's
     /// position, the map's, map.fake-position, else where the map was
@@ -1497,6 +1485,18 @@ impl Host for AppHost {
             Some((card, _)) => Some(card),
             None => self.map_guide.as_ref(),
         }
+    }
+
+    /// Metres to the next speed camera on the route when it is `within`
+    /// metres or less, and the warning is on (map.speed-cameras): for a
+    /// sign on the screen. Cheap: a search over the route's cameras.
+    fn map_camera_ahead(&self, within: u32) -> Option<u32> {
+        if !self.settings.map.speed_cameras {
+            return None;
+        }
+        let (track, start) = (self.map_track.as_ref()?, self.map_track_start?);
+        let ms = lehu_core::clock::now_ms().saturating_sub(start);
+        track.camera_ahead(ms, within).map(|(_, metres)| metres)
     }
 
     fn map_speed(&self) -> Option<(u32, Option<u16>)> {

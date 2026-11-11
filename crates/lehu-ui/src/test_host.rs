@@ -89,6 +89,8 @@ pub struct TestHost {
     /// The map's guidance along a route, when it guides, and the speed.
     pub map_guide: Option<NavCard>,
     pub map_speed: Option<(u32, Option<u16>)>,
+    /// Metres to the next speed camera on the route.
+    pub map_camera: Option<u32>,
     /// Map > Go to: the names searched (a search keeps those whose name
     /// holds the text typed, any case), the recent ones (an empty search),
     /// what the last search found, and how the route goes: each poll
@@ -179,6 +181,7 @@ impl TestHost {
             camera_request: CameraRequest::None,
             map_guide: None,
             map_speed: None,
+            map_camera: None,
             map_can_search: false,
             map_names: Vec::new(),
             map_recent: Vec::new(),
@@ -474,6 +477,11 @@ impl Host for TestHost {
 
     fn map_speed(&self) -> Option<(u32, Option<u16>)> {
         self.map_speed
+    }
+
+    fn map_camera_ahead(&self, within: u32) -> Option<u32> {
+        self.map_camera
+            .filter(|&m| m <= within && self.settings.map.speed_cameras)
     }
 
     fn map_label(&self) -> &str {

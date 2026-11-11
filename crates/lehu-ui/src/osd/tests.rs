@@ -3360,13 +3360,16 @@ fn route_chooses_fastest_or_shortest_and_motorways_and_finds_ours_anew() {
     assert_eq!(ring(&osd), "route-fastest");
     assert_eq!(window(&osd), (502, 0, 298, 480));
     assert!(!br(&osd).get_map_shortest());
-    // Turned round its three rows.
+    // Turned round its rows.
     let mut stops = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         press(&mut osd, OsdKey::Next);
         stops.push(ring(&osd));
     }
-    assert_eq!(stops, ["route-shortest", "route-motorways", "route-fastest"]);
+    assert_eq!(
+        stops,
+        ["route-shortest", "route-motorways", "route-cameras", "route-fastest"]
+    );
     // Shortest, then motorways avoided: kept, said, the menu stays.
     press(&mut osd, OsdKey::Next);
     press(&mut osd, OsdKey::Ok);
@@ -3430,6 +3433,48 @@ fn route_chooses_fastest_or_shortest_and_motorways_and_finds_ours_anew() {
     assert!(!br(&osd).get_map_menu_open(), "closed when left alone");
     assert_eq!(osd.host().count(&Call::MapReroute), 2);
     assert!(!osd.host().settings.map.avoid_motorways);
+}
+
+#[test]
+fn speed_cameras_are_switched_in_route_and_shown_ahead_on_the_bar() {
+    use crate::host::NavArrow;
+    let mut osd = osd(with_names());
+    osd.host_mut().map_guide = Some(our_card(NavArrow::Right, NavArrow::None));
+    osd.host_mut().map_camera = Some(337);
+    goto(&mut osd, MAP);
+    // Off by default: no sign, the arrival in its line.
+    assert_eq!(prop!(osd, get_map_camera), "");
+    // Route, then its last row.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-goto");
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "menu-route");
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(ring(&osd), "route-cameras");
+    assert!(!br(&osd).get_map_cameras());
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.speed-cameras"),
+        Some(&toml::Value::Boolean(true))
+    );
+    assert!(br(&osd).get_map_cameras());
+    assert!(br(&osd).get_map_menu_open(), "the menu stays");
+    // On: the next camera on the bar, to 50 m.
+    assert_eq!(prop!(osd, get_map_camera), "350 m");
+    osd.host_mut().map_camera = Some(120);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "100 m");
+    // Further than 500 m, passed, or not guiding: none.
+    osd.host_mut().map_camera = Some(700);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
+    osd.host_mut().map_camera = Some(200);
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
 }
 
 #[test]

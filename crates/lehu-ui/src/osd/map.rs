@@ -49,6 +49,11 @@ const PICK_ROUTE: i32 = 6;
 const PICK_FASTEST: i32 = 7;
 const PICK_SHORTEST: i32 = 8;
 const PICK_MOTORWAYS: i32 = 9;
+const PICK_CAMERAS: i32 = 10;
+
+/// A speed camera ahead shows on the bar from this far: 500 m is the
+/// furthest the spoken warning comes, half a minute in town.
+const CAMERA_SIGN_M: u32 = 500;
 
 /// The menu's pages, as `Bridge.map-menu-page` numbers them.
 const PAGE_ROWS: i32 = 0;
@@ -224,6 +229,11 @@ impl<H: Host> State<H> {
                 self.persist("map.avoid-motorways", Value::Boolean(!on));
                 true
             }
+            PICK_CAMERAS => {
+                let on = self.host.settings().map.speed_cameras;
+                self.persist("map.speed-cameras", Value::Boolean(!on));
+                true
+            }
             _ => false,
         };
         if stays {
@@ -349,6 +359,25 @@ impl<H: Host> State<H> {
             bridge.set_map_route(SharedString::from(label));
             bridge.set_map_shortest(route.0 == RouteBy::Shortest);
             bridge.set_map_no_motorways(route.1);
+        }
+        let cameras = self.host.settings().map.speed_cameras;
+        if self.p_map_cameras != Some(cameras) {
+            self.p_map_cameras = Some(cameras);
+            bridge.set_map_cameras(cameras);
+        }
+        // The next speed camera, to 50 m: the bar changes every few
+        // seconds, not every tick.
+        let camera = self.host.map_guidance().is_some()
+            .then(|| self.host.map_camera_ahead(CAMERA_SIGN_M))
+            .flatten()
+            .map(|m| (m + 25) / 50 * 50);
+        if self.p_map_camera != Some(camera) {
+            self.p_map_camera = Some(camera);
+            let text = match camera {
+                Some(m) => compose(&mut self.scratch, format_args!("{m} m")),
+                None => "",
+            };
+            bridge.set_map_camera(SharedString::from(text));
         }
         let voice = self.host.settings().map.voice;
         if self.p_map_voice != Some(voice) {

@@ -266,6 +266,10 @@ export global Bridge {
     in property <string> map-route;
     in property <bool> map-shortest;
     in property <bool> map-no-motorways;
+    in property <bool> map-cameras;           // warn of speed cameras (map.speed-cameras)
+    // Guiding: how far the next speed camera is ("350 m"), within 500 m
+    // and while they are warned of; "" none.
+    in property <string> map-camera;
     // How fast, km/h, and the road's limit ("" when not known), and
     // whether we are over it.
     in property <string> map-speed;
@@ -312,7 +316,7 @@ export global Bridge {
     callback map-menu-pick(int);              // a menu row: 0 My position, 1 Stop route,
                                               // 2 Go to, 3 Home, 4 Work, 5 Voice, 6 Route;
                                               // Route's: 7 Fastest, 8 Shortest,
-                                              // 9 Avoid motorways
+                                              // 9 Avoid motorways, 10 Speed cameras
     callback map-voice-on();                  // the bar's muted key: the voice on again
     callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
     callback dest-pick(int);                  // a tap on a destination: drive there
@@ -1301,7 +1305,7 @@ export global MapMenu {
     out property <length> height: 480px;
     out property <length> spacing: 4px;
     // The rows shown: the menu's own (those that apply), or the route's.
-    out property <int> rows: Bridge.map-menu-page == 1 ? 3
+    out property <int> rows: Bridge.map-menu-page == 1 ? 4
         : (Bridge.map-away ? 1 : 0) + (Bridge.map-on-route ? 1 : 0)
           + (Bridge.map-can-search ? 4 : 0) + 1;
     // As tall as they can be, up to 60 px, all above the bar: seven (My
@@ -2539,7 +2543,23 @@ component ScreenMap inherits Rectangle {
                         font-size: 16px;
                         overflow: elide;
                     }
-                    if Bridge.map-eta != "": HorizontalLayout {
+                    // A speed camera ahead takes the arrival's line: the
+                    // sign and how far, in the warning colour.
+                    if Bridge.map-camera != "": HorizontalLayout {
+                        spacing: 4px;
+                        Icon {
+                            kind: "camera";
+                            ink: Theme.danger;
+                            size: 18px;
+                        }
+                        Text {
+                            text: Bridge.map-camera;
+                            color: Theme.danger;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if Bridge.map-camera == "" && Bridge.map-eta != "": HorizontalLayout {
                         spacing: 8px;
                         Text {
                             text: Bridge.map-eta;
@@ -2761,8 +2781,8 @@ component ScreenMap inherits Rectangle {
             }
         }
         // Route's choices: the fastest or the shortest (the green dot on
-        // the one taken), and motorways avoided or not. Back goes back to
-        // the menu's rows.
+        // the one taken), motorways avoided or not, and speed cameras
+        // warned of or not. Back goes back to the menu's rows.
         if Bridge.map-menu-page == 1: VerticalLayout {
             padding: MapBar.pad;
             spacing: MapMenu.spacing;
@@ -2793,6 +2813,15 @@ component ScreenMap inherits Rectangle {
                 detail: Bridge.map-no-motorways ? "On" : "Off";
                 more: false;
                 clicked => { Bridge.map-menu-pick(9); }
+            }
+            NavRow {
+                height: MapMenu.row-h;
+                ring-key: "route-cameras";
+                icon: "camera";
+                label: "Speed cameras";
+                detail: Bridge.map-cameras ? "Warn" : "Off";
+                more: false;
+                clicked => { Bridge.map-menu-pick(10); }
             }
         }
     }

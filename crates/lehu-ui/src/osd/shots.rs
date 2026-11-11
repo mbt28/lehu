@@ -757,4 +757,21 @@ fn shots() {
     s.key(OsdKey::Ok);
     s.keys(OsdKey::Next, 5);
     s.save("99-map-menu-seven-rows");
+
+    // ── speed cameras ──
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd
+        .host_mut()
+        .persist("map.speed-cameras", toml::Value::Boolean(true))
+        .unwrap();
+    s.osd.host_mut().map_camera = Some(340);
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.save("100-map-guiding-camera");
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 5);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Prev);
+    s.save("101-map-route-cameras");
 }

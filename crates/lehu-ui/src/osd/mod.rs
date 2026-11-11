@@ -420,6 +420,9 @@ struct State<H> {
     map_menu_page: i32,
     route_opened: Option<(lehu_core::settings::RouteBy, bool)>,
     p_map_route: Option<(lehu_core::settings::RouteBy, bool)>,
+    /// Speed cameras warned of, and the metres to the next one shown.
+    p_map_cameras: Option<bool>,
+    p_map_camera: Option<Option<u32>>,
     /// The bar's short note, until then (0: none).
     flash: String,
     flash_until: u64,
@@ -622,6 +625,8 @@ impl<H: Host> State<H> {
             map_menu_page: 0,
             route_opened: None,
             p_map_route: None,
+            p_map_cameras: None,
+            p_map_camera: None,
             flash: String::new(),
             flash_until: 0,
             p_map_flash: Last::default(),

@@ -526,6 +526,12 @@ pub trait Host {
     fn map_guidance(&self) -> Option<&NavCard> {
         None
     }
+    /// Metres to the next speed camera on the route of ours when it is
+    /// `within` metres or less and they are warned of (map.speed-cameras);
+    /// None otherwise. Asked every tick while the map guides: cheap.
+    fn map_camera_ahead(&self, _within: u32) -> Option<u32> {
+        None
+    }
     /// How fast we go, km/h, and the road's speed limit when it is
     /// known; None when there is no position on the move.
     fn map_speed(&self) -> Option<(u32, Option<u16>)> {
