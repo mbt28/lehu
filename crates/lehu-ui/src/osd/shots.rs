@@ -842,8 +842,7 @@ fn shots() {
                 crate::host::RegionState::Damaged,
             ),
         ];
-        h.persist("map.dir", toml::Value::String("/maps/hungary".into()))
-            .unwrap();
+        h.settings.map.dir = "/maps/hungary".into();
     };
     let mut s = Shot::new(phone_host());
     regions(s.osd.host_mut());
@@ -853,7 +852,7 @@ fn shots() {
     s.save("106-map-settings");
     // The knob: Region, Enter, a turn on to Luxembourg, then to a region
     // that cannot be taken.
-    s.keys(OsdKey::Next, 1);
+    s.keys(OsdKey::Next, 2);
     s.key(OsdKey::Ok);
     s.key(OsdKey::Next);
     s.save("107-map-region-choosing");
