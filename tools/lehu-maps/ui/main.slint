@@ -1,0 +1,663 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mehmet Tekbas
+//
+// lehu-maps: one window. The regions on the left; on the right the chosen
+// region, the voice, the card, the one button that writes them, and how
+// it is going. The colours are the head unit's night palette
+// (crates/lehu-ui/ui/app.slint's Theme), the text a little brighter for a
+// desk.
+
+import { Button, ComboBox, LineEdit, ListView, ProgressIndicator, ScrollView } from "std-widgets.slint";
+
+export struct AreaRow {
+    name: string,
+    // The parents, when the list is searched.
+    path: string,
+    depth: int,
+}
+
+export struct CardItem {
+    // The folder on the card: `hungary`, `voice/en`.
+    rel: string,
+    title: string,
+    detail: string,
+    problem: bool,
+}
+
+global Theme {
+    out property <color> bg: #000000;
+    out property <color> bar: #07090B;
+    out property <color> surface: #11161B;
+    out property <color> surface2: #1A2128;
+    out property <color> line: #232C35;
+    out property <color> text: #DDE3E8;
+    out property <color> dim: #8493A0;
+    out property <color> accent: #2F8BF0;
+    out property <color> accent-pressed: #2570C4;
+    out property <color> accent-text: #FFFFFF;
+    out property <color> ok: #3DCB7A;
+    out property <color> focus: #FFB300;
+    out property <color> danger: #E5484D;
+    out property <length> radius: 6px;
+}
+
+// Text that wraps, and asks the layout for the lines it needs: a wrapped
+// Text's preferred height is one line's, so the lines are reckoned from
+// its length (a character is about 0.55 em wide).
+component WrapText inherits Text {
+    wrap: word-wrap;
+    min-height: max(1, ceil(self.text.character-count * self.font-size * 0.55 / max(1px, self.width))) * self.font-size * 1.45;
+}
+
+component Heading inherits Text {
+    color: Theme.dim;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+}
+
+component Panel inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.line;
+}
+
+// The one primary button, in the head unit's accent.
+component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    min-width: 180px;
+    height: 40px;
+    border-radius: Theme.radius;
+    background: !root.enabled ? Theme.surface2 : touch.pressed ? Theme.accent-pressed : touch.has-hover ? Theme.accent.brighter(10%) : Theme.accent;
+    border-width: fs.has-focus ? 2px : 0px;
+    border-color: Theme.focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    Text {
+        text: root.text;
+        color: root.enabled ? Theme.accent-text : Theme.dim;
+        font-size: 15px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == "\n") { root.clicked(); return accept; }
+            reject
+        }
+    }
+}
+
+component AreaList inherits Rectangle {
+    in property <[AreaRow]> rows;
+    in-out property <int> current: -1;
+    in property <bool> searching;
+    callback chosen(int);
+    out property <length> row-h: 30px;
+
+    public function show(i: int) {
+        if (i < 0) { return; }
+        if (i * root.row-h + list.content-y < 0) {
+            list.content-y = -i * root.row-h;
+        } else if ((i + 1) * root.row-h + list.content-y > list.visible-height) {
+            list.content-y = list.visible-height - (i + 1) * root.row-h;
+        }
+    }
+
+    list := ListView {
+        for row[i] in root.rows: Rectangle {
+            height: root.row-h;
+            background: i == root.current ? Theme.accent.with-alpha(0.35) : t.has-hover ? Theme.surface2 : transparent;
+            HorizontalLayout {
+                padding-left: 10px + (root.searching ? 0 : row.depth * 16px);
+                padding-right: 10px;
+                spacing: 8px;
+                Text {
+                    text: row.name;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: row.depth == 0 && !root.searching ? 600 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 0;
+                }
+                Text {
+                    text: row.path;
+                    color: Theme.dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+            t := TouchArea {
+                clicked => { root.current = i; root.chosen(i); }
+            }
+        }
+    }
+}
+
+component Line inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: Theme.text;
+    spacing: 12px;
+    Text {
+        text: root.label;
+        color: Theme.dim;
+        font-size: 13px;
+        width: 110px;
+        vertical-alignment: top;
+    }
+    WrapText {
+        text: root.value;
+        color: root.value-color;
+        font-size: 13px;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "LEHU Maps";
+    preferred-width: 1040px;
+    preferred-height: 700px;
+    min-width: 900px;
+    min-height: 600px;
+    background: Theme.bg;
+    default-font-size: 13px;
+
+    in property <string> version;
+
+    // The regions.
+    in property <[AreaRow]> areas;
+    in-out property <int> selected-row: -1;
+    in-out property <string> search-text;
+    in property <string> index-status;
+    in property <bool> index-failed;
+    callback search(string);
+    callback select(int);
+    callback retry-index();
+
+    // The region chosen.
+    in property <string> sel-name;
+    in property <string> sel-path;
+    in property <string> sel-extract;
+    in property <string> sel-size;
+    in property <string> sel-preset;
+
+    // The voice.
+    in property <[string]> voices;
+    in-out property <int> voice-index;
+    callback voice-changed(int);
+
+    // The card.
+    in property <[string]> cards;
+    in-out property <int> card-index;
+    in property <string> card-space;
+    in property <[CardItem]> card-items;
+    in property <string> card-note;
+    in-out property <string> folder-path;
+    in-out property <bool> folder-open;
+    in-out property <string> confirm-rel;
+    callback card-changed(int);
+    callback refresh-cards();
+    callback use-folder(string);
+    callback remove-item(string);
+
+    // Writing.
+    in property <bool> can-write;
+    in property <string> write-reason;
+    in property <bool> busy;
+    in property <string> stage;
+    in property <float> progress: -1;
+    in property <string> detail;
+    in property <string> status;
+    // 0 nothing, 1 done, 2 an error, 3 cancelled.
+    in property <int> status-kind;
+    callback write();
+    callback cancel();
+
+    // The log.
+    in property <string> log-text;
+    in-out property <bool> log-open;
+
+    // A scroll left past the end when the panels got shorter goes back.
+    function clamp() {
+        side.content-y = max(side.content-y, min(0px, side.visible-height - side.content-height));
+    }
+
+    // Back to the top (for the screenshots, which have no event loop to
+    // run the clamp).
+    public function scroll-to-top() {
+        side.content-y = 0px;
+    }
+
+    changed log-text => {
+        log-view.content-y = min(0px, log-view.visible-height - log-text-el.preferred-height - 12px);
+    }
+
+    VerticalLayout {
+        // The top bar.
+        Rectangle {
+            background: Theme.bar;
+            height: 52px;
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 14px;
+                Text {
+                    text: "LEHU Maps";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Maps and the voice for the head unit's card";
+                    color: Theme.dim;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.version;
+                    color: Theme.dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+        }
+
+        HorizontalLayout {
+            padding: 16px;
+            spacing: 16px;
+            vertical-stretch: 1;
+
+            // Left: the regions.
+            Panel {
+                width: 330px;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    Heading { text: "REGION"; }
+                    search := LineEdit {
+                        placeholder-text: "Search: country, region or code (HU)";
+                        text <=> root.search-text;
+                        edited(t) => { root.search(t); }
+                        key-pressed(e) => {
+                            if (e.text == Key.DownArrow) {
+                                root.selected-row = min(root.areas.length - 1, root.selected-row + 1);
+                                root.select(root.selected-row);
+                                area-list.show(root.selected-row);
+                                return accept;
+                            }
+                            if (e.text == Key.UpArrow) {
+                                root.selected-row = max(0, root.selected-row - 1);
+                                root.select(root.selected-row);
+                                area-list.show(root.selected-row);
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+                    if root.index-status != "": HorizontalLayout {
+                        spacing: 8px;
+                        WrapText {
+                            text: root.index-status;
+                            color: root.index-failed ? Theme.danger : Theme.dim;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                        if root.index-failed: Button {
+                            text: "Retry";
+                            clicked => { root.retry-index(); }
+                        }
+                    }
+                    area-list := AreaList {
+                        vertical-stretch: 1;
+                        rows: root.areas;
+                        current <=> root.selected-row;
+                        searching: root.search-text != "";
+                        chosen(i) => { root.select(i); }
+                    }
+                    Text {
+                        text: "Extracts: Geofabrik (download.geofabrik.de)";
+                        color: Theme.dim;
+                        font-size: 11px;
+                    }
+                }
+            }
+
+            // Right: the region, the voice and the card; scrolled when the
+            // window is short.
+            side := ScrollView {
+                horizontal-stretch: 1;
+                // The panels at their own height, scrolled when the window
+                // is shorter; the bar in a gutter of its own.
+                content-height: side-inner.preferred-height;
+                changed content-height => { root.clamp(); }
+                changed visible-height => { root.clamp(); }
+                side-inner := VerticalLayout {
+                    width: side.visible-width;
+                    height: max(self.preferred-height, side.visible-height);
+                    padding-right: 14px;
+                    spacing: 12px;
+                    alignment: start;
+
+                    Panel {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 6px;
+                            Text {
+                                text: root.sel-name == "" ? "Choose a region" : root.sel-name;
+                                color: root.sel-name == "" ? Theme.dim : Theme.text;
+                                font-size: 22px;
+                                font-weight: 600;
+                            }
+                            if root.sel-name == "": WrapText {
+                                text: "Pick a country or region on the left. LEHU Maps downloads its OpenStreetMap extract, builds the map for the head unit and writes it to the card.";
+                                color: Theme.dim;
+                                wrap: word-wrap;
+                            }
+                            if root.sel-name != "": VerticalLayout {
+                                spacing: 6px;
+                                Text {
+                                    text: root.sel-path;
+                                    color: Theme.dim;
+                                    font-size: 12px;
+                                }
+                                Rectangle { height: 4px; }
+                                Line { label: "Extract"; value: root.sel-extract; }
+                                Line { label: "On the card"; value: root.sel-size; }
+                                Line { label: "Zoom preset"; value: root.sel-preset; }
+                            }
+                        }
+                    }
+
+                    Panel {
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Voice";
+                                    color: Theme.dim;
+                                    width: 110px;
+                                    vertical-alignment: center;
+                                }
+                                ComboBox {
+                                    model: root.voices;
+                                    current-index <=> root.voice-index;
+                                    enabled: !root.busy;
+                                    selected => { root.voice-changed(self.current-index); }
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Card";
+                                    color: Theme.dim;
+                                    width: 110px;
+                                    vertical-alignment: center;
+                                }
+                                ComboBox {
+                                    model: root.cards;
+                                    current-index <=> root.card-index;
+                                    enabled: !root.busy && root.cards.length > 0;
+                                    selected => { root.card-changed(self.current-index); }
+                                    horizontal-stretch: 1;
+                                }
+                                Button {
+                                    text: "Refresh";
+                                    enabled: !root.busy;
+                                    clicked => { root.refresh-cards(); }
+                                }
+                                Button {
+                                    text: "Folder…";
+                                    enabled: !root.busy;
+                                    clicked => { root.folder-open = !root.folder-open; }
+                                }
+                            }
+                            if root.folder-open: HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle { width: 110px; }
+                                LineEdit {
+                                    placeholder-text: "A folder to write to: the LEHU-MAPS drive's path";
+                                    text <=> root.folder-path;
+                                    enabled: !root.busy;
+                                    accepted(t) => { root.use-folder(t); }
+                                    horizontal-stretch: 1;
+                                }
+                                Button {
+                                    text: "Use folder";
+                                    enabled: !root.busy && root.folder-path != "";
+                                    clicked => { root.use-folder(root.folder-path); }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle { width: 110px; }
+                                WrapText {
+                                    text: root.card-space;
+                                    color: Theme.dim;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            // What is on the card.
+                            if root.card-note != "": HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle { width: 110px; }
+                                Text {
+                                    text: root.card-note;
+                                    color: Theme.dim;
+                                    font-italic: true;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            for item in root.card-items: HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle { width: 110px; }
+                                Rectangle {
+                                    background: Theme.surface2;
+                                    border-radius: 4px;
+                                    height: 34px;
+                                    horizontal-stretch: 1;
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 4px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: item.title;
+                                            color: Theme.text;
+                                            vertical-alignment: center;
+                                            font-weight: 600;
+                                        }
+                                        Text {
+                                            text: item.detail;
+                                            color: item.problem ? Theme.danger : Theme.dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                        if root.confirm-rel != item.rel: Button {
+                                            text: "Remove";
+                                            enabled: !root.busy;
+                                            clicked => { root.confirm-rel = item.rel; }
+                                        }
+                                        if root.confirm-rel == item.rel: Text {
+                                            text: "Remove it from the card?";
+                                            color: Theme.danger;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.confirm-rel == item.rel: Button {
+                                            text: "Remove";
+                                            primary: true;
+                                            clicked => { root.remove-item(item.rel); root.confirm-rel = ""; }
+                                        }
+                                        if root.confirm-rel == item.rel: Button {
+                                            text: "Keep";
+                                            clicked => { root.confirm-rel = ""; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The button, and how it is going: always in sight.
+        Rectangle {
+            background: Theme.bar;
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.line;
+            }
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 16px;
+                    if !root.busy: PrimaryButton {
+                        text: "Write to card";
+                        enabled: root.can-write;
+                        clicked => { root.write(); }
+                    }
+                    if root.busy: Button {
+                        text: "Cancel";
+                        height: 40px;
+                        min-width: 180px;
+                        clicked => { root.cancel(); }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        horizontal-stretch: 1;
+                        WrapText {
+                            text: root.busy ? root.stage : root.can-write ? "Downloads, builds and checks what is needed, then writes it to the card." : root.write-reason;
+                            color: root.busy ? Theme.text : Theme.dim;
+                            wrap: word-wrap;
+                        }
+                        if root.busy: HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                ProgressIndicator {
+                                    progress: max(0, root.progress);
+                                    indeterminate: root.progress < 0;
+                                    height: 6px;
+                                }
+                            }
+                            Text {
+                                text: root.detail;
+                                color: Theme.dim;
+                                font-size: 12px;
+                                min-width: 150px;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
+                }
+                if !root.busy && root.status != "": Rectangle {
+                    border-radius: 4px;
+                    background: root.status-kind == 2 ? Theme.danger.with-alpha(0.15) : root.status-kind == 1 ? Theme.ok.with-alpha(0.15) : Theme.surface2;
+                    border-width: 1px;
+                    border-color: root.status-kind == 2 ? Theme.danger : root.status-kind == 1 ? Theme.ok : Theme.line;
+                    HorizontalLayout {
+                        padding: 10px;
+                        WrapText {
+                            text: root.status;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // The log, folded away until wanted.
+        Rectangle {
+            background: Theme.bg;
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 6px;
+                padding-bottom: 8px;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Rectangle {
+                        width: log-label.preferred-width + 8px;
+                        height: 22px;
+                        log-label := Text {
+                            x: 0;
+                            text: root.log-open ? "▾ Hide log" : "▸ Show log";
+                            color: log-touch.has-hover ? Theme.text : Theme.dim;
+                            vertical-alignment: center;
+                        }
+                        log-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.log-open = !root.log-open; }
+                        }
+                    }
+                    Text {
+                        text: "Map data © OpenStreetMap contributors, ODbL 1.0 (openstreetmap.org/copyright) · voices: Piper (rhasspy/piper-voices)";
+                        color: Theme.dim;
+                        font-size: 11px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+                Rectangle {
+                    visible: root.log-open;
+                    height: root.log-open ? 160px : 0px;
+                    background: Theme.surface;
+                    border-radius: 4px;
+                    log-view := ScrollView {
+                        content-height: log-text-el.preferred-height + 12px;
+                        log-text-el := Text {
+                            x: 8px;
+                            y: 6px;
+                            width: log-view.visible-width - 16px;
+                            text: root.log-text;
+                            color: Theme.dim;
+                            font-size: 11px;
+                            font-family: "monospace";
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
