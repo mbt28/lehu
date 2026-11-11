@@ -590,6 +590,13 @@ pub trait Host {
     }
     /// Stop guiding along it; where we are stays.
     fn map_end_route(&mut self) {}
+    /// Find the route of ours anew, from where we are, with the route
+    /// options as they are now (map.route-by, map.avoid-motorways), as
+    /// `map_go_place` finds one: `map_route_poll` says how it goes. False
+    /// when there is no route of ours.
+    fn map_reroute(&mut self) -> bool {
+        false
+    }
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);
     /// The key that was learned, once (its Linux key code).

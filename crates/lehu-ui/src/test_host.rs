@@ -39,6 +39,7 @@ pub enum Call {
     MapGo(usize),
     MapGoPlace(String),
     MapEndRoute,
+    MapReroute,
     SetKeyLearning(bool),
     BtPromptAccept,
     BtPromptCancel,
@@ -552,6 +553,11 @@ impl Host for TestHost {
     fn map_end_route(&mut self) {
         self.calls.push(Call::MapEndRoute);
         self.map_on_route = false;
+    }
+
+    fn map_reroute(&mut self) -> bool {
+        self.calls.push(Call::MapReroute);
+        self.map_on_route
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {

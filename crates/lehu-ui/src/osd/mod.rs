@@ -413,9 +413,13 @@ struct State<H> {
     p_map_search: Option<(bool, bool)>,
     /// Home and Work are set, as shown.
     p_map_slots: Option<(bool, bool)>,
-    /// The menu is open, until then unless used.
+    /// The menu is open, until then unless used; its page (the rows, or
+    /// Route's choices), and the route's options when they were opened.
     map_menu: bool,
     menu_until: u64,
+    map_menu_page: i32,
+    route_opened: Option<(lehu_core::settings::RouteBy, bool)>,
+    p_map_route: Option<(lehu_core::settings::RouteBy, bool)>,
     /// The bar's short note, until then (0: none).
     flash: String,
     flash_until: u64,
@@ -615,6 +619,9 @@ impl<H: Host> State<H> {
             p_map_slots: None,
             map_menu: false,
             menu_until: 0,
+            map_menu_page: 0,
+            route_opened: None,
+            p_map_route: None,
             flash: String::new(),
             flash_until: 0,
             p_map_flash: Last::default(),

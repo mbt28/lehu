@@ -257,8 +257,10 @@ pub struct AppHost {
     /// was last asked (once a minute).
     sun: lehu_core::sun::Dusk,
     sun_checked_at: Option<u64>,
-    /// Where the route of ours goes: its name and town, for the arrival.
+    /// Where the route of ours goes: its name and town, for the arrival,
+    /// and the destination itself, to find the route anew.
     map_to: (String, String),
+    map_dest: Option<Found>,
     /// The arrival, shown in the guidance's place until then.
     map_arrival: Option<(NavCard, u64)>,
     /// The speeding chime: when it is due, and its samples once made.
@@ -364,6 +366,7 @@ impl AppHost {
             sun: lehu_core::sun::Dusk::new(),
             sun_checked_at: None,
             map_to: (String::new(), String::new()),
+            map_dest: None,
             map_arrival: None,
             map_speeding: SpeedWatch::new(),
             map_chime: Vec::new(),
@@ -797,25 +800,10 @@ impl AppHost {
         match Viewer::start(display, set.clone(), night, view) {
             Ok(viewer) => {
                 viewer.set_night(self.night_now());
-                viewer.set_position(self.map_marker);
-                viewer.set_route(self.map_route.clone());
-                // A replayed drive: the map moves along it by itself.
-                if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
-                    let ago = lehu_core::clock::now_ms().saturating_sub(start);
-                    let now = std::time::Instant::now();
-                    viewer.set_drive(Some(Drive {
-                        track: Arc::clone(track),
-                        start: now
-                            .checked_sub(std::time::Duration::from_millis(ago))
-                            .unwrap_or(now),
-                        bounds: set.bounds,
-                        top_zoom: set.top_zoom(),
-                    }));
-                    viewer.follow(self.map_follow.then_some(view.zoom));
-                }
                 self.map = Some(viewer);
                 self.map_view = view;
                 self.map_set = Some(set);
+                self.map_show();
                 self.map_note = "Loading the map".into();
                 self.update_map_label();
                 true
@@ -824,6 +812,41 @@ impl AppHost {
                 log::warn!("map: {e}");
                 self.map_note = e;
                 false
+            }
+        }
+    }
+
+    /// Where we are, the route and the drive, as they are now, on the map
+    /// while it is open: a drive (replayed, or a route of ours) the map
+    /// moves along by itself, following it unless it was moved by hand;
+    /// otherwise the view where it was put.
+    fn map_show(&self) {
+        let (Some(viewer), Some(set)) = (&self.map, &self.map_set) else {
+            return;
+        };
+        viewer.set_position(self.map_marker);
+        viewer.set_route(self.map_route.clone());
+        match (&self.map_track, self.map_track_start) {
+            (Some(track), Some(start)) => {
+                let ago = lehu_core::clock::now_ms().saturating_sub(start);
+                let now = std::time::Instant::now();
+                viewer.set_drive(Some(Drive {
+                    track: Arc::clone(track),
+                    start: now
+                        .checked_sub(std::time::Duration::from_millis(ago))
+                        .unwrap_or(now),
+                    bounds: set.bounds,
+                    top_zoom: set.top_zoom(),
+                }));
+                viewer.follow(self.map_follow.then_some(self.map_view.zoom));
+                if !self.map_follow {
+                    viewer.set_view(self.map_view);
+                }
+            }
+            _ => {
+                viewer.set_drive(None);
+                viewer.follow(None);
+                viewer.set_view(self.map_view);
             }
         }
     }
@@ -1051,6 +1074,15 @@ impl AppHost {
     /// closing as the replayed one is; the destination goes first among
     /// the recent ones.
     fn map_take_route(&mut self, track: Track, to: &Found) {
+        // From its start, on the map at once when it is open (a route to
+        // Home from the menu, one found anew).
+        let fix = track.at(0);
+        self.map_position = Some((fix.x, fix.y));
+        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+        self.map_route = Some(Route::from(track.line()));
+        self.map_guide = track
+            .ahead(0)
+            .map(|a| guidance(&a, then_of(&track, &a), local_time_ms(self.zone_min)));
         self.map_track = Some(Arc::new(track));
         self.map_track_start = Some(lehu_core::clock::now_ms());
         self.map_track_shown = 0;
@@ -1059,6 +1091,7 @@ impl AppHost {
         self.map_follow = true;
         self.map_arrival = None;
         self.map_to = (to.name.clone(), to.town.clone());
+        self.map_dest = Some(to.clone());
         // The prompts start afresh on the new route.
         self.map_quiet();
         let place = place_of(to);
@@ -1069,6 +1102,7 @@ impl AppHost {
         if recent != self.settings.map.recent {
             self.persist_any("map.recent", recent);
         }
+        self.map_show();
     }
 
     /// Find the route from where we are to `to`, on a thread of its own;
@@ -1614,6 +1648,15 @@ impl Host for AppHost {
         self.map_routed
     }
 
+    fn map_reroute(&mut self) -> bool {
+        let Some(to) = self.map_dest.clone().filter(|_| self.map_routed) else {
+            return false;
+        };
+        log::info!("map: the route options changed");
+        self.map_route_to(to);
+        true
+    }
+
     fn map_end_route(&mut self) {
         if !self.map_routed {
             return;
@@ -1630,13 +1673,7 @@ impl Host for AppHost {
         self.map_position = here;
         self.map_quiet();
         self.map_marker = here.map(|(x, y)| Marker::Dot(x, y));
-        if let Some(viewer) = &self.map {
-            viewer.set_drive(None);
-            viewer.set_route(None);
-            viewer.set_position(self.map_marker);
-            viewer.follow(None);
-            viewer.set_view(self.map_view);
-        }
+        self.map_show();
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {

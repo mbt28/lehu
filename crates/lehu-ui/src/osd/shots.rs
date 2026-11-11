@@ -734,4 +734,27 @@ fn shots() {
     s.bridge().invoke_dest_nearby(3);
     s.tick();
     s.save("96-go-to-nearest-charging-night");
+
+    // ── the map's menu: Route's choices ──
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd
+        .host_mut()
+        .persist("map.avoid-motorways", toml::Value::Boolean(true))
+        .unwrap();
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 3);
+    s.save("97-map-menu-route");
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.key(OsdKey::Ok);
+    s.save("98-map-route-choices");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 5);
+    s.save("99-map-menu-seven-rows");
 }

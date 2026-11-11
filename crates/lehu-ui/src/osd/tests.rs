@@ -3130,11 +3130,14 @@ fn the_knob_opens_the_map_menu_walks_it_and_backs_out() {
     assert_eq!(window(&osd), (502, 0, 298, 480));
     // Turns move the ring, round at the ends as any list.
     let mut seen = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         press(&mut osd, OsdKey::Next);
         seen.push(ring(&osd));
     }
-    assert_eq!(seen, ["menu-home", "menu-work", "menu-voice", "menu-goto"]);
+    assert_eq!(
+        seen,
+        ["menu-home", "menu-work", "menu-route", "menu-voice", "menu-goto"]
+    );
     assert!(!osd.host().has(&Call::MapZoom(1)), "turns do not zoom");
     press(&mut osd, OsdKey::Prev);
     assert_eq!(ring(&osd), "menu-voice");
@@ -3336,6 +3339,121 @@ fn home_is_chosen_once_then_one_choice_away_and_changed_from_go_to() {
     press(&mut osd, OsdKey::Back);
     assert_eq!(screen(&osd), MAP);
     assert!(osd.host().settings.map.work.is_none());
+}
+
+#[test]
+fn route_chooses_fastest_or_shortest_and_motorways_and_finds_ours_anew() {
+    use crate::host::RouteStage;
+    let mut osd = osd(with_names());
+    osd.host_mut().map_on_route = true;
+    goto(&mut osd, MAP);
+    assert_eq!(prop!(osd, get_map_route), "Fastest");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-stop");
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+    }
+    assert_eq!(ring(&osd), "menu-route");
+    // Route: its choices in the column's place, the ring on the first.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(br(&osd).get_map_menu_page(), 1);
+    assert_eq!(ring(&osd), "route-fastest");
+    assert_eq!(window(&osd), (502, 0, 298, 480));
+    assert!(!br(&osd).get_map_shortest());
+    // Turned round its three rows.
+    let mut stops = Vec::new();
+    for _ in 0..3 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(stops, ["route-shortest", "route-motorways", "route-fastest"]);
+    // Shortest, then motorways avoided: kept, said, the menu stays.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.route-by"),
+        Some(&toml::Value::String("shortest".into()))
+    );
+    assert!(br(&osd).get_map_shortest());
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().settings.map.avoid_motorways);
+    assert!(br(&osd).get_map_no_motorways());
+    assert_eq!(prop!(osd, get_map_route), "Shortest, no motorways");
+    assert!(br(&osd).get_map_menu_open());
+    assert!(!osd.host().has(&Call::MapReroute), "not while choosing");
+    // Back: the menu's rows, the ring on Route, and our route found anew.
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Found].into();
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(br(&osd).get_map_menu_page(), 0);
+    assert_eq!(ring(&osd), "menu-route");
+    assert_eq!(osd.host().count(&Call::MapReroute), 1);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+    press(&mut osd, OsdKey::Back);
+    assert!(!br(&osd).get_map_menu_open());
+    // By touch: opened and left unchanged, nothing is found anew; changed,
+    // the menu key closing it finds it anew.
+    advance(&mut osd, KEY_RECENT_MS + 1);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    assert_eq!(ring(&osd), "", "no ring for a finger");
+    br(&osd).invoke_map_menu(false);
+    tick(&mut osd);
+    assert_eq!(osd.host().count(&Call::MapReroute), 1);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 0, "opens on its rows");
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(7);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_shortest());
+    osd.host_mut().map_stages = [RouteStage::Found].into();
+    br(&osd).invoke_map_menu(false);
+    tick(&mut osd);
+    assert_eq!(osd.host().count(&Call::MapReroute), 2);
+    // No route of ours: the options are only kept.
+    osd.host_mut().map_on_route = false;
+    tick(&mut osd);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(9);
+    tick(&mut osd);
+    advance(&mut osd, 8001);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open(), "closed when left alone");
+    assert_eq!(osd.host().count(&Call::MapReroute), 2);
+    assert!(!osd.host().settings.map.avoid_motorways);
+}
+
+#[test]
+fn seven_menu_rows_fit_above_the_bar() {
+    let mut osd = osd(with_names());
+    osd.host_mut().map_on_route = true;
+    osd.host_mut().map_away = true;
+    osd.host_mut().map_guide = Some(our_card(
+        crate::host::NavArrow::Right,
+        crate::host::NavArrow::None,
+    ));
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    let menu = osd.ui.global::<MapMenu<'_>>();
+    let bar = osd.ui.global::<MapBar<'_>>();
+    assert_eq!(menu.get_rows(), 7);
+    let rows = 7.0 * menu.get_row_h() + 6.0 * menu.get_spacing() + 2.0 * bar.get_pad();
+    assert!(rows <= bar.get_y(), "{rows} over the bar at {}", bar.get_y());
+    assert!(menu.get_row_h() >= 50.0, "still a finger's height");
+    // Fewer: as tall as they were.
+    osd.host_mut().map_away = false;
+    tick(&mut osd);
+    assert_eq!(osd.ui.global::<MapMenu<'_>>().get_row_h(), 60.0);
 }
 
 #[test]

@@ -11,18 +11,21 @@
 //!
 //! The menu is a column of rows at the right, over the map: My position
 //! (while the map is off it), Stop route (on a route of ours), Go to, Home,
-//! Work (with the road data) and Voice. The knob walks it as any list --
+//! Work, Route (with the road data) and Voice. Route opens its choices in
+//! the column's place -- the fastest or the shortest, motorways avoided or
+//! not -- which Back leaves for the menu's rows again; the route driven,
+//! if any, is found anew with them once they are left. The knob walks it as any list --
 //! the ring on its first row -- its click chooses, Back closes it; a tap
 //! chooses, a tap on the map beside it or on the menu key closes it, and
 //! so does leaving it alone a few seconds. Home and Work route there at
 //! once; one not set yet opens Go to to choose it (see `dest.rs`).
 
-use lehu_core::settings::MapPlace;
+use lehu_core::settings::{MapPlace, RouteBy};
 use slint::platform::Key;
 use slint::{ComponentHandle, SharedString};
 use toml::Value;
 
-use super::{Bridge, DEST, Host, MAP, State, clean, dispatch_key};
+use super::{Bridge, DEST, Host, MAP, State, clean, compose, dispatch_key};
 use crate::AppWindow;
 use crate::host::MapSlot;
 use crate::keys::OsdKey;
@@ -42,6 +45,14 @@ const PICK_GOTO: i32 = 2;
 const PICK_HOME: i32 = 3;
 const PICK_WORK: i32 = 4;
 const PICK_VOICE: i32 = 5;
+const PICK_ROUTE: i32 = 6;
+const PICK_FASTEST: i32 = 7;
+const PICK_SHORTEST: i32 = 8;
+const PICK_MOTORWAYS: i32 = 9;
+
+/// The menu's pages, as `Bridge.map-menu-page` numbers them.
+const PAGE_ROWS: i32 = 0;
+const PAGE_ROUTE: i32 = 1;
 
 impl<H: Host> State<H> {
     /// A finger went down on the map: drags count from here.
@@ -73,6 +84,12 @@ impl<H: Host> State<H> {
                     dispatch_key(ui, Key::Tab, false);
                 }
                 OsdKey::Ok if !repeat => dispatch_key(ui, Key::Return, false),
+                // Back from Route's choices: the menu's rows again.
+                OsdKey::Back | OsdKey::Erase | OsdKey::Left
+                    if !repeat && self.map_menu_page == PAGE_ROUTE =>
+                {
+                    self.map_menu_page(&bridge, PAGE_ROWS);
+                }
                 OsdKey::Back | OsdKey::Erase | OsdKey::Left if !repeat => {
                     self.map_menu_show(&bridge, false);
                 }
@@ -104,6 +121,9 @@ impl<H: Host> State<H> {
             return;
         }
         self.map_menu = open;
+        if !open {
+            self.map_menu_page(bridge, PAGE_ROWS);
+        }
         bridge.set_map_menu_open(open);
         // The rows go with it; nothing reports losing the ring.
         bridge.set_ring_row(SharedString::default());
@@ -113,6 +133,43 @@ impl<H: Host> State<H> {
             self.focus_seed = true;
             self.ring_target = None;
         }
+    }
+
+    /// The menu's rows, or Route's choices. Leaving the choices, a route
+    /// of ours is found anew when they changed.
+    fn map_menu_page(&mut self, bridge: &Bridge<'_>, page: i32) {
+        if page == self.map_menu_page {
+            return;
+        }
+        let left = self.map_menu_page;
+        self.map_menu_page = page;
+        bridge.set_map_menu_page(page);
+        bridge.set_ring_row(SharedString::default());
+        // The ring, for someone on the knob: on the first choice, or back
+        // on Route.
+        if self.map_menu {
+            self.focus_seed = true;
+            self.ring_target = (page == PAGE_ROWS).then(|| "menu-route".to_string());
+        }
+        if page == PAGE_ROUTE {
+            self.route_opened = Some(self.route_options());
+        } else if left == PAGE_ROUTE
+            && self.route_opened.take() != Some(self.route_options())
+            && self.host.map_on_route()
+            && !self.dest_busy
+            && self.host.map_reroute()
+        {
+            self.dest_busy = true;
+            self.menu_routing = true;
+            self.dest_error = false;
+            self.map_flash("Finding the route", u64::MAX);
+        }
+    }
+
+    /// How routes are found now: by what, and motorways avoided.
+    fn route_options(&self) -> (RouteBy, bool) {
+        let map = &self.host.settings().map;
+        (map.route_by, map.avoid_motorways)
     }
 
     /// Home's and Work's second line: the place and how far it is.
@@ -142,10 +199,34 @@ impl<H: Host> State<H> {
         if !self.map_menu {
             return;
         }
-        if row == PICK_VOICE {
-            // Stays open: the row says what it is now.
-            let on = self.host.settings().map.voice;
-            self.persist("map.voice", Value::Boolean(!on));
+        // These stay open: the rows say what is taken now.
+        let stays = match row {
+            PICK_VOICE => {
+                let on = self.host.settings().map.voice;
+                self.persist("map.voice", Value::Boolean(!on));
+                true
+            }
+            PICK_ROUTE => {
+                self.map_menu_page(bridge, PAGE_ROUTE);
+                true
+            }
+            PICK_FASTEST | PICK_SHORTEST => {
+                let by = if row == PICK_FASTEST {
+                    "fastest"
+                } else {
+                    "shortest"
+                };
+                self.persist("map.route-by", Value::String(by.into()));
+                true
+            }
+            PICK_MOTORWAYS => {
+                let on = self.host.settings().map.avoid_motorways;
+                self.persist("map.avoid-motorways", Value::Boolean(!on));
+                true
+            }
+            _ => false,
+        };
+        if stays {
             self.menu_until = self.now() + MENU_MS;
             return;
         }
@@ -252,6 +333,22 @@ impl<H: Host> State<H> {
             if !away && bridge.get_ring_row().as_str() == "menu-me" {
                 self.ring_gone(bridge);
             }
+        }
+        let route = self.route_options();
+        if self.p_map_route != Some(route) {
+            self.p_map_route = Some(route);
+            let by = match route.0 {
+                RouteBy::Fastest => "Fastest",
+                RouteBy::Shortest => "Shortest",
+            };
+            let label = if route.1 {
+                compose(&mut self.scratch, format_args!("{by}, no motorways"))
+            } else {
+                by
+            };
+            bridge.set_map_route(SharedString::from(label));
+            bridge.set_map_shortest(route.0 == RouteBy::Shortest);
+            bridge.set_map_no_motorways(route.1);
         }
         let voice = self.host.settings().map.voice;
         if self.p_map_voice != Some(voice) {
