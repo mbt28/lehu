@@ -4,14 +4,17 @@
 """Render an OpenStreetMap extract into the map tiles LEHU shows, on a PC.
 
     scripts/map-tiles.py EXTRACT.osm.pbf OUT [--zoom 8-16] [--name NAME]
-                         [--bbox W,S,E,N] [--jobs N] [--quality 80]
-                         [--font FONT.ttf] [--labels draw|data|both|none]
-                         [--label-zoom 8-18] [--no-tiles] [--night]
+                         [--bbox W,S,E,N] [--area Z0-Z1:W,S,E,N ...]
+                         [--jobs N] [--quality 80] [--font FONT.ttf]
+                         [--labels draw|data|both|none] [--label-zoom 8-18]
+                         [--no-tiles] [--night] [--pack [DEST]] [--pack-only]
+                         [--progress]
 
 OUT gets one 256 x 256 baseline JPEG per tile, OUT/<z>/<x>/<y>.jpg, and
 OUT/map.toml, which tells LEHU the zoom levels, the area and where to open.
-Copy OUT to the head unit's map directory (map.dir, /var/lib/lehu/maps by
-default). The extract comes from a provider of OSM data such as
+--pack then packs them into DEST/tiles.pmtiles (PMTiles v3) and the label
+data into DEST/labels.pack, the files of a region folder; scripts/
+map-region.py builds a whole region this way (see docs/map.md). The extract comes from a provider of OSM data such as
 download.geofabrik.de; the tiles are drawn here, never fetched from
 OpenStreetMap's tile servers, whose policy forbids offline use.
 
@@ -196,6 +199,35 @@ LABEL_REACH = 512  # no part of a label further than this from its middle
 LABEL_BLOCK = 3  # a file holds 2**LABEL_BLOCK x 2**LABEL_BLOCK tiles
 OVERZOOM = 2  # zooms LEHU goes past the last, the tiles enlarged
 DATA_LABELS = {}  # zoom -> [(kind, text, size, centre (zoom pixels), angle)]
+
+# --progress: machine-readable lines on stdout (@stage, @progress), the
+# rest on stderr. scripts/map-region.py and the PC tool read them.
+PROGRESS = False
+
+
+def say(text):
+    """A line for people: stdout, or stderr with --progress."""
+    print(text, file=sys.stderr if PROGRESS else sys.stdout, flush=True)
+
+
+def emit(line):
+    """A line for a program (--progress only): "@stage tiles",
+    "@progress 10 200"."""
+    if PROGRESS:
+        print(line, flush=True)
+
+
+def stop_on_term():
+    """SIGTERM (a cancel): the workers stopped too, and out at once; what
+    was written stays, partial."""
+    import signal
+
+    def stop(signum, frame):
+        for child in multiprocessing.active_children():
+            child.terminate()
+        os._exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, stop)
 
 
 def night():
@@ -525,10 +557,10 @@ def place_labels(z0, z1):
                 for ty in range(int(b[1] // side), int(b[3] // side) + 1):
                     bucket.setdefault((tx, ty), []).append(i)
         LABEL_BUCKETS[z] = bucket
-        print(f"  zoom {z}: {len(placed)} labels", flush=True)
+        say(f"  zoom {z}: {len(placed)} labels")
 
 
-def place_label_data(zooms, area):
+def place_label_data(zooms, area, tick=lambda: None):
     """Every zoom's labels as data, for LEHU: placed as `place_labels` does,
     at the sizes LEHU draws them, only those near `area` (zoom-0 pixels)."""
     fonts = {}
@@ -602,7 +634,8 @@ def place_label_data(zooms, area):
             last_at.setdefault(name, []).append((cx, cy))
             placed.append(("s", name, size, (cx, cy), angle))
         DATA_LABELS[z] = placed
-        print(f"  zoom {z}: {len(placed)} labels as data", flush=True)
+        say(f"  zoom {z}: {len(placed)} labels as data")
+        tick()
 
 
 def write_label_data(out, zooms, area):
@@ -648,7 +681,7 @@ def write_label_data(out, zooms, area):
             with open(areas + ".tmp", "w") as f:
                 f.write("".join(old) + line)
             os.replace(areas + ".tmp", areas)
-    print(f"label data: {files} files, {size // 1024} KiB", flush=True)
+    say(f"label data: {files} files, {size // 1024} KiB")
 
 
 _LABEL_IMAGES = {}
@@ -896,7 +929,9 @@ def write_pmtiles(out, dest, meta):
     entries = []
     size = 0
     with open(data_path, "wb") as data:
-        for tid, tpath, _ in tiles:
+        for i, (tid, tpath, _) in enumerate(tiles):
+            if i % 1000 == 0:
+                emit(f"@progress {i} {len(tiles)}")
             with open(tpath, "rb") as f:
                 body = f.read()
             h = hashlib.sha256(body).digest()
@@ -952,9 +987,10 @@ def write_pmtiles(out, dest, meta):
                 f.write(chunk)
     os.remove(data_path)
     os.replace(path + ".tmp", path)
-    print(f"{PMTILES}: {len(tiles)} tiles, {len(seen)} different, {len(entries)} entries, "
-          f"{len(leaves) // 1024} KiB of leaf directories, "
-          f"{os.path.getsize(path) / 1e6:.1f} MB", flush=True)
+    emit(f"@progress {len(tiles)} {len(tiles)}")
+    say(f"{PMTILES}: {len(tiles)} tiles, {len(seen)} different, {len(entries)} entries, "
+        f"{len(leaves) // 1024} KiB of leaf directories, "
+        f"{os.path.getsize(path) / 1e6:.1f} MB")
 
 
 def write_labels_pack(out, dest):
@@ -1001,7 +1037,7 @@ def write_labels_pack(out, dest):
     with open(path + ".tmp", "wb") as f:
         f.write(blob)
     os.replace(path + ".tmp", path)
-    print(f"{LABELS_PACK}: {len(items)} entries, {len(blob) // 1024} KiB", flush=True)
+    say(f"{LABELS_PACK}: {len(items)} entries, {len(blob) // 1024} KiB")
     return True
 
 
@@ -1055,9 +1091,16 @@ def main():
                          f"DEST/{LABELS_PACK} (DEST: OUT when not given)")
     ap.add_argument("--pack-only", action="store_true",
                     help="only pack what OUT has, as --pack does (the extract is not read)")
+    ap.add_argument("--progress", action="store_true",
+                    help="machine-readable progress on stdout: @stage tiles, labels or pack, "
+                         "@progress DONE TOTAL; the rest on stderr")
     a = ap.parse_args()
+    global PROGRESS
+    PROGRESS = a.progress
+    stop_on_term()
     dest = a.pack or a.out
     if a.pack_only:
+        emit("@stage pack")
         pack(a.out, dest)
         return
     if a.night:
@@ -1096,26 +1139,45 @@ def main():
         ar, ab = world(ae, as_)
         passes.append(((a0, a1), (a0, min(a1 + OVERZOOM, 22)), (al, at_, ar, ab)))
     top_zoom = max(p[0][1] for p in passes)
-    print(f"reading {a.extract}", flush=True)
+    emit("@stage tiles")
+    emit("@progress 0 1")
+    say(f"reading {a.extract}")
     # Nothing read is freed before the end: the collector would only walk
     # every feature (and in the workers, write to the pages it walks).
     gc.disable()
     Loader(labels).apply_file(a.extract, locations=True, idx="flex_mem")
-    print(f"{len(FEATURES)} features, {len(STREETS)} named streets, "
-          f"{len(PLACE_NODES)} places in {time.time() - t:.0f} s", flush=True)
+    say(f"{len(FEATURES)} features, {len(STREETS)} named streets, "
+        f"{len(PLACE_NODES)} places in {time.time() - t:.0f} s")
     index()
     if mode in ("draw", "both"):
         place_labels(z0, top_zoom)
 
-    if mode in ("data", "both"):
+
+    def label_data():
+        # The names LEHU draws: placed after the tiles, which do not need
+        # them.
+        if mode not in ("data", "both"):
+            return
+        emit("@stage labels")
+        total = sum(b1 - b0 + 1 for (_, (b0, b1), _) in passes)
+        done = [0]
+
+        def tick():
+            done[0] += 1
+            emit(f"@progress {done[0]} {total}")
+
+        emit(f"@progress 0 {total}")
         for (_, (b0, b1), area) in passes:
             zooms = range(b0, b1 + 1)
-            place_label_data(zooms, area)
+            place_label_data(zooms, area, tick)
             write_label_data(a.out, zooms, area)
+
     if a.no_tiles:
+        label_data()
         if a.pack is not None:
+            emit("@stage pack")
             pack(a.out, dest)
-        print(f"done in {time.time() - t:.0f} s", flush=True)
+        say(f"done in {time.time() - t:.0f} s")
         return
     jobs = []
     seen = set()
@@ -1128,16 +1190,19 @@ def main():
                         seen.add((z, x, y))
                         jobs.append((z, x, y, a.out, a.quality))
     del seen
-    print(f"{len(jobs)} tiles, zoom {z0}-{top_zoom}, {a.jobs} jobs", flush=True)
+    say(f"{len(jobs)} tiles, zoom {z0}-{top_zoom}, {a.jobs} jobs")
     os.makedirs(a.out, exist_ok=True)
     done = 0
     # What the workers read stays where the fork left it, shared.
     gc.freeze()
+    emit(f"@progress 0 {len(jobs)}")
     with multiprocessing.get_context("fork").Pool(a.jobs) as pool:
         for n_ in pool.imap_unordered(render, jobs, chunksize=16):
             done += n_
+            if done % 200 == 0 or done == len(jobs):
+                emit(f"@progress {done} {len(jobs)}")
             if done % 2000 == 0:
-                print(f"  {done}/{len(jobs)}  {time.time() - t:.0f} s", flush=True)
+                say(f"  {done}/{len(jobs)}  {time.time() - t:.0f} s")
 
     k = 2 ** WORLD_Z
     cx, cy = (left + right) / 2, (top + bottom) / 2
@@ -1156,9 +1221,11 @@ def main():
         f.write('attribution = "© OpenStreetMap contributors"\n')
         f.write(f"# Where there is no tile.\nland = [{LAND[0]}, {LAND[1]}, {LAND[2]}]\n")
     os.replace(os.path.join(a.out, "map.toml.tmp"), os.path.join(a.out, "map.toml"))
+    label_data()
     if a.pack is not None:
+        emit("@stage pack")
         pack(a.out, dest)
-    print(f"done in {time.time() - t:.0f} s", flush=True)
+    say(f"done in {time.time() - t:.0f} s")
 
 
 if __name__ == "__main__":
