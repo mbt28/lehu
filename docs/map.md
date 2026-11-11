@@ -291,7 +291,9 @@ the nearest road within 50 m. A camera watches the traffic its
 enforcement relations say (from one node to another), else the way its
 `direction=forward` or `backward` says when it is a node of the road,
 else both ways; its limit is its `maxspeed`. Luxembourg has 39, all on
-roads kept.
+roads kept; Hungary 480, and two more further from a road kept, left
+out. They are in a file of their own, `cameras.bin`
+([below](#routing-data)).
 
 ### Speed limit
 
@@ -304,53 +306,84 @@ another limit. `map.speed-warning = false` turns the chime off.
 
 ### Routing data
 
-`scripts/map-graph.py` writes the road network and the names from the
-same extract as the tiles, into two files: `roads.bin` and `places.bin`.
+`scripts/map-graph.py` writes the road network, the speed cameras and
+the names from the same extract as the tiles, into three files:
+`roads.bin`, `cameras.bin` and `places.bin`.
 
 ```sh
 v/bin/python scripts/map-graph.py luxembourg-latest.osm.pbf maps
 ```
 
-Luxembourg makes a 6.6 MB `roads.bin` (63,000 junctions, 75,000 roads,
-39 speed cameras) and a 0.5 MB `places.bin` (10,000 streets, 2,200
-places, 1,200 filling stations, car parks and charging stations) in
-under a minute. Copy them into the map's directory, beside `map.toml`, or into
-another directory named by `map.route-dir`. The roads and their speeds
-are the ones `scripts/route-gpx.py` drives, so both find the same routes;
-only the part of the network where every junction can be reached from
-every other is kept, so a destination is never in a car park with no way
-out.
+| | Luxembourg | Hungary |
+|---|---|---|
+| `roads.bin` | 7.0 MB: 63,000 junctions, 75,000 roads; 3,900 junctions of main roads | 68.6 MB: 620,000 junctions, 770,000 roads, 1.8 million shape points; 18,500 junctions of main roads, 35,000 runs of them |
+| `cameras.bin` | 1 kB: 39 speed cameras | 11.5 kB: 480 |
+| `places.bin` | 0.5 MB: 10,000 streets, 2,200 places, 1,200 filling stations, car parks and charging stations | 4.1 MB: 119,000 streets, 17,900 places (3,200 towns), 1,800 filling stations, 1,500 car parks, 1,500 charging stations |
+| on a PC | half a minute | about 5 minutes and 2.2 GB of memory (a Raspberry Pi 5) |
+
+Copy them into the map's directory, beside `map.toml`, or into another
+directory named by `map.route-dir`. `cameras.bin` is optional: without
+it, or with one made for other road data, there are no camera warnings
+and routes are found as before. The roads and their speeds are the ones
+`scripts/route-gpx.py` drives, so both find the same routes; only the
+part of the network where every junction can be reached from every other
+is kept, so a destination is never in a car park with no way out.
 
 The files are little-endian 32-bit words, mapped from the card and read
 in place rather than loaded, so they cost the head unit page cache, not
 memory of its own; a route looks at only part of the network.
 
-`roads.bin` starts with a header of 20 words: "LEHUROAD", the version
-(2), the numbers of junctions, arcs, roads, shape points, road kinds,
+`roads.bin` starts with a header of 26 words: "LEHUROAD", the version
+(3), the numbers of junctions, arcs, roads, shape points, road kinds,
 grid entries and name bytes, the grid (its corner, its cell size as a
 shift of world pixels, its columns and rows), the time a straight line
 takes at the top speed (milliseconds per 65,536 world pixels), the top
-speed (km/h), the number of speed cameras, the top speed of the roads
-that are not motorways, and a word kept 0. Version 1 (still read) has the
-first 18 words only, no cameras and no motorway marks. Then, each right
-after the one before:
+speed (km/h), a word kept 0, the top speed of the roads that are not
+motorways, a word kept 0, the build's ID (two words, low first), the
+numbers of layer junctions, layer roads and steps, and a word kept 0.
+Then, each right after the one before:
 
 | Section | Words each | What |
 |---|---|---|
-| junctions, and one more | 4 | x, y (world pixels at zoom 22), its first arc, how many roads meet there |
-| arcs | 3 | the junction it leads to, milliseconds, road × 2 (+ 1 when it runs the road from its b to its a) |
+| junctions, and one more | 4 | x, y (world pixels at zoom 22), its first arc, how many roads meet there (the low 8 bits) + (its place in the layer + 1) × 2^8, 0 when it is not a layer junction |
+| arcs | 3 | the junction it leads to, milliseconds, road × 2 (+ 1 when it runs the road from its b to its a) + 2^31 for a main road |
 | roads, and one more | 5 | a, b, decimetres, kind + 2^24 when it may be driven from a to b + 2^25 from b to a + 2^26 a motorway or its link, its first shape point |
 | shape points | 1 | all the x, then all the y |
 | road kinds | 2 | the name (a byte offset into the names), the speed limit in km/h (0 none) + 2^16 for a roundabout |
 | grid cells, and one more | 1 | each cell's first entry |
 | grid entries | 1 | the roads with a piece in the cell |
 | names | bytes | each a length byte, then UTF-8 |
-| speed cameras | 6 | x, y (on the road), the road, decimetres from its a, the ways it watches (1 a to b, 2 b to a, 3 both), its limit in km/h (0 not known) |
+| layer junctions, and one more | 4 | its junction, x, y, its first layer road |
+| layer roads, and one more | 6 | the layer junction it leads to, milliseconds, decimetres, the milliseconds and the decimetres of it on motorways, its first step |
+| steps | 1 | the roads a layer road is made of, in order, each road × 2 (+ 1 from b to a) |
 
-The cameras are in the order of their roads, and along each from a. A
-junction's arcs are the ways a car may leave it, up to the next
+A junction's arcs are the ways a car may leave it, up to the next
 junction's first arc; a road's shape is the points between its a and its
-b, up to the next road's first.
+b, up to the next road's first; a layer junction's roads and a layer
+road's steps end the same way. The main roads and the layer are
+described [below](#how-routing-works). The build's ID is a hash of all
+the sections, so the same network always has the same ID.
+
+LEHU still reads the versions before. Version 2 has a header of 20 words
+(the number of speed cameras where version 3 keeps a word 0, and nothing
+after the word kept 0 that follows the top speed of other roads), ends
+with the speed cameras (6 words each, as in `cameras.bin`) after the
+names, and has no layer, no main road marks and no build ID; its routes
+are found over every road, as before. Version 1 has the first 18 words
+only, no cameras and no motorway marks. A LEHU from before version 3
+refuses version 3 (its log says "version 3, LEHU reads 1 to 2"), and its
+map has no Go to.
+
+`cameras.bin` is 6 words, "LEHUCAMS", the version (1), the number of
+cameras and the ID of the `roads.bin` build they were placed on, then the
+cameras, 6 words each: x, y (on the road), the road, decimetres from its
+a, the ways it watches (1 a to b, 2 b to a, 3 both), its limit in km/h (0
+not known), in the order of their roads and along each from a. A road is
+a number in one build of the network, so a `cameras.bin` whose ID is not
+the `roads.bin`'s is ignored, with a line in the log ("placed on roads.bin
+..., not on this one"), as one that is broken is. The cameras change far
+more often than the roads, and can be replaced alone, as long as they
+are placed on the same build.
 
 `places.bin` starts with 7 words: "LEHUFIND", the version (2), the
 numbers of names and towns, the text's bytes and the number of points of
@@ -381,12 +414,71 @@ the goal are taken to the nearest point of the nearest road (the grid
 finds it), and setting off against the way the drive is going costs a
 U-turn's half minute. The turns are found as `scripts/route-gpx.py`
 finds them: at a junction, a turn of 45 degrees or more or a road with
-another name; into a roundabout, the exit to take. On a PC the sample
-drive above (Gare to Kirchberg) takes about 2 ms; across Luxembourg, Schengen to
-Troisvierges (112 km), 15 to 45 ms; a search, 1 ms; the nearest of a
-kind, a tenth of that. The board is some
-tens of times slower: the test `routing_cost` in
-`crates/lehu-map/src/routing_tests.rs` times both there.
+another name; into a roundabout, the exit to take.
+
+**Across a country** that search reads most of the network: Budapest to
+Debrecen settles 160,000 of Hungary's 620,000 junctions and reads 9 MB of
+`roads.bin`, Sopron to Szeged without motorways 400,000 and 30 MB. On the
+board (some tens of times slower than a PC, 64 MB of memory, the file on
+the SD card) that would be many seconds. So the main roads (motorways,
+trunk, primary and secondary roads and their links: in Hungary the roads
+numbered with one to three digits) are also a smaller network of their
+own, the layer: its junctions are where main roads meet (or the way they
+may be driven changes), each of its roads the run of main road from one
+such junction to the next, with what it costs in each measure (time,
+length, and the part of both on motorways, so avoiding them is counted
+exactly) and the roads it is made of. Hungary's has 18,500 junctions,
+`roads.bin` 2 MB more.
+
+The search runs on two levels at once. Near the start and near the goal
+it takes every road, as before. Further from both it follows only main
+roads, and from a layer junction it goes on along the layer, a whole run
+of main road at a step; it comes down off the layer at a junction one of
+whose runs can reach the goal's surroundings, and follows the main road
+there. Near is 5 km (`NEAR_M` in `crates/lehu-map/src/graph.rs`), or as
+far as the trip is long for a short one: up to 20 km for a trip of 20 km,
+then back down to 5 km at 35 km, so a trip in town is searched over
+every road. Each step's roads are the real ones, so the route is driven,
+turned, timed and warned of cameras as before.
+
+The route found is the best of those that leave the main roads only near
+either end. That is not always the best of all: a back road in the middle
+of a long trip is never taken. Between 300 pairs of junctions drawn at
+random across Hungary (half of them near each other), the fastest was
+the best in 237 and on average 0.3 % slower, at worst 12 %; the
+shortest 1.1 % longer on average, at worst 20 % (the shortest likes
+small roads); avoiding motorways 0.6 % dearer on average, at worst 23 %.
+The worst are trips of 30 to 50 km. None can be better than the best of
+all; the test `layer_against_plain` checks it. When there is no such
+route at all (an end further than 5 km from any main road along small
+ones), the search is made again with 20 km, then over every road
+everywhere. A search keeps only what it reached, not a word for every
+junction of the country.
+
+| On a PC (Raspberry Pi 5) | every road everywhere | with the layer |
+|---|---|---|
+| Budapest to Debrecen, fastest (230 km) | 157,000 junctions, 28 ms, 9 MB read | 24,000, 8 ms, 3 MB |
+| Sopron to Szeged, fastest (380 km) | 207,000, 41 ms, 12 MB | 16,000, 7 ms, 4 MB |
+| Győr to Pécs, fastest (300 km) | 301,000, 53 ms, 15 MB | 18,000, 9 ms, 3.5 MB |
+| Sopron to Szeged, no motorways (378 km) | 407,000, 78 ms, 30 MB | 19,000, 11 ms, 4.4 MB |
+| Újpest to Kelenföld, in Budapest (15 km) | 29,000, 5 ms, 2 MB | 30,000, 10 ms, 2 MB (every road: the trip is short) |
+
+The bytes are what is read of `roads.bin` from the card with nothing of
+it in memory and no read-ahead, for the search, the line, the turns,
+the limits and the cameras together; a third of it is the route's own
+roads and shapes. The fastest routes above are the same either way; the
+shortest 0.3 to 1.4 % longer, the ones without motorways up to 1.5 %
+slower. On the board, tens of times slower and reading the card, a long
+route should take one to two seconds; the test `country_routes` in
+`crates/lehu-map/src/routing_tests.rs` measures it there (`LEHU_ROUTE_DIR`
+the directory, `LEHU_DRIVES` other drives than Hungary's). In
+Luxembourg the sample drive above (Gare to Kirchberg) takes about 0.5
+ms, Schengen to Troisvierges (112 km) 3 to 4 ms; a search, 1 ms; the
+nearest of a kind, a tenth of that; `routing_cost` times those.
+
+Before the first route the whole of `roads.bin` is checked once, so that
+nothing read from it later can be out of range: in the background when
+the map opens, but for Hungary that is reading 69 MB from the card.
 
 ## Making a map
 
