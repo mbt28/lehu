@@ -430,6 +430,12 @@ pub trait Host {
     fn request_resume(&mut self);
     /// The Night setting changed; a running session switches at once.
     fn night_mode_changed(&mut self);
+    /// The screens are in their night palette now: with Night, always;
+    /// with Day, never; with Auto, as the program decides (the sun where
+    /// the head unit is). Asked every tick: it must be cheap.
+    fn night_now(&self) -> bool {
+        self.settings().display.night_mode == settings::NightMode::Night
+    }
     /// Reboot or shut down, once the question was answered.
     fn request_power(&mut self, action: Power);
 

@@ -68,6 +68,8 @@ pub struct TestHost {
     pub backgrounded: bool,
     pub link_usb: bool,
     pub link_wifi: bool,
+    /// The sun is down: Night set to Auto is night.
+    pub sun_down: bool,
 
     pub volume_level: u32,
     pub volume_muted: bool,
@@ -158,6 +160,7 @@ impl TestHost {
             backgrounded: false,
             link_usb: false,
             link_wifi: false,
+            sun_down: false,
             volume_level: 60,
             volume_muted: false,
             volume_gen: 1,
@@ -372,6 +375,14 @@ impl Host for TestHost {
 
     fn night_mode_changed(&mut self) {
         self.calls.push(Call::NightModeChanged);
+    }
+
+    fn night_now(&self) -> bool {
+        match self.settings.display.night_mode {
+            settings::NightMode::Day => false,
+            settings::NightMode::Night => true,
+            settings::NightMode::Auto => self.sun_down,
+        }
     }
 
     fn request_power(&mut self, action: Power) {

@@ -6,7 +6,7 @@
 
 use slint::{ComponentHandle, SharedString};
 
-use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
+use lehu_core::settings::BUFFER_MAX_MS;
 
 use super::{
     ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEST,
@@ -61,7 +61,12 @@ impl<H: Host> State<H> {
             self.p_night = Some(night);
             bridge.set_night_label(SharedString::from(super::pick::night_label(night)));
             bridge.set_night_choice(super::pick::night_index(night));
-            bridge.set_night(night_palette(night));
+        }
+        // The palette: Night, or Auto once the sun is down.
+        let dark = self.host.night_now();
+        if Some(dark) != self.p_palette {
+            self.p_palette = Some(dark);
+            bridge.set_night(dark);
         }
         let fps = self.host.settings().android_auto.fps;
         if Some(fps) != self.p_fps {
@@ -295,13 +300,6 @@ impl<H: Host> State<H> {
         }
         self.pump_nav(&bridge, screen, modal, now);
     }
-}
-
-/// The night palette: with Night, and never with Day. Auto follows what the
-/// phone is told, and it is told day: CarPlay is left to darken by itself,
-/// Android Auto's night sensor says day.
-pub(super) fn night_palette(mode: NightMode) -> bool {
-    mode == NightMode::Night
 }
 
 impl<H: Host> State<H> {

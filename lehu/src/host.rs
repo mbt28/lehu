@@ -959,18 +959,6 @@ impl AppHost {
         self.map_router.as_ref().is_some_and(|r| r.count(kind) > 0)
     }
 
-    /// Night now: with Night set, always; with Day, never; with Auto, when
-    /// the sun at the head unit's position is down (see sun_tick), and day
-    /// while the position or the clock is not known. The map's tiles
-    /// follow it; the screens' palette should too (Host::night_now).
-    pub fn night_now(&self) -> bool {
-        match self.settings.display.night_mode {
-            settings::NightMode::Day => false,
-            settings::NightMode::Night => true,
-            settings::NightMode::Auto => self.sun.night() == Some(true),
-        }
-    }
-
     /// Once a minute: day or night by the sun, where we are (the drive's
     /// position, the map's, map.fake-position, else where the map was
     /// left), once the clock is set. The map turns to its night tiles or
@@ -1362,6 +1350,18 @@ impl Host for AppHost {
     fn night_mode_changed(&mut self) {
         if let Some(viewer) = &self.map {
             viewer.set_night(self.night_now());
+        }
+    }
+
+    /// Night now: with Night set, always; with Day, never; with Auto, when
+    /// the sun at the head unit's position is down (see sun_tick), and day
+    /// while the position or the clock is not known. The map's tiles
+    /// follow it, and the screens' palette.
+    fn night_now(&self) -> bool {
+        match self.settings.display.night_mode {
+            settings::NightMode::Day => false,
+            settings::NightMode::Night => true,
+            settings::NightMode::Auto => self.sun.night() == Some(true),
         }
     }
 

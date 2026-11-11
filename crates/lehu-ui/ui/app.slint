@@ -457,8 +457,8 @@ export global Osk {
 // ── the look ─────────────────────────────────────────────────────────────
 // One meaning per colour: accent = chosen / being changed, ok = connected /
 // active, focus = the knob's ring, danger = destructive. Night is dimmer
-// throughout on black; the Night setting picks it (Auto: as the phone is
-// told, which is day).
+// throughout on black; the Night setting picks it (Auto: when the sun is
+// down where the head unit is).
 global Theme {
     out property <bool> night: Bridge.night;
     out property <color> bg: root.night ? #000000 : #0D1115;

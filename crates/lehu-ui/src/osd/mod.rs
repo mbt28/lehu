@@ -254,6 +254,8 @@ struct State<H> {
     p_phone_detail: Last,
     p_status_note: Last,
     p_night: Option<NightMode>,
+    /// The night palette, as shown.
+    p_palette: Option<bool>,
     /// The clock as shown, minutes since midnight (`None` not known), and
     /// when to look at the time again.
     p_clock: Option<Option<u32>>,
@@ -511,6 +513,7 @@ impl<H: Host> State<H> {
             p_phone_detail: Last::default(),
             p_status_note: Last::default(),
             p_night: None,
+            p_palette: None,
             p_clock: None,
             clock_due: 0,
             p_fps: None,

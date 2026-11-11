@@ -2242,13 +2242,19 @@ fn a_level_turned_fast_moves_further_a_detent() {
 }
 
 #[test]
-fn night_picks_the_night_palette_and_auto_follows_the_phone_into_day() {
+fn night_picks_the_night_palette_and_auto_follows_the_sun() {
     let mut osd = osd(TestHost::new());
     let night = |osd: &Osd<TestHost>| {
         let b = osd.ui.global::<Bridge<'_>>();
         (b.get_night(), b.get_night_choice())
     };
-    // Auto by default: the phone is told day, and so are the screens.
+    // Auto by default: day while the sun is up, night once it is down.
+    assert_eq!(night(&osd), (false, 2));
+    osd.host_mut().sun_down = true;
+    tick(&mut osd);
+    assert_eq!(night(&osd), (true, 2));
+    osd.host_mut().sun_down = false;
+    tick(&mut osd);
     assert_eq!(night(&osd), (false, 2));
     goto(&mut osd, SETTINGS);
     // A tap on Night: taken at once.
@@ -2264,7 +2270,6 @@ fn night_picks_the_night_palette_and_auto_follows_the_phone_into_day() {
     assert!(osd.tick(false, &mut sink));
     assert_eq!(night(&osd), (false, 0));
     assert_eq!(sink.0, [(0, H)]);
-    assert!(!pump::night_palette(lehu_core::settings::NightMode::Auto));
 }
 
 #[test]
