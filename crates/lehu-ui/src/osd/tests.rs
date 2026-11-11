@@ -3382,6 +3382,25 @@ fn the_map_menu_by_touch() {
             .iter()
             .any(|c| matches!(c, Call::MapPan(..)))
     );
+    // The bar's Back key, as the knob's Back: Route's choices, then the
+    // menu, then the map.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 1);
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 0);
+    assert!(br(&osd).get_map_menu_open());
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open());
+    assert_eq!(screen(&osd), MAP);
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert_ne!(screen(&osd), MAP);
+    goto(&mut osd, MAP);
     // A tap on its first row chooses it: Go to.
     br(&osd).invoke_map_menu(true);
     tick(&mut osd);

@@ -66,8 +66,8 @@ const PICK_CAMERAS: i32 = 10;
 const CAMERA_SIGN_M: u32 = 500;
 
 /// The menu's pages, as `Bridge.map-menu-page` numbers them.
-const PAGE_ROWS: i32 = 0;
-const PAGE_ROUTE: i32 = 1;
+pub(super) const PAGE_ROWS: i32 = 0;
+pub(super) const PAGE_ROUTE: i32 = 1;
 
 impl<H: Host> State<H> {
     /// A finger went down on the map: drags count from here.
@@ -219,7 +219,7 @@ impl<H: Host> State<H> {
 
     /// The menu's rows, or Route's choices. Leaving the choices, a route
     /// of ours is found anew when they changed.
-    fn map_menu_page(&mut self, bridge: &Bridge<'_>, page: i32) {
+    pub(super) fn map_menu_page(&mut self, bridge: &Bridge<'_>, page: i32) {
         if page == self.map_menu_page {
             return;
         }

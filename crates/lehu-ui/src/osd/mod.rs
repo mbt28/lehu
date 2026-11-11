@@ -762,6 +762,16 @@ impl<H: Host> State<H> {
             self.preview_end(bridge, false);
             return true;
         }
+        // The map's menu open: Route's choices, then the menu, go first, as
+        // with the knob's Back.
+        if bridge.get_screen() == MAP && self.map_menu {
+            if self.map_menu_page == map::PAGE_ROUTE {
+                self.map_menu_page(bridge, map::PAGE_ROWS);
+            } else {
+                self.map_menu_show(bridge, false);
+            }
+            return true;
+        }
         match self.parent(bridge.get_screen()) {
             Some(parent) => {
                 bridge.set_screen(parent);
