@@ -309,6 +309,9 @@ pub(crate) mod write {
 
     use super::{HEADER, ROOT_SPAN, tile_id};
 
+    /// A tile to pack: (z, x, y) and its bytes.
+    pub(crate) type Tile = ((u8, u32, u32), Vec<u8>);
+
     fn varint(out: &mut Vec<u8>, mut v: u64) {
         while v >= 0x80 {
             out.push((v as u8 & 0x7f) | 0x80);
@@ -344,7 +347,7 @@ pub(crate) mod write {
 
     /// The file holding `tiles` ((z, x, y), bytes); `leaf`: entries a leaf
     /// directory, 0 for a root directory only (when it fits).
-    pub(crate) fn pmtiles(tiles: &[((u8, u32, u32), Vec<u8>)], leaf: usize) -> Vec<u8> {
+    pub(crate) fn pmtiles(tiles: &[Tile], leaf: usize) -> Vec<u8> {
         let mut sorted: Vec<(u64, &[u8], u8)> = tiles
             .iter()
             .map(|((z, x, y), b)| (tile_id(*z, *x, *y), b.as_slice(), *z))
@@ -423,7 +426,8 @@ pub(crate) mod write {
 
 #[cfg(test)]
 mod tests {
-    use super::{LEAVES, Pack, tile_id, write::pmtiles};
+    use super::write::{Tile, pmtiles};
+    use super::{LEAVES, Pack, tile_id};
 
     fn temp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("lehu-pmtiles-{}-{name}", std::process::id()));
@@ -453,7 +457,7 @@ mod tests {
 
     /// Tiles of zooms 3 to 6 over a corner, each a few bytes naming it;
     /// some the same as others (runs, and contents shared).
-    pub(crate) fn some_tiles() -> Vec<((u8, u32, u32), Vec<u8>)> {
+    pub(crate) fn some_tiles() -> Vec<Tile> {
         let mut tiles = Vec::new();
         for z in 3u8..=6 {
             let n = 1u32 << (z - 2);
@@ -471,7 +475,7 @@ mod tests {
         tiles
     }
 
-    fn check(file: &[u8], tiles: &[((u8, u32, u32), Vec<u8>)], name: &str) -> Pack {
+    fn check(file: &[u8], tiles: &[Tile], name: &str) -> Pack {
         let path = temp(name).join("tiles.pmtiles");
         std::fs::write(&path, file).unwrap();
         let pack = Pack::open(&path).unwrap();
