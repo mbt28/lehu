@@ -712,10 +712,13 @@ impl AppHost {
             return false;
         };
         let dir = self.map_dir();
-        if let Err(e) = self.map_check_region(&dir) {
-            self.map_note = e;
-            return false;
-        }
+        let whole = match self.map_check_region(&dir) {
+            Ok(whole) => whole,
+            Err(e) => {
+                self.map_note = e;
+                return false;
+            }
+        };
         let set = match TileSet::open(&dir) {
             Ok(set) => set,
             Err(e) => {
@@ -742,6 +745,12 @@ impl AppHost {
         if self.map_router.is_none() {
             self.map_router_dir.clone_from(&route_dir);
             match Router::open(&route_dir) {
+                // The region's files passed their sha256 check: the
+                // road data is not walked through again.
+                Ok(r) if whole && route_dir == dir => {
+                    r.trust();
+                    self.map_router = Some(Arc::new(r));
+                }
                 Ok(r) => {
                     let r = Arc::new(r);
                     // Checked meanwhile, below the map's own threads.
@@ -902,23 +911,24 @@ impl AppHost {
 
     /// The region in `dir` checked as the map opens: its data version and
     /// its files' sizes (fast), and what an earlier sha256 check found;
-    /// never checked, that check starts, in the background. Err: why the
-    /// map cannot open, for its screen. A folder without map.toml is left
-    /// to the tile set to say so.
-    fn map_check_region(&mut self, dir: &std::path::Path) -> Result<(), String> {
+    /// never checked, that check starts, in the background. Ok(true) when
+    /// its files have passed that check; Err: why the map cannot open, for
+    /// its screen. A folder without map.toml is left to the tile set to
+    /// say so.
+    fn map_check_region(&mut self, dir: &std::path::Path) -> Result<bool, String> {
         use lehu_map::region::{Health, Region};
         if !dir.join("map.toml").exists() {
-            return Ok(());
+            return Ok(false);
         }
         let region = Region::read(dir).map_err(|e| {
             log::warn!("map: {e}");
             "Map damaged: copy the region again".to_string()
         })?;
         match region.health(Some(self.map_checks())) {
-            Health::Ready => Ok(()),
+            Health::Ready => Ok(self.map_checks().get(region.key()) == Some(Ok(()))),
             Health::Unchecked => {
                 self.map_check_start(region);
-                Ok(())
+                Ok(false)
             }
             Health::NeedsNewer(v) => {
                 log::warn!(

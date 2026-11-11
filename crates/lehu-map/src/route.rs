@@ -85,6 +85,15 @@ impl Router {
         let _ = self.checked.get_or_init(|| self.graph.check());
     }
 
+    /// The road data is known whole: its region's files passed their
+    /// sha256 check (crate::region), so the walk through all of it
+    /// (`prepare`) is not needed; opening it checked its header and its
+    /// sections' sizes. On the board that walk reads all of roads.bin
+    /// from the card, seconds for a country.
+    pub fn trust(&self) {
+        let _ = self.checked.set(Ok(()));
+    }
+
     /// There are names to search.
     pub fn can_search(&self) -> bool {
         self.places.as_ref().is_some_and(|p| !p.is_empty())
