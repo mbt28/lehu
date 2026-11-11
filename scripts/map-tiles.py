@@ -57,11 +57,16 @@ attribution with the map.
 """
 
 import argparse
+import gc
+import hashlib
+import json
 import math
 import multiprocessing
 import os
 import sys
+import struct
 import time
+from array import array
 
 import osmium
 from PIL import Image, ImageDraw, ImageFont
@@ -241,16 +246,25 @@ def world(lon, lat):
 
 
 def ring(nodes):
-    pts = []
+    """A way's points in zoom-0 pixels, x and y by turns in one array of
+    doubles: a tenth of the memory of a list of pairs, and one object, so
+    the forked workers share it rather than copy it as they read it."""
+    pts = array("d")
     for n in nodes:
         if n.location.valid():
-            pts.append(world(n.lon, n.lat))
+            pts.extend(world(n.lon, n.lat))
     return pts
 
 
-def bbox(points):
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
+def pairs(pts):
+    """The (x, y) pairs of a point array."""
+    it = iter(pts)
+    return list(zip(it, it))
+
+
+def bbox(pts):
+    xs = pts[0::2]
+    ys = pts[1::2]
     return (min(xs), min(ys), max(xs), max(ys))
 
 
@@ -286,15 +300,17 @@ class Loader(osmium.SimpleHandler):
         try:
             for outer in a.outer_rings():
                 pts = ring(outer)
-                if len(pts) < 3:
+                if len(pts) < 6:
                     continue
-                holes = [h for h in (ring(i) for i in a.inner_rings(outer)) if len(h) >= 3]
+                holes = [h for h in (ring(i) for i in a.inner_rings(outer)) if len(h) >= 6]
                 rings.append((pts, holes))
         except osmium.InvalidLocationError:
             return
         if not rings:
             return
-        box = bbox([p for r in rings for p in r[0]])
+        boxes = [bbox(r[0]) for r in rings]
+        box = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+               max(b[2] for b in boxes), max(b[3] for b in boxes))
         layer = 2 if kind == "building" else (1 if kind == "water" else 0)
         FEATURES.append((layer, kind, AREAS[kind][1], box, rings))
 
@@ -321,7 +337,7 @@ class Loader(osmium.SimpleHandler):
             pts = ring(w.nodes)
         except osmium.InvalidLocationError:
             return
-        if len(pts) < 2:
+        if len(pts) < 4:
             return
         FEATURES.append((layer, kind, minzoom, bbox(pts), pts))
         if self.labels and kind[0] == "road" and tags.get("name"):
@@ -486,7 +502,7 @@ def place_labels(z0, z1):
                 continue
             l, t, r, b = f.getbbox(name, stroke_width=2 * SS)
             w, h = r - l, b - t
-            line = [(p[0] * scale, p[1] * scale) for p in pts]
+            line = [(px_ * scale, py_ * scale) for px_, py_ in pairs(pts)]
             found = straight_run(line, w * 1.15)
             if found is None:
                 continue
@@ -568,7 +584,7 @@ def place_label_data(zooms, area):
             w, h = advance(name, size) + 2 * halo, size + 2 * halo
             if math.hypot(w, h) / 2 > LABEL_REACH:
                 continue
-            line = [(p[0] * scale, p[1] * scale) for p in pts]
+            line = [(px_ * scale, py_ * scale) for px_, py_ in pairs(pts)]
             found = straight_run(line, w * 1.15)
             if found is None:
                 continue
@@ -695,7 +711,8 @@ def render(job):
         feats.append(f)
 
     def px(points):
-        return [((p[0] * scale - ox), (p[1] * scale - oy)) for p in points]
+        it = iter(points)
+        return [(x_ * scale - ox, y_ * scale - oy) for x_, y_ in zip(it, it)]
 
     img = Image.new("RGB", (size, size), LAND)
     draw = ImageDraw.Draw(img)
@@ -755,6 +772,260 @@ def render(job):
     return 1
 
 
+# Packed: the tiles in one PMTiles v3 file, the label data in another,
+# so a region is a few big files on the card rather than thousands of small
+# ones (each at least a block of its own, looked up one directory at a
+# time). See docs/map.md, "Data on the card".
+PMTILES = "tiles.pmtiles"
+LABELS_PACK = "labels.pack"
+PM_HEADER = 127
+PM_ROOT_MAX = 16384 - PM_HEADER  # header and root directory: the first 16 KiB
+PM_LEAF = 1024  # entries a leaf directory, at least: small to read on the board
+
+
+def tile_id(z, x, y):
+    """PMTiles' tile id: the tiles of every zoom before, then (x, y)'s
+    place along the zoom's Hilbert curve."""
+    acc = ((1 << (2 * z)) - 1) // 3
+    n = 1 << z
+    s = n >> 1
+    while s > 0:
+        rx = 1 if x & s else 0
+        ry = 1 if y & s else 0
+        acc += s * s * ((3 * rx) ^ ry)
+        if ry == 0:
+            if rx == 1:
+                x = n - 1 - x
+                y = n - 1 - y
+            x, y = y, x
+        s >>= 1
+    return acc
+
+
+def varint(out, v):
+    while v >= 0x80:
+        out.append((v & 0x7F) | 0x80)
+        v >>= 7
+    out.append(v)
+
+
+def pm_directory(entries):
+    """A PMTiles directory, uncompressed: (tile id, offset, length, run)."""
+    b = bytearray()
+    varint(b, len(entries))
+    last = 0
+    for e in entries:
+        varint(b, e[0] - last)
+        last = e[0]
+    for e in entries:
+        varint(b, e[3])
+    for e in entries:
+        varint(b, e[2])
+    for i, e in enumerate(entries):
+        if i > 0 and e[1] == entries[i - 1][1] + entries[i - 1][2]:
+            varint(b, 0)
+        else:
+            varint(b, e[1] + 1)
+    return bytes(b)
+
+
+def pm_directories(entries):
+    """The root directory and the leaf directories after it, the root
+    within the first 16 KiB with the header."""
+    root = pm_directory(entries)
+    if len(root) <= PM_ROOT_MAX:
+        return root, b""
+    size = PM_LEAF
+    while True:
+        leaves = bytearray()
+        top = []
+        for i in range(0, len(entries), size):
+            leaf = pm_directory(entries[i:i + size])
+            top.append((entries[i][0], len(leaves), len(leaf), 0))
+            leaves += leaf
+        root = pm_directory(top)
+        if len(root) <= PM_ROOT_MAX:
+            return root, bytes(leaves)
+        size *= 2
+
+
+def read_map_toml(out):
+    import tomllib
+    with open(os.path.join(out, "map.toml"), "rb") as f:
+        return tomllib.load(f)
+
+
+def degrees(wx, wy):
+    """World pixels at WORLD_Z to longitude and latitude."""
+    k = TILE * 2 ** WORLD_Z
+    lon = wx / k * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * wy / k))))
+    return lon, lat
+
+
+def loose_tiles(out):
+    """OUT's loose tiles: (tile id, path, zoom)."""
+    tiles = []
+    for zd in os.listdir(out):
+        if not zd.isdigit() or not os.path.isdir(os.path.join(out, zd)):
+            continue
+        z = int(zd)
+        for xd in os.listdir(os.path.join(out, zd)):
+            if not xd.isdigit():
+                continue
+            for name in os.listdir(os.path.join(out, zd, xd)):
+                stem, ext = os.path.splitext(name)
+                if ext == ".jpg" and stem.isdigit():
+                    tiles.append((tile_id(z, int(xd), int(stem)),
+                                  os.path.join(out, zd, xd, name), z))
+    return tiles
+
+
+def write_pmtiles(out, dest, meta):
+    """OUT's loose tiles (<z>/<x>/<y>.jpg) as DEST/tiles.pmtiles: PMTiles
+    v3, JPEG tiles, nothing compressed (the board reads the directories
+    as they lie), clustered (the tiles in tile id order), a tile the same
+    as another (the sea, empty land) stored once."""
+    tiles = loose_tiles(out)
+    if not tiles:
+        sys.exit(f"no tiles in {out} to pack")
+    tiles.sort()
+    path = os.path.join(dest, PMTILES)
+    data_path = path + ".data.tmp"
+    seen = {}
+    entries = []
+    size = 0
+    with open(data_path, "wb") as data:
+        for tid, tpath, _ in tiles:
+            with open(tpath, "rb") as f:
+                body = f.read()
+            h = hashlib.sha256(body).digest()
+            if h not in seen:
+                seen[h] = (size, len(body))
+                data.write(body)
+                size += len(body)
+            off, length = seen[h]
+            last = entries[-1] if entries else None
+            if last and last[0] + last[3] == tid and last[1] == off:
+                entries[-1] = (last[0], last[1], last[2], last[3] + 1)
+            else:
+                entries.append((tid, off, length, 1))
+    root, leaves = pm_directories(entries)
+    left, top, right, bottom = meta["bounds"]
+    w, n = degrees(left, top)
+    e, s = degrees(right, bottom)
+    cx, cy = degrees(*meta["center"])
+    info = json.dumps({
+        "name": meta["name"],
+        "format": "jpg",
+        "type": "baselayer",
+        "attribution": meta.get("attribution", ""),
+        "description": "LEHU map tiles, drawn by scripts/map-tiles.py",
+    }, ensure_ascii=False).encode()
+    zooms = sorted({t[2] for t in tiles})
+    md_at = PM_HEADER + len(root)
+    leaf_at = md_at + len(info)
+    data_at = leaf_at + len(leaves)
+
+    def e7(v):
+        return int(round(v * 1e7))
+
+    header = b"PMTiles" + bytes([3]) + struct.pack(
+        "<QQQQQQQQQQQBBBBBBiiiiBii",
+        PM_HEADER, len(root), md_at, len(info), leaf_at, len(leaves), data_at, size,
+        len(tiles), len(entries), len(seen),
+        1,  # clustered
+        1,  # internal compression: none
+        1,  # tile compression: none
+        3,  # tile type: JPEG
+        zooms[0], zooms[-1],
+        e7(w), e7(s), e7(e), e7(n),
+        min(max(meta.get("start-zoom", zooms[0]), zooms[0]), zooms[-1]), e7(cx), e7(cy))
+    assert len(header) == PM_HEADER
+    with open(path + ".tmp", "wb") as f:
+        f.write(header + root + info + leaves)
+        with open(data_path, "rb") as data:
+            while True:
+                chunk = data.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+    os.remove(data_path)
+    os.replace(path + ".tmp", path)
+    print(f"{PMTILES}: {len(tiles)} tiles, {len(seen)} different, {len(entries)} entries, "
+          f"{len(leaves) // 1024} KiB of leaf directories, "
+          f"{os.path.getsize(path) / 1e6:.1f} MB", flush=True)
+
+
+def write_labels_pack(out, dest):
+    """OUT's label data (labels/<z>/<bx>/<by>.txt and each zoom's
+    areas.txt) as DEST/labels.pack, each file's text as it is, behind an
+    index; false when OUT has none. Little-endian 32-bit words, so the
+    board maps it and reads it where it lies:
+
+        "LEHULABP", the version (1), the number of entries; then the
+        entries, five words each, in order: z + 256 x kind (0 a block,
+        1 the zoom's areas.txt), bx, by (0 for areas.txt), the text's byte
+        offset from the start of the file and its length; then the text,
+        the file padded to a whole word."""
+    root = os.path.join(out, "labels")
+    if not os.path.isdir(root):
+        return False
+    items = []
+    for zd in os.listdir(root):
+        if not zd.isdigit():
+            continue
+        z = int(zd)
+        zp = os.path.join(root, zd)
+        if os.path.exists(os.path.join(zp, "areas.txt")):
+            items.append(((z | 256, 0, 0), os.path.join(zp, "areas.txt")))
+        for bxd in os.listdir(zp):
+            if not bxd.isdigit():
+                continue
+            for name in os.listdir(os.path.join(zp, bxd)):
+                stem, ext = os.path.splitext(name)
+                if ext == ".txt" and stem.isdigit():
+                    items.append(((z, int(bxd), int(stem)), os.path.join(zp, bxd, name)))
+    items.sort()
+    at = 16 + 20 * len(items)
+    index = bytearray()
+    body = bytearray()
+    for (k, bx, by), path in items:
+        with open(path, "rb") as f:
+            text = f.read()
+        index += struct.pack("<5I", k, bx, by, at + len(body), len(text))
+        body += text
+    blob = b"LEHULABP" + struct.pack("<II", 1, len(items)) + index + body
+    blob += b"\0" * (-len(blob) % 4)
+    path = os.path.join(dest, LABELS_PACK)
+    with open(path + ".tmp", "wb") as f:
+        f.write(blob)
+    os.replace(path + ".tmp", path)
+    print(f"{LABELS_PACK}: {len(items)} entries, {len(blob) // 1024} KiB", flush=True)
+    return True
+
+
+def pack(out, dest):
+    """OUT's tiles and label data packed into DEST, map.toml beside them."""
+    os.makedirs(dest, exist_ok=True)
+    meta = read_map_toml(out)
+    write_pmtiles(out, dest, meta)
+    write_labels_pack(out, dest)
+    if os.path.abspath(dest) != os.path.abspath(out):
+        with open(os.path.join(out, "map.toml"), "rb") as f:
+            text = f.read()
+        with open(os.path.join(dest, "map.toml.tmp"), "wb") as f:
+            f.write(text)
+        os.replace(os.path.join(dest, "map.toml.tmp"), os.path.join(dest, "map.toml"))
+
+
+def zoom_range(text, top, what):
+    a, b = (int(v) for v in text.split("-"))
+    if not 0 <= a <= b <= top:
+        sys.exit(f"{what}: first-last, 0..{top}")
+    return a, b
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("extract")
@@ -762,6 +1033,9 @@ def main():
     ap.add_argument("--zoom", default="8-16", help="first-last zoom, e.g. 8-16")
     ap.add_argument("--name", default=None)
     ap.add_argument("--bbox", default=None, help="W,S,E,N in degrees; the extract's own if absent")
+    ap.add_argument("--area", action="append", default=[], metavar="Z0-Z1:W,S,E,N",
+                    help="more zooms over a smaller area (a city deeper), drawn in the same run "
+                         "after the rest; again for more areas")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--quality", type=int, default=80)
     ap.add_argument("--font", default=DEFAULT_FONT, help="the labels' TrueType font")
@@ -776,7 +1050,16 @@ def main():
                     help="only the label data, for tiles drawn before (no tiles, no map.toml)")
     ap.add_argument("--night", action="store_true",
                     help="the night palette (LEHU shows the set in <map>/night at night)")
+    ap.add_argument("--pack", nargs="?", const="", default=None, metavar="DEST",
+                    help=f"then pack OUT's tiles and label data into DEST/{PMTILES} and "
+                         f"DEST/{LABELS_PACK} (DEST: OUT when not given)")
+    ap.add_argument("--pack-only", action="store_true",
+                    help="only pack what OUT has, as --pack does (the extract is not read)")
     a = ap.parse_args()
+    dest = a.pack or a.out
+    if a.pack_only:
+        pack(a.out, dest)
+        return
     if a.night:
         night()
     global FONT_PATH
@@ -785,15 +1068,11 @@ def main():
     labels = mode != "none"
     if labels and not os.path.exists(FONT_PATH):
         sys.exit(f"no font at {FONT_PATH}: give --font")
-    z0, z1 = (int(v) for v in a.zoom.split("-"))
-    if not 0 <= z0 <= z1 <= 19:
-        sys.exit("zoom: first-last, 0..19")
+    z0, z1 = zoom_range(a.zoom, 19, "zoom")
     if a.label_zoom:
-        l0, l1 = (int(v) for v in a.label_zoom.split("-"))
+        l0, l1 = zoom_range(a.label_zoom, 22, "label-zoom")
     else:
         l0, l1 = z0, z1 + OVERZOOM
-    if not 0 <= l0 <= l1 <= 22:
-        sys.exit("label-zoom: first-last, 0..22")
 
     t = time.time()
     if a.bbox:
@@ -803,37 +1082,62 @@ def main():
         if not box.valid():
             sys.exit("the extract has no bounding box: give --bbox")
         w, s, e, n = box.bottom_left.lon, box.bottom_left.lat, box.top_right.lon, box.top_right.lat
+    left, top = world(w, n)
+    right, bottom = world(e, s)
+    # Each pass: its tiles' zooms, its labels' zooms and its area (zoom-0
+    # pixels). The first is the whole map; each --area one more, its
+    # labels placed again over it as for the first, replacing the first's.
+    passes = [((z0, z1), (l0, l1), (left, top, right, bottom))]
+    for spec in a.area:
+        zs, _, bb = spec.partition(":")
+        a0, a1 = zoom_range(zs, 19, "area zoom")
+        aw, as_, ae, an = (float(v) for v in bb.split(","))
+        al, at_ = world(aw, an)
+        ar, ab = world(ae, as_)
+        passes.append(((a0, a1), (a0, min(a1 + OVERZOOM, 22)), (al, at_, ar, ab)))
+    top_zoom = max(p[0][1] for p in passes)
     print(f"reading {a.extract}", flush=True)
+    # Nothing read is freed before the end: the collector would only walk
+    # every feature (and in the workers, write to the pages it walks).
+    gc.disable()
     Loader(labels).apply_file(a.extract, locations=True, idx="flex_mem")
     print(f"{len(FEATURES)} features, {len(STREETS)} named streets, "
           f"{len(PLACE_NODES)} places in {time.time() - t:.0f} s", flush=True)
     index()
     if mode in ("draw", "both"):
-        place_labels(z0, z1)
+        place_labels(z0, top_zoom)
 
-    left, top = world(w, n)
-    right, bottom = world(e, s)
     if mode in ("data", "both"):
-        zooms = range(l0, l1 + 1)
-        place_label_data(zooms, (left, top, right, bottom))
-        write_label_data(a.out, zooms, (left, top, right, bottom))
+        for (_, (b0, b1), area) in passes:
+            zooms = range(b0, b1 + 1)
+            place_label_data(zooms, area)
+            write_label_data(a.out, zooms, area)
     if a.no_tiles:
+        if a.pack is not None:
+            pack(a.out, dest)
         print(f"done in {time.time() - t:.0f} s", flush=True)
         return
     jobs = []
-    for z in range(z0, z1 + 1):
-        x0, y0, x1, y1 = tile_range((left, top, right, bottom), z)
-        for x in range(x0, x1 + 1):
-            for y in range(y0, y1 + 1):
-                jobs.append((z, x, y, a.out, a.quality))
-    print(f"{len(jobs)} tiles, zoom {z0}-{z1}, {a.jobs} jobs", flush=True)
+    seen = set()
+    for ((p0, p1), _, area) in passes:
+        for z in range(p0, p1 + 1):
+            x0, y0, x1, y1 = tile_range(area, z)
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    if (z, x, y) not in seen:
+                        seen.add((z, x, y))
+                        jobs.append((z, x, y, a.out, a.quality))
+    del seen
+    print(f"{len(jobs)} tiles, zoom {z0}-{top_zoom}, {a.jobs} jobs", flush=True)
     os.makedirs(a.out, exist_ok=True)
     done = 0
+    # What the workers read stays where the fork left it, shared.
+    gc.freeze()
     with multiprocessing.get_context("fork").Pool(a.jobs) as pool:
         for n_ in pool.imap_unordered(render, jobs, chunksize=16):
             done += n_
             if done % 2000 == 0:
-                print(f"  {done}/{len(jobs)}", flush=True)
+                print(f"  {done}/{len(jobs)}  {time.time() - t:.0f} s", flush=True)
 
     k = 2 ** WORLD_Z
     cx, cy = (left + right) / 2, (top + bottom) / 2
@@ -844,14 +1148,16 @@ def main():
         f.write('format = "jpg"\n')
         f.write(f"tile-size = {TILE}\n")
         f.write(f"min-zoom = {z0}\n")
-        f.write(f"max-zoom = {z1}\n")
+        f.write(f"max-zoom = {top_zoom}\n")
         f.write(f"# World pixels at zoom {WORLD_Z}: the area, and the view to open at.\n")
         f.write(f"bounds = [{int(left * k)}, {int(top * k)}, {int(right * k)}, {int(bottom * k)}]\n")
         f.write(f"center = [{int(cx * k)}, {int(cy * k)}]\n")
-        f.write(f"start-zoom = {min(max(z0, 12), z1)}\n")
+        f.write(f"start-zoom = {min(max(z0, 12), top_zoom)}\n")
         f.write('attribution = "© OpenStreetMap contributors"\n')
         f.write(f"# Where there is no tile.\nland = [{LAND[0]}, {LAND[1]}, {LAND[2]}]\n")
     os.replace(os.path.join(a.out, "map.toml.tmp"), os.path.join(a.out, "map.toml"))
+    if a.pack is not None:
+        pack(a.out, dest)
     print(f"done in {time.time() - t:.0f} s", flush=True)
 
 
