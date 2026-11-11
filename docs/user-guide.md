@@ -21,11 +21,15 @@ Five tiles:
 - **Linked Phones**: the phones LEHU knows.
 - **Map**: the offline map from the SD card ([map.md](map.md)). The knob
   zooms and its click opens the map's menu (so does the bar's menu key):
-  Go to, Home, Work, Voice, and Stop route while a route is driven. Go to
-  offers the recent destinations, one tap each, or a keyboard to type a
-  street or a place, with the two best matches over it (List shows them
-  all). A tap on one finds the route on the head unit and guides along
-  it. Home and Work, once chosen, are one choice away.
+  Go to, Home, Work, Route, Voice, and Stop route while a route is driven.
+  Go to offers the recent destinations, one tap each, the nearest fuel,
+  parking or charging, or a keyboard to type a street or a place, with the
+  two best matches over it (List shows them all). A tap on one finds the
+  route on the head unit and shows it whole for a few seconds, with Start
+  and Cancel (the knob's click starts, Back cancels; left alone it starts
+  by itself), then guides along it. Home and Work, once chosen, are one
+  choice away. Route chooses the fastest or the shortest route, avoiding
+  motorways or not, and warning of speed cameras or not.
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,
@@ -39,7 +43,7 @@ not, the card shows the map's next turn instead, also with the map closed.
 |---|---|
 | Connection | **Linked Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
-| Video | Night (Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
+| Video | Night (Day, Night or Auto, for the phone's projection; Night, and Auto once the sun is down, also dim LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
 | System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,

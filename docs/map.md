@@ -14,7 +14,8 @@ The bar's keys never move: at its right end `-`, `+`, the menu key and
 Back; just left of them a Me key while the map has been moved off where
 we are, and a muted key left of that while the spoken prompts are off.
 The rest of the bar is words: the map's name and zoom, or, while it
-guides, the next turn.
+guides, the next turn. Only while a route just found is shown whole do
+Start and Cancel take the keys' place ([below](#the-whole-route-first)).
 
 | Input | What it does |
 |---|---|
@@ -35,14 +36,17 @@ its foot. Its rows, those that apply:
 | Stop route | ends a route found on the head unit |
 | Go to | find a destination and drive there ([below](#going-somewhere)) |
 | Home, Work | drive there at once; under the name, the place and how far. Not set yet: choose it (below) |
+| Route | how routes go, under it what is chosen ("Fastest", "Shortest, no motorways"): opens its choices ([below](#route-options)) |
 | Voice | the spoken prompts on or off (`map.voice`); the menu stays open |
 
 With the knob the ring starts on the first row: turning moves it (round at
 the ends), a click chooses, Back closes the menu (a second Back leaves the
 map). A tap chooses a row; a tap on the map beside the menu, or the menu
 key again, closes it, and it closes by itself eight seconds after it was
-last used. Go to, Home and Work need the road data; without it the menu
-has only what is left.
+last used. Go to, Home, Work and Route need the road data; without it the
+menu has only what is left. The rows are 60 pixels tall; when all seven
+are there (the map moved off where we are, on a route), they are a little
+lower, so all of them fit above the bar.
 
 LEHU opens the map where it was left, or on where we are when it knows.
 
@@ -137,11 +141,13 @@ ahead", the clip `speed-camera`).
 
 ## Going somewhere
 
-The bar's Go to key, there when the map has the road network and the
+The menu's Go to, there when the map has the road network and the
 names (see [Routing data](#routing-data)), opens the destination screen.
-It opens on the destinations driven to last, when there are some: one
-tap on one drives there again. Otherwise, or after a tap on the top row,
-it is a keyboard: type a few letters of a street or a place, and the two
+It opens on a list: the row to type a name, under it the nearest fuel,
+parking and charging ([below](#fuel-parking-and-charging)), then the
+destinations driven to last, one choice each. With none of these it opens
+on the keyboard. After a tap on the top row (or a letter typed) it is a
+keyboard: type a few letters of a street or a place, and the two
 best matches show over the keyboard, each with its town and how far it is
 from here. A tap on one finds the route; the keyboard's List key shows
 all the matches as rows (a knob or a remote walks them, Enter takes one).
@@ -152,10 +158,12 @@ streets, and among equal matches the nearest first.
 
 The route is found on the head unit, from where we are now (the replayed
 drive's position, else `map.fake-position`, else the middle of the map) to
-the nearest road to the destination: the fastest by car, keeping to
-one-way streets and roundabouts, timed at each road's speed. The screen
-says "Finding the route" meanwhile, then goes back to the map, which
-drives the route at the roads' speeds (slowing for sharp turns), as it
+the nearest road to the destination: the fastest by car (or as the
+[route options](#route-options) say), keeping to one-way streets and
+roundabouts, timed at each road's speed. The screen says "Finding the
+route" meanwhile, then goes back to the map, which shows the route whole
+first ([below](#the-whole-route-first)), then drives it at the roads'
+speeds (slowing for sharp turns), as it
 replays a drive: the route line with the part driven grey, the next turn
 on the bar, closer in near turns, the speed limit and the time of
 arrival. It replaces a replayed drive. Leaving the map and coming back
@@ -171,6 +179,30 @@ When the turn after the next one comes within 300 m of it, the bar and
 the card show it beside the next one, small, under "then", so both can be
 prepared for at once.
 
+### The whole route first
+
+A route to a destination chosen on Go to (a name, a recent one, the
+nearest fuel...) is shown whole before it is driven: the map turns north
+up and zooms to hold all of it above the bar, where we are and the route
+drawn, and the bar shows the destination, its distance, how long it takes
+and the time of arrival ("12 km · 14 min · arrival 14:46"). Its keys are
+Start, where -, + and the menu key were, and Cancel, where Back was.
+
+The knob's ring is on Start: a click starts, a turn moves the ring to
+Cancel (and back), Back cancels. A tap on either does the same. Start
+counts down ("Start in 5 s"): left alone for eight seconds, the route
+starts by itself, so a driver never has to touch it; any key or a drag
+starts the count again, and leaving the map starts it at once. Cancel
+leaves the map as it was, a route driven before going on. Meanwhile a
+drag or the arrows move the map round the route.
+
+Home and Work from the menu, and a route found anew when the route
+options change, are driven at once, without it.
+
+`View::fitting` (in `crates/lehu-map/src/view.rs`) finds the view: the
+closest zoom at which the route's extent fits the panel less a margin and
+the bar, the route's middle in the middle of what is left.
+
 ### Home and Work
 
 The menu's Home and Work drive there with one choice. Not set yet, the row
@@ -182,7 +214,17 @@ with Change Home and Change Work, for those that are set.
 
 ### Route options
 
-The route is the fastest unless the settings say otherwise:
+The menu's Route row says how routes go ("Fastest", "Shortest, no
+motorways"). Chosen, its choices take the menu's place: Fastest and
+Shortest (a green dot on the one taken), Avoid motorways (on or off) and
+Speed cameras ([below](#speed-cameras)). With the knob the ring starts on
+Fastest; a click takes a row, and the menu stays; Back goes back to the
+menu's rows, the ring on Route. A tap takes a row too; the menu key, a
+tap beside the menu or eight seconds left alone close it all. Once the
+choices are left, a route being driven is found anew with them, from
+where we are ("Finding the route" on the bar); left unchanged, nothing is.
+
+The choices are kept in the settings:
 
 ```toml
 [map]
@@ -198,19 +240,26 @@ where nothing else goes (a service area, say). Road data written before
 the motorways were marked (`roads.bin` version 1) cannot tell them apart:
 there avoiding them changes nothing. The screens change the options by
 persisting these two keys; `AppHost::map_route_options` is what a route
-is found with.
+is found with, and `Host::map_reroute` finds the route of ours anew.
 
 ### Fuel, parking and charging
 
 Besides names, `places.bin` has the filling stations, the public car
 parks and the charging stations of the extract (version 2; one written
-before has none). `AppHost::map_nearest(kind, limit)` fills Go to's list
-with the nearest of a kind to where we are (`FoundKind::Fuel`, `Parking`
-or `Charging`), the nearest first, each with its category, a detail and
-how far: "Fuel · Aral · 1.2 km", "Parking · Multi-storey, 400 spaces ·
-350 m", "Charging · 4 points, 22 kW · 2.1 km". A tap drives there as for
-any destination. `AppHost::map_can_find(kind)` says whether there are
-any. They are not searched by name.
+before has none). Go to's list has a row of three under the search row,
+Fuel, Parking and Charging, those the data has: the knob reaches them in
+the list's order, between the search row and the recent destinations.
+One chosen lists the eight nearest of its kind to where we are in the
+recent ones' place, the nearest first, each with its name and under it a
+few words and how far: "Aral · 1.2 km", "Multi-storey, 400 spaces ·
+350 m", "4 points, 22 kW · 2.1 km". One of them is picked as any
+destination (the route shown whole, then driven). Back, or the same kind
+chosen again, lists the recent ones again; another kind lists its own.
+Choosing Home or Work offers none. They are not searched by name.
+
+`Host::map_nearest(kind, limit)` fills the list (`Nearby::Fuel`,
+`Parking` or `Charging`, the program's `FoundKind`), and
+`Host::map_can_find(kind)` says whether there are any.
 
 A car park is one anyone may use (not private, nor only a shop's
 customers), not the side of a street, with a name or room for ten cars
@@ -221,7 +270,8 @@ has 237 filling stations, 403 car parks and 531 charging stations.
 
 ### Speed cameras
 
-With `map.speed-cameras = true`, LEHU says "Speed camera ahead" once
+With `map.speed-cameras = true` (the Route choices' Speed cameras row
+switches it: Warn or Off), LEHU says "Speed camera ahead" once
 before each fixed speed camera on the route: twelve seconds of driving
 ahead of it, but no nearer than 300 m and no further than 500 m (300 m up
 to 90 km/h, 433 m at 130). The phrase takes a second and a half, and
@@ -229,9 +279,12 @@ slowing from 130 to 90 km/h comfortably takes seven seconds more, so
 twelve leave room; in town 300 m is before the junction or two that come
 first. It is off by default: warning of speed cameras is against the law
 in some countries (France, Germany and Switzerland among them), so turn
-it on only where it is allowed. It needs the prompts on (`map.voice`).
-`AppHost::map_camera_ahead(within)` gives the metres to the next camera on
-the route within that distance, for a sign on the screen.
+it on only where it is allowed. The spoken warning needs the prompts on (`map.voice`).
+While the map guides, from 500 m before a camera the bar shows a red
+camera sign and the distance to it, in 50 m steps ("350 m"), in the place
+of the time of arrival under the road, until it is passed; with the voice
+off too. `Host::map_camera_ahead(within)` gives the metres to the next
+camera on the route within that distance.
 
 The cameras are OpenStreetMap's (`highway=speed_camera`), each taken to
 the nearest road within 50 m. A camera watches the traffic its
@@ -472,8 +525,8 @@ is reckoned once a minute from the clock and where the head unit is: the
 drive's position, the map's, `map.fake-position`, else the middle of the
 map where it was left (a country's width is a few minutes of sunset).
 While the clock is not set, or there is no position, Auto is day, as
-before. The map's night tiles follow it, and `AppHost::night_now` says it
-for the screens' palette.
+before. The map's night tiles follow it, and so do LEHU's own screens,
+which turn to their night palette (`Host::night_now`).
 
 The phones do not tell the head unit day or night: CarPlay is asked to
 darken by itself (it follows the phone's clock and place, so it agrees
