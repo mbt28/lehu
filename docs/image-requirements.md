@@ -74,11 +74,16 @@ region is built and copied, is in [map.md](map.md#data-on-the-card).
 
 - **Partition:** the SD card's 7th, `LEHU-MAPS`, exFAT (MBR type `0x07`),
   filling the card's space after the system's. On the F1C200s's MBR card
-  it is a logical partition inside the extended p4, so p4 is made large
-  enough in genimage, or p4 is grown and p7 made at the first boot.
+  it is a logical partition inside the extended p4. An image file can't
+  hold a partition that fills a card of unknown size, so the first boot
+  makes it: Buildroot's `S02maps` grows p4, adds p7 (4 MiB-aligned) with
+  `parted` and formats it with `mkfs.exfat`. A card already in use is not
+  repartitioned.
 - **Mount:** at `/maps`, always read only:
-  `LABEL=LEHU-MAPS /maps exfat ro,noatime,nofail,uid=lehu,gid=lehu,fmask=0133,dmask=0022 0 0`
-  (`f1c` for `lehu` on the development board). exFAT has no owners and no journal: the mount
+  `LABEL=LEHU-MAPS /maps exfat ro,noatime,nofail,uid=1000,gid=1000,fmask=0133,dmask=0022 0 0`
+  with LEHU's user and group pinned to 1000 (`f1c` on the development
+  board, `lehu` on LEHU OS). Numbers, not names: BusyBox `mount` passes
+  the options to the kernel unchanged, and exFAT takes only numbers. exFAT has no owners and no journal: the mount
   gives the files to LEHU's user, and being read only is what keeps it
   whole through a power cut. LEHU never writes it: the partition is
   written only on a PC, the card in its reader. `nofail`: the system starts without it, and
