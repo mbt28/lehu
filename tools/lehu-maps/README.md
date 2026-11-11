@@ -89,8 +89,13 @@ Options:
 
 ```
 lehu-maps [--scripts DIR] [--workers N] [--card DIR]
+lehu-maps --write REGION --card DIR [--voice KEY|none]   the same work without the window
 lehu-maps --screenshot DIR    the window's states as PNGs (offscreen), for the docs
 ```
+
+`--write luxembourg --card /media/me/LEHU-MAPS` does what **Write to
+card** does for Geofabrik's region `luxembourg`, with its stages on the
+terminal (for scripts, or a PC without a desktop).
 
 `--workers` is how many processes draw tiles (default: the cores less
 one). `--card DIR` writes to a folder instead of a LEHU-MAPS drive (also in

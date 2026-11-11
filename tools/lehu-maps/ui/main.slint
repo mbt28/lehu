@@ -236,7 +236,11 @@ export component MainWindow inherits Window {
 
     // A scroll left past the end when the panels got shorter goes back.
     function clamp() {
-        side.content-y = max(side.content-y, min(0px, side.visible-height - side.content-height));
+        if (side.content-height <= side.visible-height) {
+            side.content-y = 0px;
+        } else {
+            side.content-y = max(side.content-y, side.visible-height - side.content-height);
+        }
     }
 
     // Back to the top (for the screenshots, which have no event loop to
@@ -358,7 +362,9 @@ export component MainWindow inherits Window {
                 changed visible-height => { root.clamp(); }
                 side-inner := VerticalLayout {
                     width: side.visible-width;
-                    height: max(self.preferred-height, side.visible-height);
+                    x: 0;
+                    y: 0;
+                    height: self.preferred-height;
                     padding-right: 14px;
                     spacing: 12px;
                     alignment: start;

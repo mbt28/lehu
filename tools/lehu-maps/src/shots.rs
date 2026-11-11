@@ -142,7 +142,6 @@ fn select_hungary(a: &mut App) {
 }
 
 fn render(window: &MinimalSoftwareWindow, path: &Path, (w, h): (u32, u32)) -> Result<(), String> {
-    window.set_size(PhysicalSize::new(w, h));
     let mut buf = vec![Rgb8Pixel::default(); (w * h) as usize];
     // Twice: the list's rows are made in the first layout.
     for _ in 0..3 {
@@ -175,10 +174,13 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let shot_at =
         |name: &str, a: &mut App, log_open: bool, size: (u32, u32)| -> Result<(), String> {
             ui.set_search_text(a.query.clone().into());
+            window.set_size(PhysicalSize::new(size.0, size.1));
             app::apply(&ui, a);
             ui.set_log_open(log_open);
-            ui.invoke_scroll_to_top();
             let path = dir.join(format!("{name}.png"));
+            // Laid out once, the scroll put back to the top, then drawn.
+            render(&window, &path, size)?;
+            ui.invoke_scroll_to_top();
             render(&window, &path, size)?;
             println!("{}", path.display());
             Ok(())

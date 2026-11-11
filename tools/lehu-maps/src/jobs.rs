@@ -508,9 +508,8 @@ pub fn write_to_card(ctx: &Ctx, plan: &Plan, report: Report) -> Result<String> {
         Some(v) => Some(ctx.build_voice(&py, v, report)?),
         None => None,
     };
-    let on_card = card::resolve(&plan.card, &folder).and_then(|d| Manifest::read(&d).ok());
     let mut wrote = Vec::new();
-    if on_card.as_ref() == Some(&m) {
+    if same_on_card(&plan.card, &folder, &m) {
         report(Event::Log(format!(
             "{} is on the card already, the same copy",
             area.name
@@ -522,8 +521,7 @@ pub fn write_to_card(ctx: &Ctx, plan: &Plan, report: Report) -> Result<String> {
     }
     if let Some((dir, vm)) = voice {
         let rel = format!("{}/{}", card::VOICE, voice::LANG);
-        let on_card = card::resolve(&plan.card, &rel).and_then(|d| Manifest::read(&d).ok());
-        if on_card.as_ref() != Some(&vm) {
+        if !same_on_card(&plan.card, &rel, &vm) {
             copy(ctx, &dir, &plan.card, &rel, "the voice", report)?;
             wrote.push("the voice".into());
         }
@@ -536,6 +534,13 @@ pub fn write_to_card(ctx: &Ctx, plan: &Plan, report: Report) -> Result<String> {
             wrote.join(" and ")
         )
     })
+}
+
+/// The card has this copy at `rel` already, whole (the same map.toml, and
+/// every file at its size).
+fn same_on_card(card: &Path, rel: &str, m: &Manifest) -> bool {
+    card::resolve(card, rel)
+        .is_some_and(|d| Manifest::read(&d).is_ok_and(|on| on == *m) && m.check_sizes(&d).is_ok())
 }
 
 fn copy(ctx: &Ctx, src: &Path, card: &Path, rel: &str, what: &str, report: Report) -> Result<()> {
