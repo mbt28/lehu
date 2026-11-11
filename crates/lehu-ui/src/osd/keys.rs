@@ -130,7 +130,7 @@ impl<H: Host> State<H> {
         }
         // The map: the arrows move it, the knob zooms.
         if bridge.get_screen() == MAP {
-            self.map_key(&bridge, nav, repeat);
+            self.map_key(ui, nav, repeat);
             return;
         }
 

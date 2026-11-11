@@ -172,6 +172,7 @@ export global Bridge {
     in property <string> nav-road;
     in property <string> nav-eta;             // "14:32", "12 min"
     in property <string> nav-eta-note;        // "arrival", "to go"
+    in property <int> nav-then;               // NavArrow of the turn close behind it; 0 none
 
     // Settings > Update: LEHU OS updates, carried by the phone's browser.
     // The row shows when an update server is set; on a system without the
@@ -238,7 +239,7 @@ export global Bridge {
     // it loads) and its bar's words.
     in property <string> map-note;
     in property <string> map-label;
-    in property <bool> map-has-position;      // the bar's Me key is there
+    in property <bool> map-away;              // moved off where we are: the Me key, My position
     // The map's own guidance, on its bar: as the navigation card's.
     in property <bool> map-guiding;
     in property <int> map-arrow;              // NavArrow
@@ -247,14 +248,28 @@ export global Bridge {
     in property <string> map-road;
     in property <string> map-eta;
     in property <string> map-eta-note;
+    in property <int> map-then;               // NavArrow of the turn close behind it; 0 none
+    // A short note in the bar's place of the words for a few seconds:
+    // "Home set", "Finding the route", why there is none.
+    in property <string> map-flash;
+    in property <bool> map-voice;             // spoken prompts on; off: the bar's muted key
+    // The map's menu (the knob's click, the bar's menu key) and what its
+    // Home and Work rows say under their names.
+    in property <bool> map-menu-open;
+    in property <bool> map-home-set;
+    in property <string> map-home;
+    in property <bool> map-work-set;
+    in property <string> map-work;
     // How fast, km/h, and the road's limit ("" when not known), and
     // whether we are over it.
     in property <string> map-speed;
     in property <string> map-limit;
     in property <bool> map-over;
-    // Map > Go to: the bar's keys, and the destination screen.
-    in property <bool> map-can-search;        // the bar's Go to key
-    in property <bool> map-on-route;          // a route found here is driven: the bar's Stop key
+    // Map > Go to: the menu's rows, and the destination screen.
+    in property <bool> map-can-search;        // the menu's Go to, Home and Work
+    in property <bool> map-on-route;          // a route found here is driven: the menu's Stop route
+    in property <string> dest-title;          // "Go to", or "Set Home" / "Set Work" choosing one
+    in property <bool> dest-choosing;         // a pick keeps the place rather than drives there
     in property <bool> dest-typing;           // the keyboard is up; else the list
     in property <string> dest-query;          // what is typed
     in property <string> dest-note;           // the header: "Go to", "Finding the route", why none
@@ -281,8 +296,11 @@ export global Bridge {
     callback map-drag(int, int);              // it moved: pixels from where it went down
     callback map-zoom(int);                   // -1 out, +1 in
     callback map-locate();                    // centre on where we are
-    callback map-goto();                      // the bar's Go to key
-    callback map-end-route();                 // the bar's Stop key
+    callback map-menu(bool);                  // open or close the map's menu
+    callback map-menu-pick(int);              // a menu row: 0 My position, 1 Stop route,
+                                              // 2 Go to, 3 Home, 4 Work, 5 Voice
+    callback map-voice-on();                  // the bar's muted key: the voice on again
+    callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
     callback dest-pick(int);                  // a tap on a destination: drive there
     callback dest-type();                     // from the list back to the keyboard
     callback edit-field(int);                 // open the editor on a field
@@ -505,6 +523,12 @@ global Icons {
         if (kind == "system") { return "M4 4 L20 4 L20 16 L4 16 Z M9 20 L15 20 M12 16 L12 20"; }
         if (kind == "info") { return "M3 12 A9 9 0 1 0 21 12 A9 9 0 1 0 3 12 M12 11 L12 17 M12 7.5 L12 8"; }
         if (kind == "update") { return "M12 3 L12 15 M7 10 L12 15 L17 10 M4 16 L4 21 L20 21 L20 16"; }
+        if (kind == "locate") { return "M12 2 L12 6 M12 18 L12 22 M2 12 L6 12 M18 12 L22 12 M6 12 A6 6 0 1 0 18 12 A6 6 0 1 0 6 12"; }
+        if (kind == "stop") { return "M6 6 L18 6 L18 18 L6 18 Z"; }
+        if (kind == "home") { return "M3 11.5 L12 3.5 L21 11.5 M5.5 9.5 L5.5 20.5 L18.5 20.5 L18.5 9.5 M10 20.5 L10 14.5 L14 14.5 L14 20.5"; }
+        if (kind == "work") { return "M3 8 L21 8 L21 20 L3 20 Z M9 8 L9 5 L15 5 L15 8 M3 13.5 L21 13.5"; }
+        if (kind == "muted") { return "M3 9 L7 9 L12 5 L12 19 L7 15 L3 15 Z M16 9 L22 15 M22 9 L16 15"; }
+        if (kind == "menu") { return "M4 6 L20 6 M4 12 L20 12 M4 18 L20 18"; }
         // The turn arrows, 48 units: the shaft as a line.
         if (kind == "nav1") { return "M24 44 L24 16"; }
         if (kind == "nav2") { return "M30 44 L30 30 L18 18"; }
@@ -1232,14 +1256,35 @@ export global CameraPanel {
         + (Bridge.camera-page == 1 ? root.buttons-h : 0px) + 2 * root.padding;
 }
 
-// The map's bar: Back, the zoom keys and the map's words. Over the map the
-// program shows exactly this rectangle of the overlay plane.
+// The map's bar: the map's words and its keys. Over the map the program
+// shows exactly this rectangle of the overlay plane -- or, while the menu
+// is open, the menu's column.
 export global MapBar {
     // Taller while it guides: the next turn and the keys side by side.
     out property <length> height: Bridge.map-guiding ? 84px : 64px;
     out property <length> x: 0px;
     out property <length> y: 480px - root.height;
     out property <length> width: 800px;
+    // The keys at its right end, the same in every state: - + menu Back;
+    // the muted key is narrower.
+    out property <length> pad: 6px;
+    out property <length> spacing: 6px;
+    out property <length> key-w: 64px;
+    out property <length> back-w: 76px;
+    out property <length> key-h: 52px;
+    out property <length> mute-w: 48px;
+    out property <length> keys-w: 3 * (root.key-w + root.spacing) + root.back-w + 2 * root.pad;
+}
+
+// The map's menu: a column at the right, the bar's keys at its foot, as
+// wide as they are. While it is open the program shows exactly this
+// rectangle of the overlay plane, the map beside it.
+export global MapMenu {
+    out property <length> width: MapBar.keys-w;
+    out property <length> x: MapBar.width - root.width;
+    out property <length> y: 0px;
+    out property <length> height: 480px;
+    out property <length> row-h: 60px;
 }
 
 // Where the volume bar sits. Over live video the program shows exactly
@@ -1264,6 +1309,37 @@ export global NavCardBox {
     out property <length> y: 0px;
     out property <length> width: 800px;
     out property <length> height: 88px;
+}
+
+// The small arrow of the turn close behind the next one, under "then".
+component ThenHint inherits VerticalLayout {
+    in property <int> arrow;
+    alignment: center;
+    spacing: 2px;
+    Text {
+        text: "then";
+        color: Theme.dim;
+        font-size: 12px;
+        horizontal-alignment: center;
+    }
+    HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: Theme.surface2;
+            Icon {
+                x: 4px;
+                y: 4px;
+                kind: "nav" + root.arrow;
+                view: 48;
+                size: 24px;
+                weight: 5px;
+                ink: Theme.text;
+            }
+        }
+    }
 }
 
 // The next manoeuvre: its arrow (drawn; none for a manoeuvre without one),
@@ -1309,8 +1385,9 @@ component NavCardView inherits Rectangle {
             font-size: 40px;
             vertical-alignment: center;
         }
+        // The words as wide as they are, the turn after them close by.
         VerticalLayout {
-            horizontal-stretch: 1;
+            horizontal-stretch: 0;
             alignment: center;
             Text {
                 text: Bridge.nav-maneuver;
@@ -1325,6 +1402,8 @@ component NavCardView inherits Rectangle {
                 overflow: elide;
             }
         }
+        if Bridge.nav-then > 0: ThenHint { arrow: Bridge.nav-then; }
+        Rectangle { horizontal-stretch: 1; }
         VerticalLayout {
             alignment: center;
             Text {
@@ -2301,10 +2380,50 @@ component ScreenCamera inherits Rectangle {
     }
 }
 
+// A key of the map's bar: a word or an icon.
+component MapKey inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    callback pressed;
+    width: MapBar.key-w;
+    height: MapBar.key-h;
+    border-radius: 8px;
+    background: ta.pressed ? Theme.surface2 : Theme.surface;
+    ta := TouchArea { clicked => { root.pressed(); } }
+    if root.icon == "": Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.icon != "": Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        kind: root.icon;
+        ink: Theme.text;
+        size: 28px;
+        weight: 2.5px;
+    }
+}
+
 // The map: the picture is on the video plane beneath; the screens show only
-// the bar over it. A drag moves the map with the finger.
+// the bar over it, and the menu while it is open. A drag moves the map with
+// the finger. The bar's keys sit at its right end and never move: - + menu
+// Back, with Me just left of them while the map is off where we are, and a
+// muted key left of that while the voice is off. The rest of the bar is
+// words: the map's name, or while guiding the next turn.
 component ScreenMap inherits Rectangle {
     background: #000000;
+    // Where the keys start, and where the words end.
+    property <length> keys-x: MapBar.width - MapBar.keys-w + MapBar.pad;
+    property <length> key-y: MapBar.height - MapBar.pad - MapBar.key-h;
+    property <length> me-x: root.keys-x - (Bridge.map-away ? MapBar.key-w + MapBar.spacing : 0px);
+    // Guiding, the muted key is over the keys, beside the attribution: the
+    // turn keeps the room.
+    property <bool> mute-up: Bridge.map-guiding;
+    property <length> mute-x: root.me-x
+        - (Bridge.map-voice || root.mute-up ? 0px : MapBar.mute-w + MapBar.spacing);
     TouchArea {
         pointer-event(ev) => {
             if ev.kind == PointerEventKind.down {
@@ -2337,179 +2456,276 @@ component ScreenMap inherits Rectangle {
         height: MapBar.height;
         background: Theme.bar;
         TouchArea { } // between the keys: not a drag
-        // Guiding: the next turn, as the navigation card shows it, then the
-        // keys and the attribution under them.
-        if Bridge.map-guiding: HorizontalLayout {
-            padding: 6px;
-            padding-left: 12px;
-            spacing: 8px;
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 64px;
-                    height: 64px;
-                    border-radius: 12px;
-                    background: Theme.ok;
-                    Icon {
-                        x: 8px;
-                        y: 8px;
-                        kind: "nav" + Bridge.map-arrow;
-                        view: 48;
-                        size: 48px;
-                        weight: 6px;
-                        ink: Theme.bg;
-                    }
-                }
-            }
-            Text {
-                text: Bridge.map-distance;
-                color: Theme.text;
-                font-size: 36px;
-                vertical-alignment: center;
-            }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
+        // The words: a short note for a moment; else, guiding, the next
+        // turn as the navigation card shows it; else the map and its zoom.
+        Rectangle {
+            x: 0px;
+            width: root.mute-x - MapBar.spacing;
+            if Bridge.map-flash != "": HorizontalLayout {
+                padding-left: 24px;
                 Text {
-                    text: Bridge.map-maneuver;
+                    text: Bridge.map-flash;
                     color: Theme.text;
-                    font-size: 18px;
-                    overflow: elide;
-                }
-                Text {
-                    text: Bridge.map-road;
-                    color: Theme.dim;
-                    font-size: 18px;
+                    font-size: 20px;
+                    vertical-alignment: center;
                     overflow: elide;
                 }
             }
-            // How fast we go, by the road's limit sign when it has one; in
-            // the warning colour over the limit.
-            if Bridge.map-speed != "": HorizontalLayout {
+            if Bridge.map-flash == "" && Bridge.map-guiding: HorizontalLayout {
+                padding: 6px;
+                padding-left: 10px;
                 spacing: 8px;
-                if Bridge.map-limit != "": VerticalLayout {
+                VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 52px;
-                        height: 52px;
-                        border-radius: 26px;
-                        background: Theme.night ? #B8BEC4 : #FFFFFF;
-                        border-width: 6px;
-                        border-color: Theme.danger;
-                        Text {
-                            text: Bridge.map-limit;
-                            color: #000000;
-                            font-size: 22px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 12px;
+                        background: Theme.ok;
+                        Icon {
+                            x: 8px;
+                            y: 8px;
+                            kind: "nav" + Bridge.map-arrow;
+                            view: 48;
+                            size: 48px;
+                            weight: 6px;
+                            ink: Theme.bg;
                         }
                     }
                 }
-                VerticalLayout {
-                    alignment: center;
-                    min-width: 44px;
-                    Text {
-                        text: Bridge.map-speed;
-                        color: Bridge.map-over ? Theme.danger : Theme.text;
-                        font-size: 26px;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        text: "km/h";
-                        color: Theme.dim;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                    }
-                }
-            }
-            VerticalLayout {
-                alignment: center;
                 Text {
-                    text: Bridge.map-eta;
+                    text: Bridge.map-distance;
                     color: Theme.text;
-                    font-size: 22px;
-                    horizontal-alignment: right;
+                    font-size: 36px;
+                    vertical-alignment: center;
                 }
-                Text {
-                    text: Bridge.map-eta-note;
-                    color: Theme.dim;
-                    font-size: 14px;
-                    horizontal-alignment: right;
+                // The manoeuvre, the road, and under them the arrival; the
+                // turn after it close by.
+                VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: center;
+                    Text {
+                        text: Bridge.map-maneuver;
+                        color: Theme.text;
+                        font-size: 20px;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: Bridge.map-road;
+                        color: Theme.dim;
+                        font-size: 16px;
+                        overflow: elide;
+                    }
+                    if Bridge.map-eta != "": HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: Bridge.map-eta;
+                            color: Theme.text;
+                            font-size: 14px;
+                        }
+                        Text {
+                            text: Bridge.map-eta-note;
+                            color: Theme.dim;
+                            font-size: 14px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
                 }
-            }
-            VerticalLayout {
-                spacing: 2px;
-                HorizontalLayout {
+                if Bridge.map-then > 0: ThenHint { arrow: Bridge.map-then; }
+                Rectangle { horizontal-stretch: 1; }
+                // How fast we go, by the road's limit sign when it has one;
+                // in the warning colour over the limit.
+                if Bridge.map-speed != "": HorizontalLayout {
                     spacing: 6px;
-                    height: 56px;
-                    OskKey { label: "-"; weight: 0; width: 44px; pressed => { Bridge.map-zoom(-1); } }
-                    OskKey { label: "+"; weight: 0; width: 44px; pressed => { Bridge.map-zoom(1); } }
-                    OskKey { label: "Me"; weight: 0; width: 52px; pressed => { Bridge.map-locate(); } }
-                    // A route of our own ends with Stop; a replayed one is
-                    // replaced by going somewhere.
-                    if Bridge.map-on-route: OskKey {
-                        label: "Stop";
-                        weight: 0;
-                        width: 64px;
-                        pressed => { Bridge.map-end-route(); }
+                    if Bridge.map-limit != "": VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 48px;
+                            height: 48px;
+                            border-radius: 24px;
+                            background: Theme.night ? #B8BEC4 : #FFFFFF;
+                            border-width: 5px;
+                            border-color: Theme.danger;
+                            Text {
+                                text: Bridge.map-limit;
+                                color: #000000;
+                                font-size: 20px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                    if !Bridge.map-on-route && Bridge.map-can-search: OskKey {
-                        label: "Go to";
-                        weight: 0;
-                        width: 64px;
-                        pressed => { Bridge.map-goto(); }
+                    VerticalLayout {
+                        alignment: center;
+                        min-width: 40px;
+                        Text {
+                            text: Bridge.map-speed;
+                            color: Bridge.map-over ? Theme.danger : Theme.text;
+                            font-size: 28px;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "km/h";
+                            color: Theme.dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                        }
                     }
-                    OskKey { label: "Back"; weight: 0; width: Bridge.map-can-search ? 64px : 72px; pressed => { Bridge.back(); } }
-                }
-                Text {
-                    text: "© OpenStreetMap contributors";
-                    color: Theme.dim;
-                    font-size: 11px;
-                    horizontal-alignment: right;
                 }
             }
-        }
-        if !Bridge.map-guiding: HorizontalLayout {
-            padding: 6px;
-            spacing: 6px;
-            OskKey { label: "Back"; weight: 0; width: 120px; pressed => { Bridge.back(); } }
-            OskKey { label: "-"; weight: 0; width: 80px; pressed => { Bridge.map-zoom(-1); } }
-            OskKey { label: "+"; weight: 0; width: 80px; pressed => { Bridge.map-zoom(1); } }
-            if Bridge.map-has-position: OskKey {
-                label: "Me";
-                weight: 0;
-                width: 80px;
-                pressed => { Bridge.map-locate(); }
-            }
-            if Bridge.map-on-route: OskKey {
-                label: "Stop";
-                weight: 0;
-                width: 120px;
-                pressed => { Bridge.map-end-route(); }
-            }
-            if !Bridge.map-on-route && Bridge.map-can-search: OskKey {
-                label: "Go to";
-                weight: 0;
-                width: 120px;
-                pressed => { Bridge.map-goto(); }
-            }
-            VerticalLayout {
-                horizontal-stretch: 1;
+            if Bridge.map-flash == "" && !Bridge.map-guiding: VerticalLayout {
+                padding-left: 24px;
                 alignment: center;
                 Text {
                     text: Bridge.map-label;
                     color: Theme.text;
                     font-size: 16px;
-                    horizontal-alignment: right;
                     overflow: elide;
                 }
                 Text {
                     text: "© OpenStreetMap contributors";
                     color: Theme.dim;
                     font-size: 12px;
-                    horizontal-alignment: right;
                     overflow: elide;
                 }
+            }
+        }
+        // Guiding, the bar is taller: the attribution over the keys.
+        if Bridge.map-guiding: Text {
+            x: root.keys-x;
+            y: 2px;
+            width: MapBar.width - root.keys-x - MapBar.pad;
+            height: root.key-y - 2px;
+            text: "© OpenStreetMap contributors";
+            color: Theme.dim;
+            font-size: 11px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+        // The voice is off: a tap turns it on again.
+        if !Bridge.map-voice: Rectangle {
+            x: root.mute-up ? root.keys-x : root.mute-x;
+            y: root.mute-up ? 0px : root.key-y;
+            width: MapBar.mute-w;
+            height: root.mute-up ? root.key-y : MapBar.key-h;
+            border-radius: 8px;
+            background: mta.pressed ? Theme.surface2 : Theme.bar;
+            mta := TouchArea { clicked => { Bridge.map-voice-on(); } }
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                kind: "muted";
+                ink: Theme.dim;
+                size: root.mute-up ? 20px : 28px;
+            }
+        }
+        if Bridge.map-away: MapKey {
+            x: root.me-x;
+            y: root.key-y;
+            label: "Me";
+            pressed => { Bridge.map-locate(); }
+        }
+        MapKey {
+            x: root.keys-x;
+            y: root.key-y;
+            label: "-";
+            pressed => { Bridge.map-zoom(-1); }
+        }
+        MapKey {
+            x: root.keys-x + MapBar.key-w + MapBar.spacing;
+            y: root.key-y;
+            label: "+";
+            pressed => { Bridge.map-zoom(1); }
+        }
+        MapKey {
+            x: root.keys-x + 2 * (MapBar.key-w + MapBar.spacing);
+            y: root.key-y;
+            icon: "menu";
+            background: Bridge.map-menu-open ? Theme.surface2 : Theme.surface;
+            pressed => { Bridge.map-menu(!Bridge.map-menu-open); }
+        }
+        MapKey {
+            x: root.keys-x + 3 * (MapBar.key-w + MapBar.spacing);
+            y: root.key-y;
+            width: MapBar.back-w;
+            label: "Back";
+            pressed => { Bridge.back(); }
+        }
+    }
+    // The menu: over the right of the map, above the bar's keys, which
+    // stay where they are under it. A tap on the map beside it closes it.
+    if Bridge.map-menu-open: TouchArea {
+        x: 0px;
+        width: MapMenu.x;
+        clicked => { Bridge.map-menu(false); }
+    }
+    if Bridge.map-menu-open: Rectangle {
+        x: MapMenu.x;
+        y: MapMenu.y;
+        width: MapMenu.width;
+        height: MapBar.y - MapMenu.y;
+        background: Theme.bar;
+        TouchArea { } // between the rows: nothing
+        Rectangle {
+            x: 0px;
+            width: 1px;
+            background: Theme.line;
+        }
+        VerticalLayout {
+            padding: MapBar.pad;
+            spacing: 4px;
+            alignment: start;
+            if Bridge.map-away: NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-me";
+                icon: "locate";
+                label: "My position";
+                more: false;
+                clicked => { Bridge.map-menu-pick(0); }
+            }
+            if Bridge.map-on-route: NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-stop";
+                icon: "stop";
+                label: "Stop route";
+                more: false;
+                clicked => { Bridge.map-menu-pick(1); }
+            }
+            if Bridge.map-can-search: NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-goto";
+                icon: "search";
+                label: "Go to";
+                more: false;
+                clicked => { Bridge.map-menu-pick(2); }
+            }
+            if Bridge.map-can-search: NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-home";
+                icon: "home";
+                label: "Home";
+                detail: Bridge.map-home-set ? Bridge.map-home : "Set Home";
+                more: false;
+                clicked => { Bridge.map-menu-pick(3); }
+            }
+            if Bridge.map-can-search: NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-work";
+                icon: "work";
+                label: "Work";
+                detail: Bridge.map-work-set ? Bridge.map-work : "Set Work";
+                more: false;
+                clicked => { Bridge.map-menu-pick(4); }
+            }
+            NavRow {
+                height: MapMenu.row-h;
+                ring-key: "menu-voice";
+                icon: Bridge.map-voice ? "volume" : "muted";
+                label: "Voice";
+                detail: Bridge.map-voice ? "On" : "Off";
+                more: false;
+                clicked => { Bridge.map-menu-pick(5); }
             }
         }
     }
@@ -2728,7 +2944,7 @@ component ScreenDest inherits Rectangle {
     if !Bridge.dest-typing: ListPage {
         width: 100%;
         height: 100%;
-        title: "Go to";
+        title: Bridge.dest-title;
         note: Bridge.dest-note;
         NavRow {
             ring-key: "dest-type";
@@ -2745,6 +2961,23 @@ component ScreenDest inherits Rectangle {
             label-color: Bridge.dest-busy ? Theme.dim : Theme.text;
             more: false;
             clicked => { Bridge.dest-pick(i); }
+        }
+        // Under the recent ones, quietly: Home and Work chosen again.
+        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.map-home-set: NavRow {
+            ring-key: "dest-home";
+            icon: "home";
+            label: "Change Home";
+            label-color: Theme.dim;
+            more: false;
+            clicked => { Bridge.dest-change(0); }
+        }
+        if !Bridge.dest-choosing && Bridge.dest-query == "" && Bridge.map-work-set: NavRow {
+            ring-key: "dest-work";
+            icon: "work";
+            label: "Change Work";
+            label-color: Theme.dim;
+            more: false;
+            clicked => { Bridge.dest-change(1); }
         }
     }
 }

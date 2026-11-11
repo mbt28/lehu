@@ -192,6 +192,10 @@ impl<H: Host> State<H> {
             if screen == DEVICES && (self.p_screen == HOME || self.p_screen == CONNECTION) {
                 self.devices_parent = self.p_screen;
             }
+            // Go to chose Home or Work only until it was left.
+            if self.p_screen == DEST && screen != DEST {
+                self.dest_choose = None;
+            }
             // The loop runs the camera while its view is up.
             self.host.set_camera_running(screen == CAMERA);
             // And the map while its screen is.
@@ -239,7 +243,8 @@ impl<H: Host> State<H> {
             }
         }
         self.pump_camera(&bridge, screen);
-        self.pump_map(&bridge, screen);
+        self.pump_slots(&bridge);
+        self.pump_map(&bridge, screen, now);
         self.pump_bluetooth(&bridge, screen);
         self.pump_devices(&bridge);
         self.pump_media(&bridge, screen, now);

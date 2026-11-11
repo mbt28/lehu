@@ -36,6 +36,7 @@ pub enum Call {
     MapLocate,
     MapSearch(String),
     MapGo(usize),
+    MapGoPlace(String),
     MapEndRoute,
     SetKeyLearning(bool),
     BtPromptAccept,
@@ -95,6 +96,8 @@ pub struct TestHost {
     pub map_stages: std::collections::VecDeque<RouteStage>,
     pub map_route_note: String,
     pub map_on_route: bool,
+    /// The map was moved off where we are.
+    pub map_away: bool,
     pub learned_key: Option<u32>,
 
     pub bt_available: bool,
@@ -176,6 +179,7 @@ impl TestHost {
             map_stages: std::collections::VecDeque::new(),
             map_route_note: String::new(),
             map_on_route: false,
+            map_away: false,
             learned_key: None,
             bt_available: true,
             bt_gen: 1,
@@ -444,6 +448,10 @@ impl Host for TestHost {
         true
     }
 
+    fn map_away(&self) -> bool {
+        self.map_away
+    }
+
     fn map_guidance(&self) -> Option<&NavCard> {
         self.map_guide.as_ref()
     }
@@ -480,6 +488,23 @@ impl Host for TestHost {
 
     fn map_go(&mut self, index: usize) {
         self.calls.push(Call::MapGo(index));
+    }
+
+    fn map_keep(&self, index: usize) -> Option<settings::MapPlace> {
+        let d = self.map_found.get(index)?;
+        Some(settings::MapPlace {
+            name: d.name.clone(),
+            town: d.detail.split(',').next().unwrap_or("").to_string(),
+            at: "49.600000, 6.130000".into(),
+        })
+    }
+
+    fn map_go_place(&mut self, place: &settings::MapPlace) {
+        self.calls.push(Call::MapGoPlace(place.name.clone()));
+    }
+
+    fn map_place_distance(&self, _place: &settings::MapPlace) -> String {
+        "2.4 km".into()
     }
 
     fn map_route_poll(&mut self) -> RouteStage {

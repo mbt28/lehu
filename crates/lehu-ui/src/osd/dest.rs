@@ -10,11 +10,18 @@
 //! the route, found on a thread of its own: the screen says it is looking,
 //! goes back to the map once the route is there (the map then drives it),
 //! or says why there is none. Back and Cancel go back to the map.
+//!
+//! The same screen chooses Home or Work ("Set Home"), from the map's menu
+//! or from the Change rows under the recent destinations: a pick then
+//! keeps the place, says so on the map's bar, and goes back to the map
+//! without a route.
 
 use slint::{ComponentHandle, Model, SharedString};
+use toml::Value;
 
+use super::map::FLASH_MS;
 use super::{Bridge, DEST, Host, MAP, State, clean};
-use crate::host::RouteStage;
+use crate::host::{MapSlot, RouteStage};
 use crate::{AppWindow, DestRow, Osk};
 
 /// What can be typed: a long street name and its town.
@@ -29,14 +36,40 @@ impl<H: Host> State<H> {
     }
 
     /// The screen opens: nothing typed; the recent destinations as a list
-    /// when there are some, else the keyboard.
+    /// when there are some (or Home and Work to change), else the
+    /// keyboard. A route still being found stays so.
     pub(super) fn open_dest(&mut self, ui: &AppWindow) {
         self.dest_query.clear();
-        self.dest_busy = false;
         self.dest_error = false;
         self.host.map_search("");
-        let typing = self.host.map_destinations().is_empty();
+        let bridge = ui.global::<Bridge<'_>>();
+        let title = match self.dest_choose {
+            Some(MapSlot::Home) => "Set Home",
+            Some(MapSlot::Work) => "Set Work",
+            None => "Go to",
+        };
+        bridge.set_dest_title(SharedString::from(title));
+        bridge.set_dest_choosing(self.dest_choose.is_some());
+        let map = &self.host.settings().map;
+        let changes = self.dest_choose.is_none() && (map.home.is_some() || map.work.is_some());
+        let typing = self.host.map_destinations().is_empty() && !changes;
+        // A fresh list either way.
+        self.dest_typing = !typing;
         self.show_dest(ui, typing);
+    }
+
+    /// Go to's Change Home (0) or Change Work (1): the screen anew, to
+    /// choose it.
+    pub(super) fn dest_change(&mut self, ui: &AppWindow, slot: i32) {
+        if self.dest_busy || !self.dest_keys(&ui.global::<Bridge<'_>>()) {
+            return;
+        }
+        self.dest_choose = Some(if slot == 0 {
+            MapSlot::Home
+        } else {
+            MapSlot::Work
+        });
+        self.open_dest(ui);
     }
 
     /// The keyboard (`typing`) or the list, and everything on them anew.
@@ -117,6 +150,22 @@ impl<H: Host> State<H> {
         if self.dest_busy || index >= self.host.map_destinations().len() {
             return;
         }
+        // Choosing Home or Work: kept, said on the map's bar, no route.
+        if let Some(slot) = self.dest_choose {
+            let Some(place) = self.host.map_keep(index) else {
+                return;
+            };
+            match Value::try_from(&place) {
+                Ok(value) => self.persist(slot.key(), value),
+                Err(e) => log::error!("{}: {e}", slot.key()),
+            }
+            let note = format!("{} set: {}", slot.name(), place.name);
+            let until = self.now() + FLASH_MS;
+            self.map_flash(&note, until);
+            self.dest_choose = None;
+            bridge.set_screen(MAP);
+            return;
+        }
         self.dest_busy = true;
         self.dest_error = false;
         self.host.map_go(index);
@@ -130,15 +179,33 @@ impl<H: Host> State<H> {
         if !self.dest_busy {
             return;
         }
+        let menu = std::mem::take(&mut self.menu_routing);
         match self.host.map_route_poll() {
-            RouteStage::Finding => return,
+            RouteStage::Finding => {
+                self.menu_routing = menu;
+                return;
+            }
             RouteStage::Found => {
                 if bridge.get_screen() == DEST {
                     bridge.set_screen(MAP);
                 }
+                if menu {
+                    // The guidance says the rest.
+                    self.map_flash("", 0);
+                }
+            }
+            // From the menu, the bar says why; on Go to, its header.
+            RouteStage::Failed if menu => {
+                let note = self.host.map_route_note().to_string();
+                let until = self.now() + FLASH_MS;
+                self.map_flash(&note, until);
             }
             RouteStage::Failed => self.dest_error = true,
-            RouteStage::Idle => {}
+            RouteStage::Idle => {
+                if menu {
+                    self.map_flash("", 0);
+                }
+            }
         }
         self.dest_busy = false;
         self.pump_dest(bridge);
@@ -183,7 +250,11 @@ impl<H: Host> State<H> {
         } else if self.dest_error {
             self.host.map_route_note()
         } else if self.dest_typing {
-            "Go to"
+            match self.dest_choose {
+                Some(MapSlot::Home) => "Set Home",
+                Some(MapSlot::Work) => "Set Work",
+                None => "Go to",
+            }
         } else {
             ""
         };

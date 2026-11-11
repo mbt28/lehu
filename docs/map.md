@@ -9,16 +9,40 @@ by itself from there, as a replayed drive is.
 
 ## Controls
 
+Everything works with the knob alone and with touch alone, the same way.
+The bar's keys never move: at its right end `-`, `+`, the menu key and
+Back; just left of them a Me key while the map has been moved off where
+we are, and a muted key left of that while the spoken prompts are off.
+The rest of the bar is words: the map's name and zoom, or, while it
+guides, the next turn.
+
 | Input | What it does |
 |---|---|
 | Drag | moves the map with the finger |
 | Arrow keys | move it a quarter of the screen |
-| Knob, or the - and + keys of the bar | zoom out and in |
-| Enter | zoom in |
-| The bar's Me key | centre on where we are, and follow it |
-| The bar's Go to key | find a destination and drive there ([below](#going-somewhere)) |
-| The bar's Stop key, on a route found there | end the route |
+| Knob turn, or the bar's - and + | zoom out and in |
+| Knob click, or the bar's menu key | open the map's menu |
 | Back, or the bar's Back key | leave the map |
+| The bar's Me key, there while the map is off where we are | centre on where we are, and follow it |
+| The bar's muted key, there while the voice is off | the spoken prompts on again |
+
+The map's menu is a column at the right, over the map, the bar's keys at
+its foot. Its rows, those that apply:
+
+| Row | What it does |
+|---|---|
+| My position | as the Me key, while the map is off where we are |
+| Stop route | ends a route found on the head unit |
+| Go to | find a destination and drive there ([below](#going-somewhere)) |
+| Home, Work | drive there at once; under the name, the place and how far. Not set yet: choose it (below) |
+| Voice | the spoken prompts on or off (`map.voice`); the menu stays open |
+
+With the knob the ring starts on the first row: turning moves it (round at
+the ends), a click chooses, Back closes the menu (a second Back leaves the
+map). A tap chooses a row; a tap on the map beside the menu, or the menu
+key again, closes it, and it closes by itself eight seconds after it was
+last used. Go to, Home and Work need the road data; without it the menu
+has only what is left.
 
 LEHU opens the map where it was left, or on where we are when it knows.
 
@@ -32,8 +56,9 @@ settings gives a position, "latitude, longitude" in degrees:
 fake-position = "49.6116, 6.1300"
 ```
 
-The map then opens on it and shows it as a blue dot, and the bar gets a Me
-key that centres the map on it again.
+The map then opens on it and shows it as a blue dot; once the map is
+moved off it, the bar's Me key (and the menu's My position) centres the
+map on it again.
 
 A recorded drive can stand in for a moving position: `map.fake-track`
 names a GPX file, which LEHU follows in real time, from the start again at
@@ -80,7 +105,7 @@ They do not talk over the phone: while a call, the phone's assistant or
 its own navigation is speaking, a prompt waits for half a second of quiet,
 and one that has waited a second and a half is dropped, since a turn
 announced late is worse than one not announced. `map.voice = false` turns
-them off.
+them off, and so does the map menu's Voice row, at once.
 
 A prompt is put together from clips, WAV files of a phrase each ("In 500
 metres", "turn left", "then", "Take the second exit"), read from
@@ -134,9 +159,26 @@ drives the route at the roads' speeds (slowing for sharp turns), as it
 replays a drive: the route line with the part driven grey, the next turn
 on the bar, closer in near turns, the speed limit and the time of
 arrival. It replaces a replayed drive. Leaving the map and coming back
-keeps it, driven on meanwhile. The bar's Stop key ends it, and so does
-arriving, half a minute later; where it ended is the position from then
-on (until LEHU restarts). When there is no route, the screen says why.
+keeps it, driven on meanwhile, with its prompts, and the navigation card
+of the other screens (Home, Now playing, Settings) shows its next turn
+while the phone is not guiding. The menu's Stop route ends it, and so does
+arriving: the bar (or the card) shows a flag, "Arrived" and the
+destination for ten seconds, and "You have arrived at your destination" is
+said. Where it ended is the position from then on (until LEHU restarts).
+When there is no route, the screen says why.
+
+When the turn after the next one comes within 300 m of it, the bar and
+the card show it beside the next one, small, under "then", so both can be
+prepared for at once.
+
+### Home and Work
+
+The menu's Home and Work drive there with one choice. Not set yet, the row
+says "Set Home" and opens the destination screen, titled "Set Home", to
+choose it as a destination is chosen; the place is kept (`map.home`,
+`map.work`) and the bar says "Home set: ..." for a moment, without driving
+there. To change them later, the destination screen's recent list ends
+with Change Home and Change Work, for those that are set.
 
 ### Route options
 

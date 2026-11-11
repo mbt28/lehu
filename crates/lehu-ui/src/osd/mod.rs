@@ -28,11 +28,11 @@ use slint::platform::{Key, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, ModelRc, SharedString, VecModel};
 use toml::Value;
 
-use crate::host::{AudioOutput, CameraRequest, Destination, Host, NavCard};
+use crate::host::{AudioOutput, CameraRequest, Destination, Host, MapSlot, NavCard};
 use crate::input::{Input, KEY_QUEUE, KeyEvent};
 use crate::{
-    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DestRow, DeviceRow, MapBar, NavCardBox,
-    VolumeBar, platform, text,
+    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DestRow, DeviceRow, MapBar, MapMenu,
+    NavCardBox, VolumeBar, platform, text,
 };
 
 mod audio;
@@ -145,9 +145,11 @@ enum Action {
     MapDrag(i32, i32),
     MapZoom(i32),
     MapLocate,
-    MapGoto,
-    MapEndRoute,
+    MapMenu(bool),
+    MapMenuPick(i32),
+    MapVoice(bool),
     DestPick(i32),
+    DestChange(i32),
     DestType,
     EditField(i32),
     OskKey(SharedString),
@@ -401,10 +403,25 @@ struct State<H> {
     map_drag: (i32, i32),
     p_map_note: Last,
     p_map_label: Last,
-    p_map_position: Option<bool>,
+    p_map_away: Option<bool>,
+    p_map_voice: Option<bool>,
     p_map_guidance: Option<NavCard>,
     p_map_speed: Option<Option<(u32, Option<u16>)>>,
     p_map_search: Option<(bool, bool)>,
+    /// Home and Work are set, as shown.
+    p_map_slots: Option<(bool, bool)>,
+    /// The menu is open, until then unless used.
+    map_menu: bool,
+    menu_until: u64,
+    /// The bar's short note, until then (0: none).
+    flash: String,
+    flash_until: u64,
+    p_map_flash: Last,
+    /// The route being found is to Home or Work, asked from the menu.
+    menu_routing: bool,
+    /// Our own guidance as the navigation card shows it on the other
+    /// screens, while the phone's is not up.
+    p_nav_ours: Option<NavCard>,
 
     // ── Map > Go to ─────────────────────────────────────────────────────
     /// What is typed; the keyboard is up (else the list); a route is
@@ -413,6 +430,8 @@ struct State<H> {
     dest_typing: bool,
     dest_busy: bool,
     dest_error: bool,
+    /// Go to chooses Home or Work rather than going somewhere.
+    dest_choose: Option<MapSlot>,
     dest_rows: Rc<VecModel<DestRow>>,
     dest_top: Rc<VecModel<DestRow>>,
     p_dests: Option<Vec<Destination>>,
@@ -582,14 +601,24 @@ impl<H: Host> State<H> {
             map_drag: (0, 0),
             p_map_note: Last::default(),
             p_map_label: Last::default(),
-            p_map_position: None,
+            p_map_away: None,
+            p_map_voice: None,
             p_map_guidance: None,
             p_map_speed: None,
             p_map_search: None,
+            p_map_slots: None,
+            map_menu: false,
+            menu_until: 0,
+            flash: String::new(),
+            flash_until: 0,
+            p_map_flash: Last::default(),
+            menu_routing: false,
+            p_nav_ours: None,
             dest_query: String::new(),
             dest_typing: false,
             dest_busy: false,
             dest_error: false,
+            dest_choose: None,
             dest_rows: Rc::new(VecModel::default()),
             dest_top: Rc::new(VecModel::default()),
             p_dests: None,
@@ -765,9 +794,11 @@ impl<H: Host> State<H> {
             Action::MapDrag(dx, dy) => self.map_drag(dx, dy),
             Action::MapZoom(step) => self.host.map_zoom(step),
             Action::MapLocate => self.host.map_locate(),
-            Action::MapGoto => bridge.set_screen(DEST),
-            Action::MapEndRoute => self.host.map_end_route(),
+            Action::MapMenu(open) => self.map_menu_show(&bridge, open),
+            Action::MapMenuPick(row) => self.map_menu_pick(&bridge, row),
+            Action::MapVoice(on) => self.map_voice(on),
             Action::DestPick(index) => self.dest_pick(&bridge, index),
+            Action::DestChange(slot) => self.dest_change(ui, slot),
             Action::DestType => self.dest_type(ui),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
@@ -930,9 +961,11 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
     on!(on_map_zoom, |step| Action::MapZoom(step));
     on!(on_map_locate, || Action::MapLocate);
-    on!(on_map_goto, || Action::MapGoto);
-    on!(on_map_end_route, || Action::MapEndRoute);
+    on!(on_map_menu, |open| Action::MapMenu(open));
+    on!(on_map_menu_pick, |row| Action::MapMenuPick(row));
+    on!(on_map_voice_on, || Action::MapVoice(true));
     on!(on_dest_pick, |index| Action::DestPick(index));
+    on!(on_dest_change, |slot| Action::DestChange(slot));
     on!(on_dest_type, || Action::DestType);
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
@@ -1231,7 +1264,17 @@ impl<H: Host> Osd<H> {
         // A change the next tick has not pumped yet brings the bar up too.
         let pending = st.volume_seen && st.host.volume_generation() != st.p_volume_gen;
         let bar_up = pending || (st.volume_bar && st.now() < st.volume_bar_until);
-        // The map's bar, while the volume bar is not up.
+        // The map's menu, the bar's keys at its foot; else its bar, while
+        // the volume bar is not up.
+        if st.p_screen == MAP && st.map_menu && !bar_up {
+            let menu = self.ui.global::<MapMenu<'_>>();
+            return Some(rect(
+                menu.get_x(),
+                menu.get_y(),
+                menu.get_width(),
+                menu.get_height(),
+            ));
+        }
         if st.p_screen == MAP && !bar_up {
             let bar = self.ui.global::<MapBar<'_>>();
             return Some(rect(
@@ -1244,7 +1287,10 @@ impl<H: Host> Osd<H> {
         if !bar_up {
             // Over the phone's video the card never shows: the phone draws
             // its own route.
-            if st.p_screen == CAMERA && st.p_nav_card && st.now() < st.nav_until {
+            if st.p_screen == CAMERA
+                && st.p_nav_card
+                && (st.now() < st.nav_until || st.p_nav_ours.is_some())
+            {
                 let card = self.ui.global::<NavCardBox<'_>>();
                 return Some(rect(
                     card.get_x(),
@@ -1279,6 +1325,9 @@ impl<H: Host> Osd<H> {
             st.info_due(),
             // A route being found: looked for again soon.
             st.dest_busy.then_some(now + 50),
+            // The map's menu closing by itself, its bar's note going.
+            st.map_menu.then_some(st.menu_until),
+            (st.flash_until != 0 && st.flash_until != u64::MAX).then_some(st.flash_until),
             // The clock's next minute, while it shows the time.
             matches!(st.p_clock, Some(Some(_))).then_some(st.clock_due),
         ]

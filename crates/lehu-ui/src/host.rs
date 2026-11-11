@@ -220,6 +220,9 @@ pub struct NavCard {
     pub eta: String,
     /// What `eta` is, under it: "arrival", "to go"; empty with no eta.
     pub eta_note: String,
+    /// The manoeuvre after this one, when it comes close behind it: the
+    /// card's small "then" arrow. `None`: no hint.
+    pub then: NavArrow,
 }
 
 /// A destination Map > Go to offers: its name, and under it the town it is
@@ -230,6 +233,39 @@ pub struct Destination {
     pub name: String,
     pub detail: String,
     pub place: bool,
+}
+
+/// A place kept for the map's menu, one choice away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapSlot {
+    Home,
+    Work,
+}
+
+impl MapSlot {
+    /// The setting it is kept in.
+    pub fn key(self) -> &'static str {
+        match self {
+            MapSlot::Home => "map.home",
+            MapSlot::Work => "map.work",
+        }
+    }
+
+    /// As the menu names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            MapSlot::Home => "Home",
+            MapSlot::Work => "Work",
+        }
+    }
+
+    /// The place kept there, if any.
+    pub fn place(self, map: &settings::Map) -> Option<&settings::MapPlace> {
+        match self {
+            MapSlot::Home => map.home.as_ref(),
+            MapSlot::Work => map.work.as_ref(),
+        }
+    }
 }
 
 /// Where finding the route to a destination is.
@@ -442,8 +478,15 @@ pub trait Host {
     fn map_has_position(&self) -> bool {
         false
     }
-    /// The map's own guidance along a route, for its bar; None when it is
-    /// not guiding.
+    /// There is a position and the map was moved off it: the bar's Me key
+    /// and the menu's My position are there.
+    fn map_away(&self) -> bool {
+        false
+    }
+    /// The map's own guidance along a route (or the arrival, for a while
+    /// after a route of ours ended), for its bar and, while the map is
+    /// closed, the navigation card of the other screens; None when it is
+    /// not guiding. It goes on while the map is closed.
     fn map_guidance(&self) -> Option<&NavCard> {
         None
     }
@@ -479,6 +522,18 @@ pub trait Host {
     /// it is Idle again. Found: the map now drives the route.
     fn map_route_poll(&mut self) -> RouteStage {
         RouteStage::Idle
+    }
+    /// Destination `index` of the last search as a place to keep (Home,
+    /// Work); None when there is no such destination.
+    fn map_keep(&self, _index: usize) -> Option<settings::MapPlace> {
+        None
+    }
+    /// Find the route to a kept place, as `map_go` does for a destination.
+    fn map_go_place(&mut self, _place: &settings::MapPlace) {}
+    /// How far a kept place is from here, as Go to says it ("3.1 km",
+    /// "here"); empty when it is not known.
+    fn map_place_distance(&self, _place: &settings::MapPlace) -> String {
+        String::new()
     }
     /// Why no route was found.
     fn map_route_note(&self) -> &str {

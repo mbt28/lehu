@@ -24,8 +24,8 @@ pub mod text;
 
 pub use host::{
     ART_SIZE, Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host,
-    KnownDevice, Media, MediaKey, NavArrow, NavCard, Power, Prompt, PromptKind, RouteStage,
-    SystemNames, Update, UpdateOutcome, UpdateStage,
+    KnownDevice, MapSlot, Media, MediaKey, NavArrow, NavCard, Power, Prompt, PromptKind,
+    RouteStage, SystemNames, Update, UpdateOutcome, UpdateStage,
 };
 pub use input::Input;
 pub use keys::OsdKey;

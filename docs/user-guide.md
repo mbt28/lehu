@@ -19,16 +19,19 @@ Five tiles:
 - **Now playing**: the title, the artist and the progress. Opens the media
   page, with the album art and large previous, play/pause and next keys.
 - **Linked Phones**: the phones LEHU knows.
-- **Map**: the offline map from the SD card ([map.md](map.md)). Its bar's
-  Go to key opens the destination screen: the recent destinations, one
-  tap each, or a keyboard to type a street or a place, with the two best
-  matches over it (List shows them all). A tap on one finds the route on
-  the head unit and guides along it; the bar's Stop key ends it.
+- **Map**: the offline map from the SD card ([map.md](map.md)). The knob
+  zooms and its click opens the map's menu (so does the bar's menu key):
+  Go to, Home, Work, Voice, and Stop route while a route is driven. Go to
+  offers the recent destinations, one tap each, or a keyboard to type a
+  street or a place, with the two best matches over it (List shows them
+  all). A tap on one finds the route on the head unit and guides along
+  it. Home and Work, once chosen, are one choice away.
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,
 its distance, the road and the arrival time, over LEHU's screens and over
-the camera.
+the camera. While LEHU's own map guides along a route and the phone does
+not, the card shows the map's next turn instead, also with the map closed.
 
 ## Settings
 

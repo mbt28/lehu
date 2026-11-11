@@ -181,6 +181,7 @@ fn guide(h: &mut TestHost, arrow: NavArrow, maneuver: &str) {
         road: "Hauptstrasse".into(),
         eta: "14:52".into(),
         eta_note: "arrival".into(),
+        then: NavArrow::None,
     };
     h.nav_gen += 1;
 }
@@ -490,6 +491,7 @@ fn shots() {
         road: "Avenue de la Porte-Neuve".into(),
         eta: "14:32".into(),
         eta_note: "4 min, 3.6 km".into(),
+        then: NavArrow::None,
     });
     s.osd.host_mut().map_speed = Some((47, Some(50)));
     s.goto(MAP);
@@ -532,6 +534,7 @@ fn shots() {
         road: "Avenue John F. Kennedy".into(),
         eta: "14:32".into(),
         eta_note: "6 min, 4.1 km".into(),
+        then: NavArrow::None,
     });
     s.osd.host_mut().map_speed = Some((47, Some(50)));
     s.goto(MAP);
@@ -568,4 +571,130 @@ fn shots() {
     s.tick();
     s.tick();
     s.save("80-go-to-no-route");
+
+    // ── the map's fixed keys, its menu, Home and Work ──
+    let card = |arrow, then, maneuver: &str, distance: &str, road: &str| NavCard {
+        active: true,
+        arrow,
+        maneuver: maneuver.into(),
+        distance: distance.into(),
+        road: road.into(),
+        eta: "14:41".into(),
+        eta_note: "9 min, 4.1 km".into(),
+        then,
+    };
+    let routed = |h: &mut TestHost| {
+        names(h);
+        h.map_on_route = true;
+        h.map_guide = Some(card(
+            NavArrow::Right,
+            NavArrow::None,
+            "Turn right",
+            "1.2 km",
+            "Avenue John F. Kennedy",
+        ));
+        h.map_speed = Some((47, Some(50)));
+    };
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.save("81-map-bar");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::SlightLeft,
+        NavArrow::None,
+        "Bear left",
+        "350 m",
+        "Boulevard Grande-Duchesse Charlotte",
+    ));
+    s.goto(MAP);
+    s.save("82-map-guiding-long-road");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Rue de la Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.save("83-map-menu");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.save("84-map-menu-routed");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(3);
+    s.tick();
+    s.save("85-go-to-set-home");
+    s.bridge().invoke_dest_pick(1);
+    s.tick();
+    s.save("86-map-home-set");
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(4);
+    s.tick();
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(2);
+    s.tick();
+    s.save("87-go-to-change-home");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::Right,
+        NavArrow::Left,
+        "Turn right",
+        "200 m",
+        "Rue Goethe",
+    ));
+    s.goto(MAP);
+    s.save("88-map-then");
+    s.osd.host_mut().settings.map.voice = false;
+    s.osd.host_mut().map_away = true;
+    s.tick();
+    s.save("89-map-muted-away");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Arrive,
+        distance: "Arrived".into(),
+        maneuver: "Avenue John F. Kennedy".into(),
+        road: "Luxembourg".into(),
+        ..NavCard::default()
+    });
+    s.goto(MAP);
+    s.save("90-map-arrived");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::Right,
+        NavArrow::Left,
+        "Turn right",
+        "200 m",
+        "Rue Goethe",
+    ));
+    s.save("91-home-our-card");
+    let mut s = Shot::new(night_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Rue de la Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    s.goto(MAP);
+    s.save("92-map-guiding-night");
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.save("93-map-menu-night");
 }
