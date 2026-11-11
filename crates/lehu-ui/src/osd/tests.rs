@@ -3106,6 +3106,173 @@ fn choosing_home_offers_no_nearest_places() {
     assert!(br(&osd).get_dest_typing(), "nothing to choose from: typing");
 }
 
+// ── the route shown whole ────────────────────────────────────────────────
+
+fn kirchberg() -> crate::host::RoutePreview {
+    crate::host::RoutePreview {
+        name: "Kirchberg".into(),
+        distance: "4.1 km".into(),
+        time: "9 min".into(),
+        eta: "14:41".into(),
+    }
+}
+
+/// Go to, a destination picked with the knob, its route found and shown
+/// whole.
+fn previewing() -> Osd<TestHost> {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(screen(&osd), DEST);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "dest-0");
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Preview].into();
+    osd.host_mut().map_preview = Some(kirchberg());
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapGo(0)));
+    tick(&mut osd);
+    osd
+}
+
+#[test]
+fn a_route_found_is_shown_whole_then_starts_by_itself() {
+    let mut osd = previewing();
+    // Back on the map, the bar saying where to, how far, how long, when;
+    // Start and Cancel in its keys' place, the ring on Start.
+    assert_eq!(screen(&osd), MAP);
+    assert!(br(&osd).get_map_preview());
+    assert_eq!(prop!(osd, get_map_preview_name), "Kirchberg");
+    assert_eq!(
+        prop!(osd, get_map_preview_line),
+        "4.1 km · 9 min · arrival 14:41"
+    );
+    assert_eq!(br(&osd).get_map_preview_ring(), 1);
+    assert_eq!(br(&osd).get_map_preview_secs(), 8);
+    assert_eq!(window(&osd), (0, 396, 800, 84));
+    // It counts down, and the screens tick for each second.
+    advance(&mut osd, 2500);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_preview_secs(), 6);
+    assert!(osd.next_due().is_some_and(|d| d.as_millis() <= 500));
+    // Left alone, it starts by itself.
+    advance(&mut osd, 5501);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+    assert!(br(&osd).get_map_on_route());
+    assert_eq!(window(&osd), (0, 416, 800, 64));
+    // The knob zooms again.
+    press(&mut osd, OsdKey::Next);
+    assert!(osd.host().has(&Call::MapZoom(1)));
+}
+
+#[test]
+fn the_knob_starts_or_cancels_the_route_shown_whole() {
+    // A click starts it.
+    let mut osd = previewing();
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+    assert!(!br(&osd).get_map_menu_open(), "the click did not open the menu");
+    // A turn moves the ring to Cancel, and waits again; a click cancels.
+    let mut osd = previewing();
+    advance(&mut osd, 5000);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(br(&osd).get_map_preview_ring(), 2);
+    assert_eq!(br(&osd).get_map_preview_secs(), 8);
+    assert!(!osd.host().has(&Call::MapZoom(1)), "turns do not zoom");
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(br(&osd).get_map_preview_ring(), 1);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapPreviewCancel));
+    assert!(!osd.host().has(&Call::MapPreviewStart));
+    assert_eq!(screen(&osd), MAP);
+    assert!(!br(&osd).get_map_on_route());
+    // Back cancels; the map stays.
+    let mut osd = previewing();
+    press(&mut osd, OsdKey::Back);
+    assert!(osd.host().has(&Call::MapPreviewCancel));
+    assert_eq!(screen(&osd), MAP);
+    advance(&mut osd, 9000);
+    tick(&mut osd);
+    assert!(!osd.host().has(&Call::MapPreviewStart), "not after it");
+}
+
+#[test]
+fn the_route_shown_whole_by_touch() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    host.map_stages = [RouteStage::Preview].into();
+    host.map_preview = Some(crate::host::RoutePreview {
+        eta: String::new(),
+        ..kirchberg()
+    });
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    tick(&mut osd);
+    // No ring for a finger; with the clock not set, no arrival.
+    assert!(br(&osd).get_map_preview());
+    assert_eq!(br(&osd).get_map_preview_ring(), 0);
+    assert_eq!(prop!(osd, get_map_preview_line), "4.1 km · 9 min");
+    // A drag looks round it, and the start waits.
+    advance(&mut osd, 6000);
+    osd.pointer(400, 200, true);
+    tick(&mut osd);
+    osd.pointer(300, 200, true);
+    tick(&mut osd);
+    osd.pointer(300, 200, false);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPan(100, 0)));
+    advance(&mut osd, 3000);
+    tick(&mut osd);
+    assert!(br(&osd).get_map_preview());
+    // A tap on Start (where the - + and menu keys are).
+    osd.pointer(600, 450, true);
+    tick(&mut osd);
+    osd.pointer(600, 450, false);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+}
+
+#[test]
+fn leaving_the_map_starts_the_route_shown_whole() {
+    let mut osd = previewing();
+    goto(&mut osd, HOME);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+}
+
+#[test]
+fn home_from_the_menu_is_driven_at_once() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    host.map_stages = [RouteStage::Found].into();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(3);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGoPlace("Gare".into())));
+    assert!(!br(&osd).get_map_preview());
+}
+
 // ── the map's menu, Home and Work ────────────────────────────────────────
 
 fn window(osd: &Osd<TestHost>) -> (u32, u32, u32, u32) {

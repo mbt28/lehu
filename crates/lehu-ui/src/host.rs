@@ -298,6 +298,19 @@ impl MapSlot {
     }
 }
 
+/// A route Go to found, shown whole on the map before it is driven: where
+/// to, how far, how long and when it arrives.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutePreview {
+    pub name: String,
+    /// "12 km"
+    pub distance: String,
+    /// "14 min"
+    pub time: String,
+    /// The arrival, "14:46"; empty while the clock is not set.
+    pub eta: String,
+}
+
 /// Where finding the route to a destination is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RouteStage {
@@ -308,6 +321,11 @@ pub enum RouteStage {
     Finding,
     /// Found: the map drives it now.
     Found,
+    /// Found, and shown whole on the map (`map_preview` says where to,
+    /// how far, how long): `map_preview_start` drives it,
+    /// `map_preview_cancel` drops it. Go to's destinations come this way;
+    /// Home, Work and a route found anew are driven at once.
+    Preview,
     /// None found: `map_route_note` says why.
     Failed,
 }
@@ -574,6 +592,14 @@ pub trait Host {
     fn map_route_poll(&mut self) -> RouteStage {
         RouteStage::Idle
     }
+    /// The route found and shown whole, until it is started or dropped.
+    fn map_preview(&self) -> Option<&RoutePreview> {
+        None
+    }
+    /// Drive the route shown whole, as a route found is driven.
+    fn map_preview_start(&mut self) {}
+    /// Drop it: the map as it was before, a route driven before going on.
+    fn map_preview_cancel(&mut self) {}
     /// Destination `index` of the last search as a place to keep (Home,
     /// Work); None when there is no such destination.
     fn map_keep(&self, _index: usize) -> Option<settings::MapPlace> {

@@ -47,6 +47,11 @@ const MAP_ARRIVAL_MS: u64 = 10_000;
 /// to it in good time anyway.
 const THEN_HINT_M: u32 = 300;
 
+/// A route shown whole (the preview) is fitted inside the panel less this
+/// much at its left, top, right and bottom: some room round it, and at the
+/// foot the map's bar while it shows the route (84 px, MapBar.height).
+const MAP_PREVIEW_INSET: [u32; 4] = [32, 32, 32, 84 + 24];
+
 /// Map > Go to offers this many destinations, and remembers this many.
 const MAP_RESULTS: usize = 20;
 const MAP_RECENT: usize = 5;
@@ -57,6 +62,16 @@ type Finding = (std::sync::mpsc::Receiver<Result<Track, String>>, Found);
 /// A point, world pixels at zoom 22, and the way we go there (x right,
 /// y down) while we move.
 type Here = (Option<(i64, i64)>, Option<(i32, i32)>);
+
+/// A route found and shown whole, before it is driven: the drive, where
+/// to, what the bar says, the line on the map and the view that holds it.
+struct Preview {
+    track: Track,
+    to: Found,
+    card: lehu_ui::RoutePreview,
+    route: Route,
+    view: View,
+}
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,6 +263,9 @@ pub struct AppHost {
     map_found: Vec<Found>,
     map_dests: Vec<Destination>,
     map_finding: Option<Finding>,
+    /// The route being found is shown whole once found; and the one shown.
+    map_finding_preview: bool,
+    map_preview: Option<Preview>,
     map_route_note: String,
     /// The drive is a route found here, not the replayed one; where the
     /// last such route ended, the position from then on.
@@ -360,6 +378,8 @@ impl AppHost {
             map_found: Vec::new(),
             map_dests: Vec::new(),
             map_finding: None,
+            map_finding_preview: false,
+            map_preview: None,
             map_route_note: String::new(),
             map_routed: false,
             map_left_at: None,
@@ -824,6 +844,20 @@ impl AppHost {
         let (Some(viewer), Some(set)) = (&self.map, &self.map_set) else {
             return;
         };
+        // A route shown whole: still, north up, all of it in view.
+        if let Some(p) = &self.map_preview {
+            let marker = match self.map_here() {
+                (Some((x, y)), Some(heading)) => Some(Marker::Arrow(x, y, heading)),
+                (Some((x, y)), None) => Some(Marker::Dot(x, y)),
+                (None, _) => None,
+            };
+            viewer.set_drive(None);
+            viewer.follow(None);
+            viewer.set_position(marker);
+            viewer.set_route(Some(p.route.clone()));
+            viewer.set_view(p.view);
+            return;
+        }
         viewer.set_position(self.map_marker);
         viewer.set_route(self.map_route.clone());
         match (&self.map_track, self.map_track_start) {
@@ -1096,6 +1130,7 @@ impl AppHost {
     /// Find the route from where we are to `to`, on a thread of its own;
     /// `map_route_poll` says how it goes.
     fn map_route_to(&mut self, to: Found) {
+        self.map_finding_preview = false;
         let (tx, rx) = std::sync::mpsc::channel();
         let (from, heading) = self.map_here();
         match (self.map_router.clone(), from) {
@@ -1123,6 +1158,51 @@ impl AppHost {
         self.map_finding = Some((rx, to));
     }
 
+    /// A route found, shown whole before it is driven: what the bar says,
+    /// and the view that holds it (the map's own when there is no map).
+    fn map_preview_of(&self, track: Track, to: Found) -> Preview {
+        let line = track.line();
+        let view = match (&self.map_set, &self.map_display) {
+            (Some(set), Some(display)) => View::fitting(
+                &line,
+                (display.width(), display.height()),
+                MAP_PREVIEW_INSET,
+                set.min_zoom,
+                set.top_zoom(),
+            )
+            .map(|mut v| {
+                v.clamp(&set.bounds);
+                v
+            }),
+            _ => None,
+        }
+        .unwrap_or(self.map_view);
+        let minutes = track.duration().div_ceil(60_000).max(1);
+        let time = if minutes < 60 {
+            format!("{minutes} min")
+        } else {
+            format!("{} h {:02} min", minutes / 60, minutes % 60)
+        };
+        let eta = local_time_ms(self.zone_min)
+            .map(|now| {
+                let at = (now + track.duration()) / 60_000 % (24 * 60);
+                format!("{:02}:{:02}", at / 60, at % 60)
+            })
+            .unwrap_or_default();
+        Preview {
+            card: lehu_ui::RoutePreview {
+                name: to.name.clone(),
+                distance: distance(track.metres()),
+                time,
+                eta,
+            },
+            route: Route::from(line),
+            view,
+            track,
+            to,
+        }
+    }
+
     /// A kept place as a destination: where it is, and how far from here.
     fn found_of(&self, place: &settings::MapPlace) -> Option<Found> {
         let (x, y) = lehu_map::parse_position(&place.at).ok().flatten()?;
@@ -1142,7 +1222,10 @@ impl AppHost {
     /// otherwise the one it was given.
     fn map_view_now(&self) -> View {
         match &self.map {
-            Some(viewer) if self.map_follow && self.map_track.is_some() => {
+            // A route shown whole is not where the map was.
+            Some(viewer)
+                if self.map_follow && self.map_track.is_some() && self.map_preview.is_none() =>
+            {
                 // Its zoom is the one asked for, not one closer near a turn.
                 View {
                     zoom: self.map_view.zoom,
@@ -1436,6 +1519,13 @@ impl Host for AppHost {
     }
 
     fn map_pan(&mut self, dx: i32, dy: i32) {
+        // A route shown whole is looked at round itself.
+        if let (Some(p), Some(set), Some(viewer)) = (&mut self.map_preview, &self.map_set, &self.map)
+        {
+            p.view.pan(dx, dy, &set.bounds);
+            viewer.set_view(p.view);
+            return;
+        }
         // Moved by hand: from where it was, it stays where it was put,
         // north up.
         self.map_view = self.map_view_now();
@@ -1457,6 +1547,11 @@ impl Host for AppHost {
         let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
             return;
         };
+        if let Some(p) = &mut self.map_preview {
+            p.view.zoom_by(step, set.min_zoom, set.top_zoom());
+            viewer.set_view(p.view);
+            return;
+        }
         self.map_view.zoom_by(step, set.min_zoom, set.top_zoom());
         if self.map_follow && self.map_track.is_some() {
             viewer.follow(Some(self.map_view.zoom));
@@ -1508,7 +1603,10 @@ impl Host for AppHost {
     }
 
     fn map_away(&self) -> bool {
-        self.map.is_some() && self.map_position.is_some() && !self.map_follow
+        self.map.is_some()
+            && self.map_position.is_some()
+            && !self.map_follow
+            && self.map_preview.is_none()
     }
 
     fn map_note(&self) -> &str {
@@ -1577,6 +1675,27 @@ impl Host for AppHost {
     fn map_go(&mut self, index: usize) {
         if let Some(to) = self.map_found.get(index).cloned() {
             self.map_route_to(to);
+            // Shown whole first: Home and Work, and a route found anew,
+            // are driven at once.
+            self.map_finding_preview = true;
+        }
+    }
+
+    fn map_preview(&self) -> Option<&lehu_ui::RoutePreview> {
+        self.map_preview.as_ref().map(|p| &p.card)
+    }
+
+    fn map_preview_start(&mut self) {
+        if let Some(p) = self.map_preview.take() {
+            log::info!("map: driving to {}", p.to.name);
+            self.map_take_route(p.track, &p.to);
+        }
+    }
+
+    fn map_preview_cancel(&mut self) {
+        if let Some(p) = self.map_preview.take() {
+            log::info!("map: not driving to {}", p.to.name);
+            self.map_show();
         }
     }
 
@@ -1628,6 +1747,11 @@ impl Host for AppHost {
             return RouteStage::Idle;
         };
         match answer {
+            Ok(track) if self.map_finding_preview => {
+                self.map_preview = Some(self.map_preview_of(track, to));
+                self.map_show();
+                RouteStage::Preview
+            }
             Ok(track) => {
                 self.map_take_route(track, &to);
                 RouteStage::Found

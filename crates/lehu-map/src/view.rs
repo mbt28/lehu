@@ -40,6 +40,45 @@ impl View {
         self.zoom = z as u8;
     }
 
+    /// The view that shows all of `points` (world pixels at `WORLD_Z`)
+    /// on a panel of `panel` pixels less `inset` pixels at its left, top,
+    /// right and bottom (where the screens cover the map): the closest
+    /// zoom in `min..=max` at which they fit (`min` when none does), their
+    /// middle in the middle of what is left. None for no points.
+    pub fn fitting(
+        points: &[(i64, i64)],
+        panel: (u32, u32),
+        inset: [u32; 4],
+        min: u8,
+        max: u8,
+    ) -> Option<Self> {
+        let (&first, rest) = points.split_first()?;
+        let (mut x0, mut y0, mut x1, mut y1) = (first.0, first.1, first.0, first.1);
+        for &(x, y) in rest {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        let [left, top, right, bottom] = inset.map(i64::from);
+        let w = (i64::from(panel.0) - left - right).max(1);
+        let h = (i64::from(panel.1) - top - bottom).max(1);
+        let max = max.min(WORLD_Z);
+        let zoom = (min..=max)
+            .rev()
+            .find(|&z| {
+                let s = WORLD_Z - z;
+                ((x1 - x0) >> s) < w && ((y1 - y0) >> s) < h
+            })
+            .unwrap_or(min.min(max));
+        let s = WORLD_Z - zoom;
+        // The middle of what is left, from the panel's middle, in pixels.
+        let dx = left + w / 2 - i64::from(panel.0 / 2);
+        let dy = top + h / 2 - i64::from(panel.1 / 2);
+        Some(Self {
+            zoom,
+            x: (x0 + x1) / 2 - (dx << s),
+            y: (y0 + y1) / 2 - (dy << s),
+        })
+    }
+
     pub fn clamp(&mut self, bounds: &[i64; 4]) {
         self.x = self.x.clamp(bounds[0], bounds[2]);
         self.y = self.y.clamp(bounds[1], bounds[3]);

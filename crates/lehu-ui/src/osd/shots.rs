@@ -774,4 +774,36 @@ fn shots() {
     s.key(OsdKey::Ok);
     s.key(OsdKey::Prev);
     s.save("101-map-route-cameras");
+
+    // ── the route shown whole ──
+    let preview = |h: &mut TestHost| {
+        names(h);
+        h.map_stages = [crate::host::RouteStage::Preview].into();
+        h.map_preview = Some(crate::host::RoutePreview {
+            name: "Boulevard Grande-Duchesse Charlotte".into(),
+            distance: "12 km".into(),
+            time: "1 h 05 min".into(),
+            eta: "15:37".into(),
+        });
+    };
+    let mut s = Shot::new(base_host());
+    preview(s.osd.host_mut());
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.key(OsdKey::Ok);
+    s.save("102-map-preview");
+    s.key(OsdKey::Next);
+    s.save("103-map-preview-cancel");
+    let mut s = Shot::new(night_host());
+    preview(s.osd.host_mut());
+    s.osd.host_mut().map_preview.as_mut().unwrap().name = "Kirchberg".into();
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.osd.st.skew += 3000;
+    s.tick();
+    s.save("104-map-preview-night-touch");
 }

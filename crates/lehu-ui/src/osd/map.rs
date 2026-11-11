@@ -19,6 +19,13 @@
 //! chooses, a tap on the map beside it or on the menu key closes it, and
 //! so does leaving it alone a few seconds. Home and Work route there at
 //! once; one not set yet opens Go to to choose it (see `dest.rs`).
+//!
+//! A route Go to found is shown whole first, the bar saying where to, how
+//! far, how long and when, its keys Start and Cancel in place of the four.
+//! The knob's ring is on Start: a turn moves it to Cancel and back, a click
+//! takes the one ringed, Back cancels; a tap takes either. Left alone it
+//! starts by itself after a few seconds, and so it does when the map is
+//! left.
 
 use lehu_core::settings::{MapPlace, RouteBy};
 use slint::platform::Key;
@@ -37,6 +44,9 @@ const STEP_Y: i32 = 120;
 pub(super) const MENU_MS: u64 = 8000;
 /// A note in the bar ("Home set") stays this long.
 pub(super) const FLASH_MS: u64 = 4000;
+/// A route Go to found is shown whole this long, after the last input,
+/// then driven: a driver never has to touch it.
+pub(super) const PREVIEW_MS: u64 = 8000;
 
 /// The menu's rows, as `Bridge.map-menu-pick` numbers them.
 const PICK_POSITION: i32 = 0;
@@ -63,6 +73,10 @@ impl<H: Host> State<H> {
     /// A finger went down on the map: drags count from here.
     pub(super) fn map_drag_start(&mut self) {
         self.map_drag = (0, 0);
+        // Looked at: the route shown whole waits.
+        if self.preview_until != 0 {
+            self.preview_until = self.now() + PREVIEW_MS;
+        }
     }
 
     /// The finger is (`dx`, `dy`) from where it went down: the map follows
@@ -78,6 +92,10 @@ impl<H: Host> State<H> {
 
     pub(super) fn map_key(&mut self, ui: &AppWindow, nav: OsdKey, repeat: bool) {
         let bridge = ui.global::<Bridge<'_>>();
+        if self.preview_until != 0 {
+            self.preview_key(&bridge, nav, repeat);
+            return;
+        }
         if self.map_menu {
             // The menu's rows, as any list: Tab and Backtab move the ring.
             self.menu_until = self.now() + MENU_MS;
@@ -116,6 +134,65 @@ impl<H: Host> State<H> {
             }
             _ => {}
         }
+    }
+
+    /// A key while a route is shown whole: the knob moves the ring between
+    /// Start and Cancel, its click takes the one ringed (Start with none),
+    /// Back cancels, the arrows move the map. Any of them is the driver
+    /// looking: the start waits again.
+    fn preview_key(&mut self, bridge: &Bridge<'_>, nav: OsdKey, repeat: bool) {
+        self.preview_until = self.now() + PREVIEW_MS;
+        match nav {
+            OsdKey::Next | OsdKey::Prev => {
+                // Two keys: either way is the other one (Start first).
+                self.preview_ring = if self.preview_ring == 1 { 2 } else { 1 };
+                bridge.set_map_preview_ring(self.preview_ring);
+            }
+            OsdKey::Ok if !repeat => self.preview_end(bridge, self.preview_ring != 2),
+            OsdKey::Back | OsdKey::Erase if !repeat => self.preview_end(bridge, false),
+            OsdKey::Up => self.host.map_pan(0, -STEP_Y),
+            OsdKey::Down => self.host.map_pan(0, STEP_Y),
+            OsdKey::Left => self.host.map_pan(-STEP_X, 0),
+            OsdKey::Right => self.host.map_pan(STEP_X, 0),
+            _ => {}
+        }
+    }
+
+    /// A route found and shown whole: on the bar, the ring on Start for
+    /// someone on the knob, until it starts by itself.
+    pub(super) fn preview_open(&mut self, bridge: &Bridge<'_>) {
+        let Some(p) = self.host.map_preview() else {
+            return;
+        };
+        let line = match p.eta.as_str() {
+            "" => format!("{} · {}", p.distance, p.time),
+            eta => format!("{} · {} · arrival {eta}", p.distance, p.time),
+        };
+        let name = p.name.clone();
+        bridge.set_map_preview_name(clean(&mut self.scratch, &name));
+        bridge.set_map_preview_line(clean(&mut self.scratch, &line));
+        self.map_menu_show(bridge, false);
+        self.preview_until = self.now() + PREVIEW_MS;
+        self.preview_ring = i32::from(self.keys_recent());
+        self.p_preview_secs = None;
+        bridge.set_map_preview_ring(self.preview_ring);
+        bridge.set_map_preview(true);
+    }
+
+    /// The route shown whole driven (`start`), or dropped.
+    pub(super) fn preview_end(&mut self, bridge: &Bridge<'_>, start: bool) {
+        if self.preview_until == 0 {
+            return;
+        }
+        self.preview_until = 0;
+        self.preview_ring = 0;
+        if start {
+            self.host.map_preview_start();
+        } else {
+            self.host.map_preview_cancel();
+        }
+        bridge.set_map_preview(false);
+        bridge.set_map_preview_ring(0);
     }
 
     /// Open or close the menu. Opened, its Home and Work say where they
@@ -312,11 +389,23 @@ impl<H: Host> State<H> {
     /// when they changed.
     pub(super) fn pump_map(&mut self, bridge: &Bridge<'_>, screen: i32, now: u64) {
         if screen != MAP {
-            // Gone with its screen.
+            // Gone with its screen; a route shown whole is driven.
             if self.map_menu {
                 self.map_menu_show(bridge, false);
             }
+            self.preview_end(bridge, true);
             return;
+        }
+        if self.preview_until != 0 {
+            if now >= self.preview_until {
+                self.preview_end(bridge, true);
+            } else {
+                let secs = (self.preview_until - now).div_ceil(1000);
+                if self.p_preview_secs != Some(secs) {
+                    self.p_preview_secs = Some(secs);
+                    bridge.set_map_preview_secs(secs as i32);
+                }
+            }
         }
         if self.map_menu && now >= self.menu_until {
             self.map_menu_show(bridge, false);

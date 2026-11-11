@@ -40,6 +40,8 @@ pub enum Call {
     MapGoPlace(String),
     MapEndRoute,
     MapReroute,
+    MapPreviewStart,
+    MapPreviewCancel,
     SetKeyLearning(bool),
     BtPromptAccept,
     BtPromptCancel,
@@ -104,6 +106,8 @@ pub struct TestHost {
     pub map_stages: std::collections::VecDeque<RouteStage>,
     pub map_route_note: String,
     pub map_on_route: bool,
+    /// A route shown whole (RouteStage::Preview).
+    pub map_preview: Option<crate::host::RoutePreview>,
     /// The map was moved off where we are.
     pub map_away: bool,
     pub learned_key: Option<u32>,
@@ -190,6 +194,7 @@ impl TestHost {
             map_stages: std::collections::VecDeque::new(),
             map_route_note: String::new(),
             map_on_route: false,
+            map_preview: None,
             map_away: false,
             learned_key: None,
             bt_available: true,
@@ -561,6 +566,22 @@ impl Host for TestHost {
     fn map_end_route(&mut self) {
         self.calls.push(Call::MapEndRoute);
         self.map_on_route = false;
+    }
+
+    fn map_preview(&self) -> Option<&crate::host::RoutePreview> {
+        self.map_preview.as_ref()
+    }
+
+    fn map_preview_start(&mut self) {
+        self.calls.push(Call::MapPreviewStart);
+        if self.map_preview.take().is_some() {
+            self.map_on_route = true;
+        }
+    }
+
+    fn map_preview_cancel(&mut self) {
+        self.calls.push(Call::MapPreviewCancel);
+        self.map_preview = None;
     }
 
     fn map_reroute(&mut self) -> bool {

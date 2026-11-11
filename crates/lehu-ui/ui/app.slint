@@ -253,6 +253,15 @@ export global Bridge {
     // "Home set", "Finding the route", why there is none.
     in property <string> map-flash;
     in property <bool> map-voice;             // spoken prompts on; off: the bar's muted key
+    // A route Go to found, shown whole: the bar says where to and how
+    // far, how long, when; its keys are Start and Cancel. It starts by
+    // itself in `map-preview-secs` seconds. The knob's ring on its keys:
+    // 1 Start, 2 Cancel, 0 none (touch).
+    in property <bool> map-preview;
+    in property <string> map-preview-name;
+    in property <string> map-preview-line;
+    in property <int> map-preview-secs;
+    in property <int> map-preview-ring;
     // The map's menu (the knob's click, the bar's menu key) and what its
     // Home and Work rows say under their names.
     in property <bool> map-menu-open;
@@ -318,6 +327,8 @@ export global Bridge {
                                               // Route's: 7 Fastest, 8 Shortest,
                                               // 9 Avoid motorways, 10 Speed cameras
     callback map-voice-on();                  // the bar's muted key: the voice on again
+    callback map-preview-start();             // the route shown whole: drive it
+    callback map-preview-cancel();            // or not
     callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
     callback dest-pick(int);                  // a tap on a destination: drive there
     callback dest-type();                     // from the list back to the keyboard
@@ -1280,7 +1291,7 @@ export global CameraPanel {
 // is open, the menu's column.
 export global MapBar {
     // Taller while it guides: the next turn and the keys side by side.
-    out property <length> height: Bridge.map-guiding ? 84px : 64px;
+    out property <length> height: Bridge.map-guiding || Bridge.map-preview ? 84px : 64px;
     out property <length> x: 0px;
     out property <length> y: 480px - root.height;
     out property <length> width: 800px;
@@ -2445,10 +2456,11 @@ component ScreenMap inherits Rectangle {
     // Where the keys start, and where the words end.
     property <length> keys-x: MapBar.width - MapBar.keys-w + MapBar.pad;
     property <length> key-y: MapBar.height - MapBar.pad - MapBar.key-h;
-    property <length> me-x: root.keys-x - (Bridge.map-away ? MapBar.key-w + MapBar.spacing : 0px);
+    property <bool> me: Bridge.map-away && !Bridge.map-preview;
+    property <length> me-x: root.keys-x - (root.me ? MapBar.key-w + MapBar.spacing : 0px);
     // Guiding, the muted key is over the keys, beside the attribution: the
-    // turn keeps the room.
-    property <bool> mute-up: Bridge.map-guiding;
+    // turn keeps the room. A route shown whole has no muted key.
+    property <bool> mute-up: Bridge.map-guiding || Bridge.map-preview;
     property <length> mute-x: root.me-x
         - (Bridge.map-voice || root.mute-up ? 0px : MapBar.mute-w + MapBar.spacing);
     TouchArea {
@@ -2488,7 +2500,48 @@ component ScreenMap inherits Rectangle {
         Rectangle {
             x: 0px;
             width: root.mute-x - MapBar.spacing;
-            if Bridge.map-flash != "": HorizontalLayout {
+            // A route shown whole: the flag, where to, and how far, how
+            // long, when.
+            if Bridge.map-preview: HorizontalLayout {
+                padding: 6px;
+                padding-left: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 12px;
+                        background: Theme.ok;
+                        Icon {
+                            x: 8px;
+                            y: 8px;
+                            kind: "nav10";
+                            view: 48;
+                            size: 48px;
+                            weight: 6px;
+                            ink: Theme.bg;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: Bridge.map-preview-name;
+                        color: Theme.text;
+                        font-size: 20px;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: Bridge.map-preview-line;
+                        color: Theme.dim;
+                        font-size: 16px;
+                        overflow: elide;
+                    }
+                }
+            }
+            if !Bridge.map-preview && Bridge.map-flash != "": HorizontalLayout {
                 padding-left: 24px;
                 Text {
                     text: Bridge.map-flash;
@@ -2498,7 +2551,7 @@ component ScreenMap inherits Rectangle {
                     overflow: elide;
                 }
             }
-            if Bridge.map-flash == "" && Bridge.map-guiding: HorizontalLayout {
+            if !Bridge.map-preview && Bridge.map-flash == "" && Bridge.map-guiding: HorizontalLayout {
                 padding: 6px;
                 padding-left: 10px;
                 spacing: 8px;
@@ -2617,7 +2670,7 @@ component ScreenMap inherits Rectangle {
                     }
                 }
             }
-            if Bridge.map-flash == "" && !Bridge.map-guiding: VerticalLayout {
+            if !Bridge.map-preview && Bridge.map-flash == "" && !Bridge.map-guiding: VerticalLayout {
                 padding-left: 24px;
                 alignment: center;
                 Text {
@@ -2635,7 +2688,7 @@ component ScreenMap inherits Rectangle {
             }
         }
         // Guiding, the bar is taller: the attribution over the keys.
-        if Bridge.map-guiding: Text {
+        if root.mute-up: Text {
             x: root.keys-x;
             y: 2px;
             width: MapBar.width - root.keys-x - MapBar.pad;
@@ -2647,7 +2700,7 @@ component ScreenMap inherits Rectangle {
             vertical-alignment: center;
         }
         // The voice is off: a tap turns it on again.
-        if !Bridge.map-voice: Rectangle {
+        if !Bridge.map-voice && !Bridge.map-preview: Rectangle {
             x: root.mute-up ? root.keys-x : root.mute-x;
             y: root.mute-up ? 0px : root.key-y;
             width: MapBar.mute-w;
@@ -2663,37 +2716,58 @@ component ScreenMap inherits Rectangle {
                 size: root.mute-up ? 20px : 28px;
             }
         }
-        if Bridge.map-away: MapKey {
+        if root.me: MapKey {
             x: root.me-x;
             y: root.key-y;
             label: "Me";
             pressed => { Bridge.map-locate(); }
         }
-        MapKey {
+        if !Bridge.map-preview: MapKey {
             x: root.keys-x;
             y: root.key-y;
             label: "-";
             pressed => { Bridge.map-zoom(-1); }
         }
-        MapKey {
+        if !Bridge.map-preview: MapKey {
             x: root.keys-x + MapBar.key-w + MapBar.spacing;
             y: root.key-y;
             label: "+";
             pressed => { Bridge.map-zoom(1); }
         }
-        MapKey {
+        if !Bridge.map-preview: MapKey {
             x: root.keys-x + 2 * (MapBar.key-w + MapBar.spacing);
             y: root.key-y;
             icon: "menu";
             background: Bridge.map-menu-open ? Theme.surface2 : Theme.surface;
             pressed => { Bridge.map-menu(!Bridge.map-menu-open); }
         }
-        MapKey {
+        if !Bridge.map-preview: MapKey {
             x: root.keys-x + 3 * (MapBar.key-w + MapBar.spacing);
             y: root.key-y;
             width: MapBar.back-w;
             label: "Back";
             pressed => { Bridge.back(); }
+        }
+        // A route shown whole: Start where - + and the menu key are,
+        // Cancel where Back is.
+        if Bridge.map-preview: MapKey {
+            x: root.keys-x;
+            y: root.key-y;
+            width: 3 * MapBar.key-w + 2 * MapBar.spacing;
+            label: "Start in " + Bridge.map-preview-secs + " s";
+            background: Theme.accent;
+            border-width: Bridge.map-preview-ring == 1 ? 3px : 0px;
+            border-color: Theme.focus;
+            pressed => { Bridge.map-preview-start(); }
+        }
+        if Bridge.map-preview: MapKey {
+            x: root.keys-x + 3 * (MapBar.key-w + MapBar.spacing);
+            y: root.key-y;
+            width: MapBar.back-w;
+            label: "Cancel";
+            border-width: Bridge.map-preview-ring == 2 ? 3px : 0px;
+            border-color: Theme.focus;
+            pressed => { Bridge.map-preview-cancel(); }
         }
     }
     // The menu: over the right of the map, above the bar's keys, which

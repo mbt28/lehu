@@ -247,6 +247,20 @@ impl<H: Host> State<H> {
                     self.map_flash("", 0);
                 }
             }
+            // Shown whole on the map, before it is driven; elsewhere (Go
+            // to was left meanwhile) driven at once.
+            RouteStage::Preview => {
+                if menu {
+                    self.map_flash("", 0);
+                }
+                match bridge.get_screen() {
+                    DEST | MAP => {
+                        bridge.set_screen(MAP);
+                        self.preview_open(bridge);
+                    }
+                    _ => self.host.map_preview_start(),
+                }
+            }
             // From the menu, the bar says why; on Go to, its header.
             RouteStage::Failed if menu => {
                 let note = self.host.map_route_note().to_string();

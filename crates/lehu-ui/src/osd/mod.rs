@@ -148,6 +148,7 @@ enum Action {
     MapMenu(bool),
     MapMenuPick(i32),
     MapVoice(bool),
+    MapPreview(bool),
     DestPick(i32),
     DestChange(i32),
     DestType,
@@ -429,6 +430,12 @@ struct State<H> {
     p_map_flash: Last,
     /// The route being found is to Home or Work, asked from the menu.
     menu_routing: bool,
+    /// A route shown whole: it starts by itself then (0: none shown); the
+    /// knob's ring on its keys (1 Start, 2 Cancel, 0 none); the seconds
+    /// left, as shown.
+    preview_until: u64,
+    preview_ring: i32,
+    p_preview_secs: Option<u64>,
     /// Our own guidance as the navigation card shows it on the other
     /// screens, while the phone's is not up.
     p_nav_ours: Option<NavCard>,
@@ -631,6 +638,9 @@ impl<H: Host> State<H> {
             flash_until: 0,
             p_map_flash: Last::default(),
             menu_routing: false,
+            preview_until: 0,
+            preview_ring: 0,
+            p_preview_secs: None,
             p_nav_ours: None,
             dest_query: String::new(),
             dest_typing: false,
@@ -747,6 +757,11 @@ impl<H: Host> State<H> {
         if bridge.get_screen() == DEST && self.dest_near_close(bridge) {
             return true;
         }
+        // A route shown whole: dropped, the map stays.
+        if bridge.get_screen() == MAP && self.preview_until != 0 {
+            self.preview_end(bridge, false);
+            return true;
+        }
         match self.parent(bridge.get_screen()) {
             Some(parent) => {
                 bridge.set_screen(parent);
@@ -820,6 +835,7 @@ impl<H: Host> State<H> {
             Action::MapMenu(open) => self.map_menu_show(&bridge, open),
             Action::MapMenuPick(row) => self.map_menu_pick(&bridge, row),
             Action::MapVoice(on) => self.map_voice(on),
+            Action::MapPreview(start) => self.preview_end(&bridge, start),
             Action::DestPick(index) => self.dest_pick(&bridge, index),
             Action::DestChange(slot) => self.dest_change(ui, slot),
             Action::DestType => self.dest_type(ui),
@@ -988,6 +1004,8 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_map_menu, |open| Action::MapMenu(open));
     on!(on_map_menu_pick, |row| Action::MapMenuPick(row));
     on!(on_map_voice_on, || Action::MapVoice(true));
+    on!(on_map_preview_start, || Action::MapPreview(true));
+    on!(on_map_preview_cancel, || Action::MapPreview(false));
     on!(on_dest_pick, |index| Action::DestPick(index));
     on!(on_dest_change, |slot| Action::DestChange(slot));
     on!(on_dest_type, || Action::DestType);
@@ -1352,6 +1370,11 @@ impl<H: Host> Osd<H> {
             st.dest_busy.then_some(now + 50),
             // The map's menu closing by itself, its bar's note going.
             st.map_menu.then_some(st.menu_until),
+            // A route shown whole: its next second, and its start.
+            (st.preview_until != 0).then(|| {
+                let left = st.preview_until.saturating_sub(now);
+                now + (left.saturating_sub(1) % 1000) + 1
+            }),
             (st.flash_until != 0 && st.flash_until != u64::MAX).then_some(st.flash_until),
             // The clock's next minute, while it shows the time.
             matches!(st.p_clock, Some(Some(_))).then_some(st.clock_due),

@@ -124,6 +124,29 @@ fn zoom_stays_in_the_set() {
 }
 
 #[test]
+fn a_route_is_fitted_above_what_covers_the_map() {
+    // Two points 1000 x 200 pixels apart at zoom 14 (a pixel there is 256
+    // world pixels), on an 800 x 480 panel with a bar of 100 at its foot.
+    let s = 1i64 << (WORLD_Z - 14);
+    let points = [(1_000_000, 2_000_000), (1_000_000 + 1000 * s, 2_000_000 + 200 * s)];
+    let v = View::fitting(&points, (800, 480), [20, 20, 20, 100], 8, 16).unwrap();
+    // 1000 does not fit 760 at 14; at 13 it is 500, which does.
+    assert_eq!(v.zoom, 13);
+    // The middle of the points is in the middle of the panel above the
+    // bar: 40 pixels of zoom 13 above the panel's middle.
+    let mid = (1_000_000 + 500 * s, 2_000_000 + 100 * s);
+    assert_eq!(v.x, mid.0);
+    assert_eq!(v.y, mid.1 + (40 << (WORLD_Z - 13)));
+    // A short route: as close as the set goes.
+    let v = View::fitting(&points[..1], (800, 480), [0; 4], 8, 16).unwrap();
+    assert_eq!((v.zoom, v.x, v.y), (16, 1_000_000, 2_000_000));
+    // Too long for any zoom: the set's first.
+    let far = [(0, 0), (1 << 40, 0)];
+    assert_eq!(View::fitting(&far, (800, 480), [0; 4], 8, 16).unwrap().zoom, 8);
+    assert!(View::fitting(&[], (800, 480), [0; 4], 8, 16).is_none());
+}
+
+#[test]
 fn the_window_starts_in_the_middle_of_its_canvas() {
     let v = View {
         zoom: 12,
