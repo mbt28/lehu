@@ -260,6 +260,15 @@ pub struct AppHost {
     /// the map opens), what the last search found and how the screen shows
     /// it, the route being found and why none was.
     map_router: Option<Arc<Router>>,
+    /// The folder it was opened from: another region, opened anew.
+    map_router_dir: std::path::PathBuf,
+    /// The map's regions: what their sha256 checks found (a small file
+    /// beside the user's settings, read when first wanted), the check
+    /// running in the background (the region's key, and its answer to
+    /// come), and a generation Settings > Map follows.
+    map_checks: Option<lehu_map::region::Checks>,
+    map_checking: Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)>,
+    map_regions_gen: u32,
     map_found: Vec<Found>,
     map_dests: Vec<Destination>,
     map_finding: Option<Finding>,
@@ -375,6 +384,10 @@ impl AppHost {
             map_note: String::new(),
             map_label: String::new(),
             map_router: None,
+            map_router_dir: std::path::PathBuf::new(),
+            map_checks: None,
+            map_checking: None,
+            map_regions_gen: 0,
             map_found: Vec::new(),
             map_dests: Vec::new(),
             map_finding: None,
@@ -698,24 +711,37 @@ impl AppHost {
             self.map_note = "No display for the map".into();
             return false;
         };
-        let set = match TileSet::open(std::path::Path::new(&self.settings.map.dir)) {
+        let dir = self.map_dir();
+        if let Err(e) = self.map_check_region(&dir) {
+            self.map_note = e;
+            return false;
+        }
+        let set = match TileSet::open(&dir) {
             Ok(set) => set,
             Err(e) => {
                 log::warn!("map: {e}");
-                self.map_note = e;
+                self.map_note = if e.contains("Map needs a newer LEHU") {
+                    "Map needs a newer LEHU".into()
+                } else {
+                    e
+                };
                 return false;
             }
         };
         // The road network and the names, for Go to, when the card has
-        // them.
+        // them: the region's own, unless map.route-dir (deprecated) names
+        // another folder.
+        let route_dir = if self.settings.map.route_dir.is_empty() {
+            dir.clone()
+        } else {
+            std::path::PathBuf::from(&self.settings.map.route_dir)
+        };
+        if self.map_router_dir != route_dir {
+            self.map_router = None;
+        }
         if self.map_router.is_none() {
-            let m = &self.settings.map;
-            let dir = if m.route_dir.is_empty() {
-                &m.dir
-            } else {
-                &m.route_dir
-            };
-            match Router::open(std::path::Path::new(dir)) {
+            self.map_router_dir.clone_from(&route_dir);
+            match Router::open(&route_dir) {
                 Ok(r) => {
                     let r = Arc::new(r);
                     // Checked meanwhile, below the map's own threads.
@@ -836,6 +862,133 @@ impl AppHost {
         }
     }
 
+    /// What the regions' sha256 checks found, read from its file when first
+    /// wanted: beside the user's settings (~/.lehu), the map partition
+    /// being read only.
+    fn map_checks(&mut self) -> &mut lehu_map::region::Checks {
+        let path = self
+            .user
+            .path()
+            .parent()
+            .map_or_else(
+                || std::path::PathBuf::from("/var/lib/lehu"),
+                std::path::Path::to_path_buf,
+            )
+            .join("map-checks");
+        self.map_checks
+            .get_or_insert_with(|| lehu_map::region::Checks::load(&path))
+    }
+
+    /// The region shown: `map.dir`, else the first one on the map
+    /// partition, else the folder from before there was one.
+    fn map_dir(&mut self) -> std::path::PathBuf {
+        if self.settings.map.dir.is_empty() {
+            let root = std::path::Path::new(lehu_map::region::MAPS_ROOT);
+            lehu_map::region::default_dir(root, Some(self.map_checks()))
+        } else {
+            std::path::PathBuf::from(&self.settings.map.dir)
+        }
+    }
+
+    /// The spoken prompts' clips: `map.voice-dir`, else the map
+    /// partition's English set, else the folder from before.
+    fn map_voice_dir(&self) -> std::path::PathBuf {
+        if self.settings.map.voice_dir.is_empty() {
+            lehu_map::region::default_voice_dir(std::path::Path::new(lehu_map::region::MAPS_ROOT))
+        } else {
+            std::path::PathBuf::from(&self.settings.map.voice_dir)
+        }
+    }
+
+    /// The region in `dir` checked as the map opens: its data version and
+    /// its files' sizes (fast), and what an earlier sha256 check found;
+    /// never checked, that check starts, in the background. Err: why the
+    /// map cannot open, for its screen. A folder without map.toml is left
+    /// to the tile set to say so.
+    fn map_check_region(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        use lehu_map::region::{Health, Region};
+        if !dir.join("map.toml").exists() {
+            return Ok(());
+        }
+        let region = Region::read(dir).map_err(|e| {
+            log::warn!("map: {e}");
+            "Map damaged: copy the region again".to_string()
+        })?;
+        match region.health(Some(self.map_checks())) {
+            Health::Ready | Health::Available => Ok(()),
+            Health::Unchecked => {
+                self.map_check_start(region);
+                Ok(())
+            }
+            Health::NeedsNewer(v) => {
+                log::warn!(
+                    "map: {} is data version {v}; this LEHU reads up to {}",
+                    dir.display(),
+                    lehu_map::region::DATA_VERSION
+                );
+                Err("Map needs a newer LEHU".into())
+            }
+            Health::Damaged(why) => {
+                log::warn!("map: {} is damaged: {why}", dir.display());
+                Err(format!("Map damaged: copy {} again", region.name))
+            }
+        }
+    }
+
+    /// Check a region's files against their sha256, once, on a thread of
+    /// the lowest priority: a gigabyte read on the board takes minutes.
+    /// One at a time.
+    fn map_check_start(&mut self, region: lehu_map::region::Region) {
+        if self.map_checking.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let key = region.key().to_string();
+        let spawned = std::thread::Builder::new()
+            .name("map-sha256".into())
+            .spawn(move || {
+                // SAFETY: nice() changes only this thread's priority on
+                // Linux; no memory is involved.
+                unsafe { libc::nice(19) };
+                let start = std::time::Instant::now();
+                let result = region.verify();
+                log::info!(
+                    "map: {} checked in {} s: {}",
+                    region.dir.display(),
+                    start.elapsed().as_secs(),
+                    result.as_ref().map_or_else(String::as_str, |()| "whole")
+                );
+                let _ = tx.send(result);
+            });
+        match spawned {
+            Ok(_) => self.map_checking = Some((key, rx)),
+            Err(e) => log::warn!("map: no thread to check the region on: {e}"),
+        }
+    }
+
+    /// The background check's answer, once it has come: kept, and the
+    /// regions' state shown anew.
+    fn map_check_poll(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let Some((key, rx)) = &self.map_checking else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.map_checking = None;
+                return;
+            }
+        };
+        let key = key.clone();
+        self.map_checking = None;
+        if let Err(e) = self.map_checks().set(&key, result) {
+            log::warn!("map: the check could not be kept: {e}");
+        }
+        self.map_regions_gen = self.map_regions_gen.wrapping_add(1);
+    }
+
     /// Where we are, the route and the drive, as they are now, on the map
     /// while it is open: a drive (replayed, or a route of ours) the map
     /// moves along by itself, following it unless it was moved by hand;
@@ -910,6 +1063,7 @@ impl AppHost {
     /// speeding chime (the map moves along it by itself). It goes on while
     /// the map is closed, at a slower pace; the map itself is not needed.
     pub fn map_tick(&mut self) {
+        self.map_check_poll();
         let now = lehu_core::clock::now_ms();
         if self
             .map_arrival
@@ -938,14 +1092,12 @@ impl AppHost {
             .as_ref()
             .map(|a| guidance(a, then_of(track, a), local_time_ms(self.zone_min)));
         // The prompts, while the map guides.
+        let voice_dir = self.map_voice_dir();
         let m = &self.settings.map;
         if m.voice {
-            if self
-                .map_voice
-                .as_ref()
-                .is_none_or(|v| v.dir() != m.voice_dir)
-            {
-                self.map_voice = Some(Speaker::new(&m.voice_dir));
+            let voice_dir = voice_dir.to_string_lossy();
+            if self.map_voice.as_ref().is_none_or(|v| v.dir() != voice_dir) {
+                self.map_voice = Some(Speaker::new(&voice_dir));
             }
             if let (Some(speaker), Some(a)) = (&mut self.map_voice, &ahead) {
                 let then = track.then(a).map(|(next, gap)| (next.turn, gap));
@@ -1600,6 +1752,56 @@ impl Host for AppHost {
 
     fn map_has_position(&self) -> bool {
         self.map_position.is_some()
+    }
+
+    fn map_regions(&mut self) -> Vec<lehu_ui::MapRegion> {
+        use lehu_map::region::{self, Health};
+        use lehu_ui::RegionState;
+        self.map_check_poll();
+        let current = self.map_dir();
+        let state = |h: &Health| match h {
+            Health::Ready | Health::Unchecked => RegionState::Ready,
+            Health::NeedsNewer(_) => RegionState::NeedsNewer,
+            Health::Damaged(_) => RegionState::Damaged,
+            Health::Available => RegionState::Available,
+        };
+        let root = std::path::Path::new(region::MAPS_ROOT);
+        let listed = region::list(root, Some(self.map_checks()), &[]);
+        let mut out: Vec<lehu_ui::MapRegion> = listed
+            .iter()
+            .map(|l| lehu_ui::MapRegion {
+                dir: l.dir.to_string_lossy().into_owned(),
+                name: l.name.clone(),
+                state: state(&l.health),
+                current: l.dir == current,
+            })
+            .collect();
+        // The map shown from a folder off the partition (the one from
+        // before, or one the settings name): listed too.
+        if !out.iter().any(|r| r.current) && current.join("map.toml").exists() {
+            let (name, health) = match region::Region::read(&current) {
+                Ok(r) => {
+                    let health = r.health(Some(self.map_checks()));
+                    (r.name, health)
+                }
+                Err(e) => ("Map".to_string(), Health::Damaged(e)),
+            };
+            out.push(lehu_ui::MapRegion {
+                dir: current.to_string_lossy().into_owned(),
+                name,
+                state: state(&health),
+                current: true,
+            });
+        }
+        out
+    }
+
+    fn map_regions_generation(&self) -> u32 {
+        self.map_regions_gen
+    }
+
+    fn map_voice_installed(&self) -> bool {
+        self.map_voice_dir().is_dir()
     }
 
     fn map_away(&self) -> bool {

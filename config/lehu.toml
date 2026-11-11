@@ -163,9 +163,11 @@ fast-switch = false
 # contrast = 140
 
 [map]
-# The offline map's tiles and their map.toml, as scripts/map-tiles.py
-# writes them, on the SD card.
-dir = "/var/lib/lehu/maps"
+# The region the map shows: a folder of map data, as scripts/map-region.py
+# builds it, on the card's map partition (LEHU-MAPS, mounted at /maps):
+# "/maps/<region>". Empty: the first region there, or /var/lib/lehu/maps on
+# a card without the partition. Settings > Map > Region chooses it.
+dir = ""
 # Where the map was left, written when it closes: the zoom (0 = the map's
 # own start) and the point at the centre, in world pixels at zoom 22.
 zoom = 0
@@ -186,13 +188,16 @@ fake-track = ""
 # music; held while the phone's voice plays (a call, its own prompts).
 voice = true
 # The prompts' clips: WAV files, one a phrase fragment, as
-# scripts/voice-clips.py makes them on a PC (see docs/map.md). Missing
-# clips: a line in the log, and the prompts stay silent.
-voice-dir = "/var/lib/lehu/voice/en"
+# scripts/voice-clips.py makes them on a PC (see docs/map.md). Empty:
+# /maps/voice/en, or /var/lib/lehu/voice/en on a card without the map
+# partition. Missing clips: a line in the log, the prompts stay silent, and
+# Settings > Map says the voice is not installed.
+voice-dir = ""
 # Map > Go to finds destinations by name and routes to them on the head
 # unit, from the road network and the names scripts/map-graph.py writes
-# (roads.bin and places.bin). They are looked for here; empty means the
-# map's own directory (dir above). Without them the Go to key is not there.
+# (roads.bin and places.bin), in the region's own folder (dir above).
+# Deprecated, still read: another directory to look in instead. Without
+# them the Go to key is not there.
 route-dir = ""
 # The routes Go to finds: "fastest" (at the roads' speeds) or "shortest"
 # (by distance).

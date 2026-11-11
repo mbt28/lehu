@@ -264,7 +264,10 @@ pub struct Camera {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct Map {
-    /// The tiles and their map.toml, on the SD card.
+    /// The region shown: its folder, with map.toml, the tiles and the
+    /// road data (`/maps/<region>` on the card's map partition). Empty:
+    /// the first region there, else `/var/lib/lehu/maps` on a card without
+    /// one. Settings > Map > Region sets it.
     pub dir: String,
     /// Where the map was left: the zoom (0: the tile set's own start) and
     /// the point at the centre, world pixels at zoom 22.
@@ -283,10 +286,11 @@ pub struct Map {
     /// Spoken turn prompts while the map guides along a drive.
     pub voice: bool,
     /// The prompts' clips, as scripts/voice-clips.py makes them: one WAV
-    /// file a phrase fragment.
+    /// file a phrase fragment. Empty: `/maps/voice/en`, else
+    /// `/var/lib/lehu/voice/en` on a card without a map partition.
     pub voice_dir: String,
-    /// The road network and the names for Map > Go to (roads.bin and
-    /// places.bin, written by scripts/map-graph.py). Empty: `dir`.
+    /// Deprecated, still read: the road network and the names for Map >
+    /// Go to, when not in the region's own folder (`dir`). Empty: `dir`.
     pub route_dir: String,
     /// The routes Go to finds: the fastest or the shortest.
     pub route_by: RouteBy,
@@ -489,14 +493,14 @@ impl Default for CameraInput {
 impl Default for Map {
     fn default() -> Self {
         Self {
-            dir: "/var/lib/lehu/maps".into(),
+            dir: String::new(),
             zoom: 0,
             x: 0,
             y: 0,
             fake_position: String::new(),
             fake_track: String::new(),
             voice: true,
-            voice_dir: "/var/lib/lehu/voice/en".into(),
+            voice_dir: String::new(),
             route_dir: String::new(),
             route_by: RouteBy::Fastest,
             avoid_motorways: false,
@@ -1075,12 +1079,12 @@ mod tests {
     fn the_map_voice_is_on_unless_turned_off() {
         let map = Settings::default().map;
         assert!(map.voice);
-        assert_eq!(map.voice_dir, "/var/lib/lehu/voice/en");
+        assert_eq!(map.voice_dir, "", "the map partition's, or the old folder");
         let s: Settings =
             toml::from_str("[map]\nvoice = false\nvoice-dir = \"/media/sd/voice/en\"\n").unwrap();
         assert!(!s.map.voice);
         assert_eq!(s.map.voice_dir, "/media/sd/voice/en");
-        assert_eq!(s.map.dir, "/var/lib/lehu/maps", "the rest stays");
+        assert_eq!(s.map.dir, "", "the rest stays");
         assert!(toml::from_str::<Settings>("[map]\nvoice = \"loud\"").is_err());
         assert!(toml::from_str::<Settings>("[map]\nvoice_dir = \"/x\"").is_err());
     }
