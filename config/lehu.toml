@@ -190,6 +190,12 @@ voice-dir = "/var/lib/lehu/voice/en"
 # (roads.bin and places.bin). They are looked for here; empty means the
 # map's own directory (dir above). Without them the Go to key is not there.
 route-dir = ""
+# The routes Go to finds: "fastest" (at the roads' speeds) or "shortest"
+# (by distance).
+route-by = "fastest"
+# Keep off motorways (and their links) where another road goes: they cost
+# five times over, so a place only a motorway reaches is still reached.
+avoid-motorways = false
 # The destinations last driven to, offered before anything is typed;
 # written by Map > Go to, the latest first. For example:
 # [[map.recent]]

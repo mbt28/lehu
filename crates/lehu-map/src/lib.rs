@@ -46,7 +46,7 @@ mod viewer;
 pub mod voice;
 
 pub use drive::Drive;
-pub use graph::{Graph, ROADS_FILE, Snap};
+pub use graph::{Camera, Graph, ROADS_FILE, RouteBy, RouteOptions, Snap};
 pub use route::Router;
 pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
 pub use tileset::TileSet;

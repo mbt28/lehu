@@ -845,6 +845,20 @@ impl AppHost {
         self.map_arrived();
     }
 
+    /// How Go to's routes are chosen, from the settings (map.route-by,
+    /// map.avoid-motorways): the screens change them by persisting those
+    /// keys.
+    pub fn map_route_options(&self) -> lehu_map::RouteOptions {
+        let m = &self.settings.map;
+        lehu_map::RouteOptions {
+            by: match m.route_by {
+                settings::RouteBy::Fastest => lehu_map::RouteBy::Fastest,
+                settings::RouteBy::Shortest => lehu_map::RouteBy::Shortest,
+            },
+            avoid_motorways: m.avoid_motorways,
+        }
+    }
+
     /// The prompts of the drive left go with it; a new drive's start
     /// afresh.
     fn map_quiet(&mut self) {
@@ -1301,11 +1315,12 @@ impl Host for AppHost {
         match (self.map_router.clone(), from) {
             (Some(router), Some(from)) => {
                 let goal = (to.x, to.y);
+                let options = self.map_route_options();
                 let spawned =
                     std::thread::Builder::new()
                         .name("map-route".into())
                         .spawn(move || {
-                            let _ = tx.send(router.route(from, heading, goal));
+                            let _ = tx.send(router.route_with(from, heading, goal, &options));
                         });
                 if let Err(e) = spawned {
                     log::warn!("map: no thread to route on: {e}");

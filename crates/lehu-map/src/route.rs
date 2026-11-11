@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
 //! Routes found on the board: a destination searched by name, the fastest
-//! way there over the road network, and that route made a drive with its
-//! turns, as scripts/route-gpx.py makes one on a PC.
+//! (or the shortest) way there over the road network, and that route made
+//! a drive with its turns, as scripts/route-gpx.py makes one on a PC.
 
 use std::path::Path;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
-use crate::graph::{Graph, RoadPath, Work};
+use crate::graph::{Graph, RoadPath, RouteBy, RouteOptions, Work};
 use crate::search::{Found as Place, Places};
 use crate::track::{Leg, LegStep, Track, Turn, metres_per_px};
 
@@ -83,6 +83,20 @@ impl Router {
         heading: Option<(i32, i32)>,
         to: (i64, i64),
     ) -> Result<Track, String> {
+        self.route_with(from, heading, to, &RouteOptions::default())
+    }
+
+    /// The same, the route chosen as `options` say: the fastest or the
+    /// shortest, motorways avoided or not. With road data that has no
+    /// motorway marks (version 1) motorways cannot be told apart, and
+    /// avoiding them changes nothing.
+    pub fn route_with(
+        &self,
+        from: (i64, i64),
+        heading: Option<(i32, i32)>,
+        to: (i64, i64),
+        options: &RouteOptions,
+    ) -> Result<Track, String> {
         let began = Instant::now();
         if let Err(e) = self.checked.get_or_init(|| self.graph.check()) {
             log::warn!("map: the road network is broken: {e}");
@@ -99,7 +113,8 @@ impl Router {
             .ok_or("No road near the destination")?;
         let path = {
             let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
-            self.graph.route(&start, heading, &end, &mut work)
+            self.graph
+                .route_with(&start, heading, &end, options, &mut work)
         }
         .ok_or("No route there")?;
         let searched = began.elapsed();
@@ -109,7 +124,13 @@ impl Router {
         }
         let track = Track::from_route(&leg)?;
         log::info!(
-            "map: route of {:.1} km, {} min, {} turns: {} junctions in {} ms, {} ms in all{}",
+            "map: {} route of {:.1} km, {} min, {} turns: {} junctions in {} ms, {} ms in all{}",
+            match (options.by, options.avoid_motorways) {
+                (RouteBy::Fastest, false) => "fastest",
+                (RouteBy::Fastest, true) => "fastest off motorways",
+                (RouteBy::Shortest, false) => "shortest",
+                (RouteBy::Shortest, true) => "shortest off motorways",
+            },
             f64::from(track.metres()) / 1000.0,
             track.duration().div_ceil(60_000),
             track.maneuvers().len(),

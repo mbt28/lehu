@@ -136,6 +136,26 @@ keeps it, driven on meanwhile. The bar's Stop key ends it, and so does
 arriving, half a minute later; where it ended is the position from then
 on (until LEHU restarts). When there is no route, the screen says why.
 
+### Route options
+
+The route is the fastest unless the settings say otherwise:
+
+```toml
+[map]
+route-by = "shortest"     # or "fastest", the default
+avoid-motorways = true    # false by default
+```
+
+The shortest is the least distance, whatever the roads' speeds. Avoiding
+motorways, a motorway or a motorway's link costs five times its time (or
+its length), so the route takes another road wherever one goes the same
+way in less than several times the time, and still takes the motorway
+where nothing else goes (a service area, say). Road data written before
+the motorways were marked (`roads.bin` version 1) cannot tell them apart:
+there avoiding them changes nothing. The screens change the options by
+persisting these two keys; `AppHost::map_route_options` is what a route
+is found with.
+
 ### Routing data
 
 `scripts/map-graph.py` writes the road network and the names from the
@@ -158,25 +178,30 @@ The files are little-endian 32-bit words, mapped from the card and read
 in place rather than loaded, so they cost the head unit page cache, not
 memory of its own; a route looks at only part of the network.
 
-`roads.bin` starts with a header of 18 words: "LEHUROAD", the version
-(1), the numbers of junctions, arcs, roads, shape points, road kinds,
+`roads.bin` starts with a header of 20 words: "LEHUROAD", the version
+(2), the numbers of junctions, arcs, roads, shape points, road kinds,
 grid entries and name bytes, the grid (its corner, its cell size as a
 shift of world pixels, its columns and rows), the time a straight line
-takes at the top speed (milliseconds per 65,536 world pixels) and the
-top speed (km/h). Then, each right after the one before:
+takes at the top speed (milliseconds per 65,536 world pixels), the top
+speed (km/h), the number of speed cameras, the top speed of the roads
+that are not motorways, and a word kept 0. Version 1 (still read) has the
+first 18 words only, no cameras and no motorway marks. Then, each right
+after the one before:
 
 | Section | Words each | What |
 |---|---|---|
 | junctions, and one more | 4 | x, y (world pixels at zoom 22), its first arc, how many roads meet there |
 | arcs | 3 | the junction it leads to, milliseconds, road × 2 (+ 1 when it runs the road from its b to its a) |
-| roads, and one more | 5 | a, b, decimetres, kind + 2^24 when it may be driven from a to b + 2^25 from b to a, its first shape point |
+| roads, and one more | 5 | a, b, decimetres, kind + 2^24 when it may be driven from a to b + 2^25 from b to a + 2^26 a motorway or its link, its first shape point |
 | shape points | 1 | all the x, then all the y |
 | road kinds | 2 | the name (a byte offset into the names), the speed limit in km/h (0 none) + 2^16 for a roundabout |
 | grid cells, and one more | 1 | each cell's first entry |
 | grid entries | 1 | the roads with a piece in the cell |
 | names | bytes | each a length byte, then UTF-8 |
+| speed cameras | 6 | x, y (on the road), the road, decimetres from its a, the ways it watches (1 a to b, 2 b to a, 3 both), its limit in km/h (0 not known) |
 
-A junction's arcs are the ways a car may leave it, up to the next
+The cameras are in the order of their roads, and along each from a. A
+junction's arcs are the ways a car may leave it, up to the next
 junction's first arc; a road's shape is the points between its a and its
 b, up to the next road's first.
 
@@ -195,7 +220,12 @@ town it runs through, at the middle of its longest piece.
 
 The route is A* by time over the junctions: integer arithmetic only, and
 the time still to go is never more than the straight line at the
-network's top speed, so the route found is the fastest. The start and
+network's top speed, so the route found is the fastest. The shortest is
+the same search by distance, the bound the straight line itself; avoiding
+motorways, the bound is the straight line at the fastest other road's
+speed (or a fifth of the motorways', when that is more), which no road
+beats once motorways cost five times over, so each mode's route is the
+best by its own measure. The start and
 the goal are taken to the nearest point of the nearest road (the grid
 finds it), and setting off against the way the drive is going costs a
 U-turn's half minute. The turns are found as `scripts/route-gpx.py`

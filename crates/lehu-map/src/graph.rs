@@ -6,34 +6,44 @@
 //! here, never loaded: a country's network is a few megabytes, and a route
 //! looks at only part of it.
 //!
-//! The file is little-endian 32-bit words. After a header of 18 words come
-//! these sections, each right after the one before:
+//! The file is little-endian 32-bit words. After a header of 20 words (18
+//! in version 1) come these sections, each right after the one before:
 //!
 //! | Section | Words each | What |
 //! |---|---|---|
 //! | nodes + 1 | 4 | x, y (world pixels at zoom 22), its first arc, how many roads meet there |
 //! | arcs | 3 | the node it leads to, milliseconds, edge * 2 (+ 1 when it runs the edge from b to a) |
-//! | edges + 1 | 5 | a, b, decimetres, kind (low 24 bits) + 1 << 24 a to b allowed + 1 << 25 b to a allowed, its first shape point |
+//! | edges + 1 | 5 | a, b, decimetres, kind (low 24 bits) + 1 << 24 a to b allowed + 1 << 25 b to a allowed + 1 << 26 a motorway (or its link), its first shape point |
 //! | shape points | 1 | x, then all the y |
 //! | kinds | 2 | the road's name (a byte offset into the names), speed limit km/h (0 none) + 1 << 16 roundabout |
 //! | cells + 1 | 1 | the grid: each cell's first entry in the next section |
 //! | entries | 1 | the edges with a piece in the cell |
 //! | names | bytes | each a length byte, then UTF-8 |
+//! | cameras | 6 | x, y, the edge, decimetres from its a, the ways it watches (1 a to b, 2 b to a), its speed limit km/h (0 not known) |
 //!
-//! The header is "LEHUROAD", the version (1), the counts of nodes, arcs,
+//! The header is "LEHUROAD", the version (2), the counts of nodes, arcs,
 //! edges, shape points, kinds, grid entries and name bytes, the grid (its
 //! corner x and y, the cell's size as a shift, its columns and rows), the
 //! search's speed bound (milliseconds per 65536 world pixels, the fewest
-//! a straight line can take anywhere on the network) and the top speed in
-//! km/h. A node's arcs are the ones a car may take from it, its last one
+//! a straight line can take anywhere on the network), the top speed in
+//! km/h, the count of speed cameras, the top speed of the roads that are
+//! not motorways, and a word kept 0. Version 1, which LEHU still reads,
+//! stops after the top speed: it has no cameras and no motorway marks, so
+//! with it routes cannot avoid motorways. The cameras are in the order of
+//! their edges, and along each from a. A node's arcs are the ones a car may take from it, its last one
 //! just before the next node's first (the extra node at the end closes the
 //! list); an edge's shape is the points between a and b, up to the next
 //! edge's first.
 //!
-//! Finding a route is A* by time from the point nearest the start to the
-//! point nearest the goal, both on a road: integer arithmetic only, the
-//! lower bound on the time left being the straight line at the network's
-//! top speed.
+//! Finding a route is A* from the point nearest the start to the point
+//! nearest the goal, both on a road, in integer arithmetic only: by time
+//! (the fastest), the lower bound on the time left being the straight line
+//! at the network's top speed; or by distance (the shortest), the bound
+//! the straight line itself. Avoiding motorways makes each motorway cost
+//! five times its time or length, so a route still goes on one where there
+//! is no other way; the bound is then the straight line at the speed of
+//! the fastest other road (or a fifth of the motorways', when that is
+//! more), which the costs never beat.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -45,18 +55,52 @@ use crate::blob::{Blob, short_str};
 pub const ROADS_FILE: &str = "roads.bin";
 
 const MAGIC: &[u8; 8] = b"LEHUROAD";
-const VERSION: u32 = 1;
-const HEADER: usize = 18;
+const VERSION: u32 = 2;
+const HEADER: usize = 20;
+/// Version 1's header: no cameras, no motorway marks.
+const HEADER_V1: usize = 18;
 const NODE: usize = 4;
 const ARC: usize = 3;
 const EDGE: usize = 5;
 const KIND: usize = 2;
+const CAMERA: usize = 6;
+
+/// An edge's kind word: may be driven a to b, b to a; a motorway.
+const FORWARD: u32 = 1 << 24;
+const BACKWARD: u32 = 1 << 25;
+const MOTORWAY: u32 = 1 << 26;
+
+/// Avoiding motorways, a motorway costs this many times its time or
+/// length: dear enough that a route takes another road wherever one goes
+/// the same way within several times the time, never forbidden.
+const MOTORWAY_PENALTY: u32 = 5;
 
 /// Off by more than this from any road, a point is not on the network.
 const SNAP_MAX_PX: i64 = 1 << 18;
 
-/// Starting against the way we are heading costs this much: a U-turn.
+/// Starting against the way we are heading costs this much: a U-turn,
+/// half a minute when the route is the fastest, 400 m (what half a minute
+/// covers in town) when it is the shortest.
 const U_TURN_MS: u32 = 30_000;
+const U_TURN_DM: u32 = 4_000;
+
+/// What a route is the best of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteBy {
+    /// The least time, at the roads' speeds.
+    #[default]
+    Fastest,
+    /// The least distance.
+    Shortest,
+}
+
+/// How a route is chosen: by time or by distance, and whether motorways
+/// are kept off (made dear, not forbidden).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RouteOptions {
+    pub by: RouteBy,
+    pub avoid_motorways: bool,
+}
 
 /// Parent marks: reached from the start's point, along its edge towards
 /// b, or towards a.
@@ -77,6 +121,9 @@ pub struct Graph {
     /// Milliseconds per 65536 world pixels of straight line, at least.
     h_q16: u32,
     top_kmh: u32,
+    /// The fastest road's speed that is not a motorway, km/h.
+    top_other_kmh: u32,
+    cameras: usize,
     // Where each section starts, in words.
     node_at: usize,
     arc_at: usize,
@@ -87,6 +134,7 @@ pub struct Graph {
     cell_at: usize,
     entry_at: usize,
     name_at: usize,
+    camera_at: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -112,6 +160,20 @@ pub struct Snap {
     pub from_a_dm: u32,
 }
 
+/// A speed camera, on an edge: where, how far from the edge's a, which ways
+/// along it it watches, and the speed limit it checks when known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Camera {
+    pub x: i64,
+    pub y: i64,
+    pub edge: u32,
+    pub from_a_dm: u32,
+    /// It watches the traffic from a to b, from b to a.
+    pub forward: bool,
+    pub backward: bool,
+    pub limit: Option<u16>,
+}
+
 /// A route the search found: from the start's point, the edges in order
 /// and the way each is driven, to the goal's point.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,8 +190,10 @@ pub struct RoadPath {
     /// The goal's edge is entered at a (else at b); when `arcs` is empty,
     /// as `start_forward`.
     pub end_forward: bool,
-    /// How long it takes, milliseconds, at the roads' speeds.
-    pub ms: u64,
+    /// What it costs: milliseconds at the roads' speeds for the fastest,
+    /// decimetres for the shortest, a motorway's counted five times over
+    /// when they are avoided; and a U-turn at the start.
+    pub cost: u64,
     /// The nodes the search took from its queue.
     pub settled: u32,
 }
@@ -143,6 +207,8 @@ pub struct Edge {
     pub kind: u32,
     pub forward: bool,
     pub backward: bool,
+    /// A motorway or a motorway's link (always false in version 1).
+    pub motorway: bool,
     shape: (u32, u32),
 }
 
@@ -180,8 +246,13 @@ impl Graph {
         if w.len() < HEADER || blob.bytes(0, 8) != Some(&MAGIC[..]) {
             return Err("not a LEHU road network".into());
         }
-        if w[2] != VERSION {
-            return Err(format!("version {}, LEHU reads {VERSION}", w[2]));
+        let version = w[2];
+        if !(1..=VERSION).contains(&version) {
+            return Err(format!("version {version}, LEHU reads 1 to {VERSION}"));
+        }
+        let header = if version == 1 { HEADER_V1 } else { HEADER };
+        if w.len() < header {
+            return Err("cut short".into());
         }
         let n = |i: usize| w[i] as usize;
         let (nodes, arcs, edges, shapes, kinds, entries, names_len) =
@@ -197,7 +268,12 @@ impl Graph {
             return Err("a broken grid".into());
         }
         let cells = (grid.cols * grid.rows) as usize;
-        let node_at = HEADER;
+        let (cameras, top_other_kmh) = if version == 1 {
+            (0, w[16])
+        } else {
+            (n(17), w[18])
+        };
+        let node_at = header;
         let arc_at = node_at + (nodes + 1) * NODE;
         let edge_at = arc_at + arcs * ARC;
         let shape_x_at = edge_at + (edges + 1) * EDGE;
@@ -206,7 +282,8 @@ impl Graph {
         let cell_at = kind_at + kinds * KIND;
         let entry_at = cell_at + cells + 1;
         let name_at = entry_at + entries;
-        if name_at + names_len.div_ceil(4) != w.len() {
+        let camera_at = name_at + names_len.div_ceil(4);
+        if camera_at + cameras * CAMERA != w.len() {
             return Err("its sections and its length disagree".into());
         }
         Ok(Self {
@@ -220,6 +297,8 @@ impl Graph {
             grid,
             h_q16: w[15],
             top_kmh: w[16],
+            top_other_kmh,
+            cameras,
             node_at,
             arc_at,
             edge_at,
@@ -229,6 +308,7 @@ impl Graph {
             cell_at,
             entry_at,
             name_at,
+            camera_at,
             blob,
         })
     }
@@ -312,6 +392,17 @@ impl Graph {
         {
             return Err("the grid names an edge out of range".into());
         }
+        let mut last = (0, 0);
+        for i in 0..self.cameras {
+            let c = &w[self.camera_at + i * CAMERA..self.camera_at + (i + 1) * CAMERA];
+            if c[2] as usize >= self.edges || c[0] >= 1 << 30 || c[1] >= 1 << 30 {
+                return Err(format!("camera {i}: out of range"));
+            }
+            if (c[2], c[3]) < last {
+                return Err(format!("camera {i}: out of order"));
+            }
+            last = (c[2], c[3]);
+        }
         Ok(())
     }
 
@@ -326,6 +417,46 @@ impl Graph {
     /// The fastest road's speed, km/h.
     pub fn top_kmh(&self) -> u32 {
         self.top_kmh
+    }
+
+    /// How many speed cameras the file has.
+    pub fn cameras(&self) -> usize {
+        self.cameras
+    }
+
+    /// Camera `i`, in the order of their edges.
+    pub fn camera(&self, i: usize) -> Camera {
+        let at = self.camera_at + i * CAMERA;
+        let c = &self.words()[at..at + CAMERA];
+        let limit = (c[5] & 0xFFFF) as u16;
+        Camera {
+            x: i64::from(c[0]),
+            y: i64::from(c[1]),
+            edge: c[2],
+            from_a_dm: c[3],
+            forward: c[4] & 1 != 0,
+            backward: c[4] & 2 != 0,
+            limit: (limit > 0).then_some(limit),
+        }
+    }
+
+    /// The cameras on edge `e`, from its a.
+    pub fn cameras_on(&self, e: u32) -> impl Iterator<Item = Camera> + '_ {
+        let w = self.words();
+        let edge_of = |i: usize| w[self.camera_at + i * CAMERA + 2];
+        // The first at or after the edge: they are in its order.
+        let (mut lo, mut hi) = (0, self.cameras);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if edge_of(mid) < e {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo..self.cameras)
+            .take_while(move |&i| edge_of(i) == e)
+            .map(|i| self.camera(i))
     }
 
     fn words(&self) -> &[u32] {
@@ -365,8 +496,9 @@ impl Graph {
             b: w[1],
             dm: w[2].max(1),
             kind: w[3] & 0xFF_FFFF,
-            forward: w[3] & (1 << 24) != 0,
-            backward: w[3] & (1 << 25) != 0,
+            forward: w[3] & FORWARD != 0,
+            backward: w[3] & BACKWARD != 0,
+            motorway: w[3] & MOTORWAY != 0,
             shape: (w[4], w[EDGE + 4]),
         }
     }
@@ -488,6 +620,39 @@ impl Graph {
         })
     }
 
+    /// What driving edge `e` whole costs, as `options` count it.
+    fn edge_cost(&self, e: u32, options: &RouteOptions) -> u32 {
+        let edge = self.edge(e);
+        let base = match options.by {
+            RouteBy::Fastest => self.edge_ms(e),
+            RouteBy::Shortest => edge.dm,
+        };
+        if options.avoid_motorways && edge.motorway {
+            base.saturating_mul(MOTORWAY_PENALTY)
+        } else {
+            base
+        }
+    }
+
+    /// The bound on what a straight line of 65536 world pixels costs, as
+    /// `options` count it: never more than any road there does.
+    fn bound_q16(&self, options: &RouteOptions) -> u64 {
+        let h = u64::from(self.h_q16);
+        let top = u64::from(self.top_kmh.max(1));
+        match options.by {
+            // h_q16 is the time at the top speed: ms = dm * 360 / km/h.
+            RouteBy::Shortest => h * top / 360,
+            RouteBy::Fastest if options.avoid_motorways => {
+                // The fastest a route can go: the best other road, or a
+                // motorway at a fifth of its speed.
+                let other = u64::from(self.top_other_kmh.min(self.top_kmh));
+                let v = other.max(top.div_ceil(u64::from(MOTORWAY_PENALTY))).max(1);
+                h * top / v
+            }
+            RouteBy::Fastest => h,
+        }
+    }
+
     /// The fastest way from `start` to `end`: A* by time. `heading` (x
     /// right, y down), when we are moving, makes setting off backwards
     /// cost a U-turn. None when the goal cannot be reached.
@@ -498,6 +663,20 @@ impl Graph {
         end: &Snap,
         work: &mut Work,
     ) -> Option<RoadPath> {
+        self.route_with(start, heading, end, &RouteOptions::default(), work)
+    }
+
+    /// The best way from `start` to `end` as `options` choose it: A* by
+    /// time or by distance, motorways made dear or not. As [`Self::route`]
+    /// otherwise.
+    pub fn route_with(
+        &self,
+        start: &Snap,
+        heading: Option<(i32, i32)>,
+        end: &Snap,
+        options: &RouteOptions,
+        work: &mut Work,
+    ) -> Option<RoadPath> {
         let w = self.words();
         work.g.clear();
         work.g.resize(self.nodes, u32::MAX);
@@ -506,7 +685,7 @@ impl Graph {
         work.heap.clear();
 
         let se = self.edge(start.edge);
-        let sms = self.edge_ms(start.edge);
+        let sms = self.edge_cost(start.edge, options);
         let along = |edge_ms: u32, dm: u32, part: u32| {
             (u64::from(edge_ms) * u64::from(part) / u64::from(dm.max(1))) as u32
         };
@@ -518,11 +697,15 @@ impl Graph {
         let dot = heading.map_or(0, |(hx, hy)| {
             (ahead.0 - behind.0) * i64::from(hx) + (ahead.1 - behind.1) * i64::from(hy)
         });
-        let u_fwd = if dot < 0 { U_TURN_MS } else { 0 };
-        let u_bwd = if dot > 0 { U_TURN_MS } else { 0 };
+        let u_turn = match options.by {
+            RouteBy::Fastest => U_TURN_MS,
+            RouteBy::Shortest => U_TURN_DM,
+        };
+        let u_fwd = if dot < 0 { u_turn } else { 0 };
+        let u_bwd = if dot > 0 { u_turn } else { 0 };
 
         let ee = self.edge(end.edge);
-        let ems = self.edge_ms(end.edge);
+        let ems = self.edge_cost(end.edge, options);
         let a_to_e = along(ems, ee.dm, end.from_a_dm);
         let b_to_e = ems.saturating_sub(a_to_e);
 
@@ -542,7 +725,7 @@ impl Graph {
         }
 
         let (tx, ty) = (end.x, end.y);
-        let h_q16 = u64::from(self.h_q16);
+        let h_q16 = self.bound_q16(options);
         let h = |n: usize| -> u32 {
             let at = self.node_at + n * NODE;
             let dx = (i64::from(w[at]) - tx).unsigned_abs();
@@ -571,6 +754,26 @@ impl Graph {
         }
         let mut settled = 0u32;
         let arcs = &w[self.arc_at..self.edge_at];
+        let edges = &w[self.edge_at..self.shape_x_at];
+        // An arc's cost: its time as it stands for the fastest; else its
+        // edge's length, or a motorway's made dear.
+        let plain = *options == RouteOptions::default();
+        let arc_cost = |k: usize| -> u32 {
+            let ms = arcs[k * ARC + 1];
+            if plain {
+                return ms;
+            }
+            let e = (arcs[k * ARC + 2] >> 1) as usize * EDGE;
+            let base = match options.by {
+                RouteBy::Fastest => ms,
+                RouteBy::Shortest => edges[e + 2].max(1),
+            };
+            if options.avoid_motorways && edges[e + 3] & MOTORWAY != 0 {
+                base.saturating_mul(MOTORWAY_PENALTY)
+            } else {
+                base
+            }
+        };
         while let Some(Reverse(top)) = work.heap.pop() {
             let f = top >> 32;
             let n = (top & 0xFFFF_FFFF) as u32;
@@ -600,11 +803,10 @@ impl Graph {
             let (first, last) = (w[at + 2] as usize, w[at + NODE + 2] as usize);
             for k in first..last {
                 let to = arcs[k * ARC];
-                let ms = arcs[k * ARC + 1];
-                push(work, to, g.saturating_add(ms), k as u32);
+                push(work, to, g.saturating_add(arc_cost(k)), k as u32);
             }
         }
-        let (ms, via, end_forward) = best?;
+        let (cost, via, end_forward) = best?;
         // Back from the node the goal's edge was entered at.
         let mut path = Vec::new();
         let mut start_forward = end_forward;
@@ -634,7 +836,7 @@ impl Graph {
             direct: via.is_none(),
             arcs: path,
             end_forward,
-            ms,
+            cost,
             settled,
         })
     }
@@ -664,7 +866,8 @@ fn nearest_on(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> (i64, i64) {
 #[cfg(test)]
 pub(crate) mod build {
     /// A road: its points from a to b (the first and last are junctions,
-    /// numbered by `node`), its name, km/h, one-way, roundabout, limit.
+    /// numbered by `node`), its name, km/h, one-way, roundabout, limit,
+    /// motorway.
     pub(crate) struct Road {
         pub a: u32,
         pub b: u32,
@@ -674,7 +877,12 @@ pub(crate) mod build {
         pub oneway: bool,
         pub roundabout: bool,
         pub limit: u16,
+        pub motorway: bool,
     }
+
+    /// A camera as the file has it: x, y, edge, decimetres from a, the
+    /// ways it watches (1 a to b, 2 b to a), limit.
+    pub(crate) type CameraWords = [u32; 6];
 
     pub(crate) fn road(a: u32, b: u32, name: &'static str) -> Road {
         Road {
@@ -686,6 +894,7 @@ pub(crate) mod build {
             oneway: false,
             roundabout: false,
             limit: 0,
+            motorway: false,
         }
     }
 
@@ -695,6 +904,17 @@ pub(crate) mod build {
 
     /// The file's bytes for these junctions and roads.
     pub(crate) fn write(nodes: &[(i64, i64)], roads: &[Road]) -> Vec<u8> {
+        write_with(nodes, roads, &[], super::VERSION)
+    }
+
+    /// The same with cameras, as version `version` writes it (1: no
+    /// cameras and no motorway marks).
+    pub(crate) fn write_with(
+        nodes: &[(i64, i64)],
+        roads: &[Road],
+        cameras: &[CameraWords],
+        version: u32,
+    ) -> Vec<u8> {
         let mut names: Vec<u8> = Vec::new();
         let mut name_at = std::collections::HashMap::new();
         let mut kinds: Vec<(u32, u32)> = Vec::new();
@@ -733,7 +953,11 @@ pub(crate) mod build {
             }
             degree[r.a as usize] += 1;
             degree[r.b as usize] += 1;
-            let info = kind | (u32::from(forward) << 24) | (u32::from(backward) << 25);
+            let motorway = r.motorway && version > 1;
+            let info = kind
+                | (u32::from(forward) << 24)
+                | (u32::from(backward) << 25)
+                | (u32::from(motorway) << 26);
             edges.push([
                 r.a,
                 r.b,
@@ -756,8 +980,14 @@ pub(crate) mod build {
         w.extend([0, 0]); // the magic, below
         let arc_count: usize = arcs.iter().map(Vec::len).sum();
         let h_q16 = (M_PER_PX * 0.98 / (130.0 / 3.6) * 1000.0 * 65536.0) as u32;
+        let top_other = roads
+            .iter()
+            .filter(|r| !r.motorway)
+            .map(|r| r.kmh)
+            .max()
+            .unwrap_or(0);
         w.extend([
-            super::VERSION,
+            version,
             nodes.len() as u32,
             arc_count as u32,
             roads.len() as u32,
@@ -772,8 +1002,12 @@ pub(crate) mod build {
             1,
             h_q16,
             130,
-            0,
         ]);
+        if version > 1 {
+            w.extend([cameras.len() as u32, top_other, 0]);
+        } else {
+            w.push(0);
+        }
         let mut first = 0u32;
         for (i, p) in nodes.iter().enumerate() {
             w.extend([p.0 as u32, p.1 as u32, first, degree[i]]);
@@ -801,6 +1035,9 @@ pub(crate) mod build {
         let mut bytes: Vec<u8> = w.iter().flat_map(|v| v.to_le_bytes()).collect();
         bytes[..8].copy_from_slice(super::MAGIC);
         bytes.extend(&names);
+        if version > 1 {
+            bytes.extend(cameras.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        }
         bytes
     }
 }

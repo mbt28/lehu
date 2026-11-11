@@ -66,7 +66,10 @@ KIND_STREET, KIND_PLACE = 0, 1
 
 ROADS_MAGIC = b"LEHUROAD"
 PLACES_MAGIC = b"LEHUFIND"
-VERSION = 1
+ROADS_VERSION = 2
+PLACES_VERSION = 1
+# The classes a route avoiding motorways keeps off.
+MOTORWAY = ("motorway", "motorway_link")
 
 
 def world(lat, lon):
@@ -254,12 +257,12 @@ def write_roads(path, ex, edges, keep):
     kinds, kind_of = [], {}
     infos = []
     for a, b, between, m, s, fwd, bwd, wi in edges:
-        _, _, _, _, name, ring, lim, _ = ex.ways[wi]
+        _, _, _, _, name, ring, lim, cls = ex.ways[wi]
         key = (name, ring, lim or 0)
         if key not in kind_of:
             kind_of[key] = len(kinds)
             kinds.append(key)
-        infos.append(kind_of[key] | (fwd << 24) | (bwd << 25))
+        infos.append(kind_of[key] | (fwd << 24) | (bwd << 25) | ((cls in MOTORWAY) << 26))
 
     # Each node's roads out: the arcs a car may take from it, as (the node
     # it leads to, milliseconds, edge * 2 + 1 when it runs the edge from b
@@ -335,6 +338,10 @@ def write_roads(path, ex, edges, keep):
     if abs(lat_s) > abs(lat):
         metres_per_px = EQUATOR / WORLD * math.cos(math.radians(abs(lat_s)))
     top = max((min(ex.ways[e[7]][3], TOP_KMH) for e in edges), default=TOP_KMH)
+    # The fastest road that is not a motorway: the bound when motorways
+    # are avoided.
+    top_other = max((min(ex.ways[e[7]][3], TOP_KMH) for e in edges
+                     if ex.ways[e[7]][7] not in MOTORWAY), default=top)
     h_q16 = int(metres_per_px / (top / 3.6) * 1000 * 65536 * 0.99)
 
     sections = [
@@ -342,10 +349,11 @@ def write_roads(path, ex, edges, keep):
         u32s(kind_words), u32s(cell_first), u32s(cell_edges), names.padded(),
     ]
     header = ROADS_MAGIC + u32s([
-        VERSION, len(order), len(arc_words) // 3, len(edges), len(shape_x), len(kinds),
-        len(cell_edges), len(names.blob), x0, y0, GRID_SHIFT, cols, rows, h_q16, top, 0,
+        ROADS_VERSION, len(order), len(arc_words) // 3, len(edges), len(shape_x), len(kinds),
+        len(cell_edges), len(names.blob), x0, y0, GRID_SHIFT, cols, rows, h_q16, round(top),
+        0, round(top_other), 0,
     ])
-    assert len(header) == 72
+    assert len(header) == 80
     with open(path + ".tmp", "wb") as f:
         f.write(header)
         for s in sections:
@@ -426,7 +434,7 @@ def write_places(path, ex, keep_nodes):
     entry_words = []
     for x, y, name, town, kind, rank in entries:
         entry_words += [x, y, text.add(name), text.add(fold(name)), town | (kind << 16) | (rank << 24)]
-    header = PLACES_MAGIC + u32s([VERSION, len(entries), len(towns), len(text.blob)])
+    header = PLACES_MAGIC + u32s([PLACES_VERSION, len(entries), len(towns), len(text.blob)])
     assert len(header) == 24
     with open(path + ".tmp", "wb") as f:
         f.write(header)

@@ -56,6 +56,17 @@ pub enum NightMode {
     Auto,
 }
 
+/// What Map > Go to's routes are the best of.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RouteBy {
+    /// The least time, at the roads' speeds.
+    #[default]
+    Fastest,
+    /// The least distance.
+    Shortest,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum VideoPath {
@@ -277,6 +288,15 @@ pub struct Map {
     /// The road network and the names for Map > Go to (roads.bin and
     /// places.bin, written by scripts/map-graph.py). Empty: `dir`.
     pub route_dir: String,
+    /// The routes Go to finds: the fastest or the shortest.
+    pub route_by: RouteBy,
+    /// Keep off motorways where another road goes: they are made dear,
+    /// not forbidden, so a place only a motorway reaches is still reached.
+    pub avoid_motorways: bool,
+    /// Say "speed camera ahead" before a speed camera on the route (from
+    /// the road data, where OpenStreetMap has them). Off by default:
+    /// warning of cameras is against the law in some countries.
+    pub speed_cameras: bool,
     /// The destinations last driven to, the latest first, offered before
     /// anything is typed. Written by Map > Go to.
     pub recent: Vec<MapPlace>,
@@ -470,6 +490,9 @@ impl Default for Map {
             voice: true,
             voice_dir: "/var/lib/lehu/voice/en".into(),
             route_dir: String::new(),
+            route_by: RouteBy::Fastest,
+            avoid_motorways: false,
+            speed_cameras: false,
             recent: Vec::new(),
         }
     }
@@ -1047,6 +1070,26 @@ mod tests {
         assert_eq!(s.map.dir, "/var/lib/lehu/maps", "the rest stays");
         assert!(toml::from_str::<Settings>("[map]\nvoice = \"loud\"").is_err());
         assert!(toml::from_str::<Settings>("[map]\nvoice_dir = \"/x\"").is_err());
+    }
+
+    #[test]
+    fn routes_are_the_fastest_unless_asked() {
+        let map = Settings::default().map;
+        assert_eq!(
+            (map.route_by, map.avoid_motorways),
+            (RouteBy::Fastest, false)
+        );
+        assert!(
+            !map.speed_cameras,
+            "warning of cameras is asked for, never assumed"
+        );
+        let s: Settings =
+            toml::from_str("[map]\nroute-by = \"shortest\"\navoid-motorways = true\n").unwrap();
+        assert_eq!(
+            (s.map.route_by, s.map.avoid_motorways),
+            (RouteBy::Shortest, true)
+        );
+        assert!(toml::from_str::<Settings>("[map]\nroute-by = \"scenic\"").is_err());
     }
 
     #[test]

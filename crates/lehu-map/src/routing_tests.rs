@@ -3,8 +3,8 @@
 //! The router and the search: on small networks built here, and on a real
 //! one (scripts/map-graph.py's) when one is given.
 
-use crate::graph::Graph;
-use crate::graph::build::{M_PER_PX, Road, road, write};
+use crate::graph::build::{M_PER_PX, Road, road, write, write_with};
+use crate::graph::{Graph, RouteBy, RouteOptions};
 use crate::route::Router;
 use crate::search::{FoundKind, Places, fold};
 use crate::track::{Leg, LegStep, Track, Turn};
@@ -56,7 +56,7 @@ fn a_network_is_read_and_checked() {
     assert!(Graph::from_bytes(&other).is_err());
     // An arc to a node that is not there: found by the check.
     let mut broken = bytes;
-    let arcs_at = 18 * 4 + 4 * 4 * 4;
+    let arcs_at = 20 * 4 + 4 * 4 * 4;
     broken[arcs_at..arcs_at + 4].copy_from_slice(&99u32.to_le_bytes());
     assert!(Graph::from_bytes(&broken).unwrap().check().is_err());
 }
@@ -209,13 +209,135 @@ fn heading_makes_a_u_turn_cost() {
         snap(at(1100.0, 0.0)),
     );
     let east = Some((1024, 0));
-    let mut cost = |to, heading| g.route(&here, heading, to, &mut work).unwrap().ms;
+    let mut cost = |to, heading| g.route(&here, heading, to, &mut work).unwrap().cost;
     // 100 m at 50 km/h, 7.2 s; behind us, a U-turn first.
     assert!((7_000..7_400).contains(&cost(&ahead, east)));
     assert!((7_000..7_400).contains(&cost(&behind, None)));
     assert!((37_000..37_400).contains(&cost(&behind, east)));
     let path = g.route(&here, east, &behind, &mut work).unwrap();
     assert!(path.direct && path.arcs.is_empty() && !path.start_forward);
+}
+
+/// Three ways from 0 to 1, 3 km apart: straight along a slow street
+/// (3.0 km at 30 km/h, 6 min), round by a country road (3.4 km at 45
+/// km/h, 4.5 min), or out on a motorway and back (5.2 km, 4 min); and a
+/// service area, 5, only the motorway reaches.
+fn three_ways() -> (Router, [(i64, i64); 6]) {
+    let nodes = [
+        at(0.0, 0.0),
+        at(3000.0, 0.0),
+        at(500.0, 1500.0),
+        at(2500.0, 1500.0),
+        at(1500.0, -800.0),
+        at(1500.0, 1700.0),
+    ];
+    let mut direct = road(0, 1, "Rue Longue");
+    direct.kmh = 30;
+    let way = |a, b, name, kmh, motorway| {
+        let mut r = road(a, b, name);
+        r.kmh = kmh;
+        r.motorway = motorway;
+        r
+    };
+    let roads = [
+        direct,
+        way(0, 2, "A1", 60, true),
+        way(2, 3, "A1", 130, true),
+        way(3, 1, "A1", 60, true),
+        way(0, 4, "N7", 45, false),
+        way(4, 1, "N7", 45, false),
+        way(2, 5, "Aire", 30, true),
+    ];
+    let graph = Graph::from_bytes(&write(&nodes, &roads)).unwrap();
+    graph.check().unwrap();
+    (Router::new(graph, None), nodes)
+}
+
+#[test]
+fn route_options_pick_different_roads() {
+    let (r, n) = three_ways();
+    let go = |by, avoid_motorways| {
+        let o = RouteOptions {
+            by,
+            avoid_motorways,
+        };
+        let track = r
+            .route_with(at(10.0, 0.0), None, at(2990.0, 0.0), &o)
+            .unwrap();
+        let line = track.line();
+        if line.contains(&n[2]) {
+            "A1"
+        } else if line.contains(&n[4]) {
+            "N7"
+        } else {
+            "Rue Longue"
+        }
+    };
+    assert_eq!(go(RouteBy::Fastest, false), "A1");
+    assert_eq!(go(RouteBy::Fastest, true), "N7");
+    assert_eq!(go(RouteBy::Shortest, false), "Rue Longue");
+    assert_eq!(go(RouteBy::Shortest, true), "Rue Longue");
+    // The default is the fastest.
+    let plain = r.route(at(10.0, 0.0), None, at(2990.0, 0.0)).unwrap();
+    assert!(plain.line().contains(&n[2]));
+    // Only a motorway goes to the service area: avoided, not forbidden.
+    let o = RouteOptions {
+        by: RouteBy::Fastest,
+        avoid_motorways: true,
+    };
+    let track = r
+        .route_with(at(10.0, 0.0), None, at(1500.0, 1690.0), &o)
+        .unwrap();
+    assert!(track.line().contains(&n[2]));
+}
+
+#[test]
+fn each_mode_costs_what_it_says() {
+    let (r, _) = three_ways();
+    let g = r.graph();
+    let mut work = crate::graph::Work::default();
+    let snap = |p: (i64, i64)| g.snap(p.0, p.1).unwrap();
+    let (from, to) = (snap(at(0.0, 0.0)), snap(at(3000.0, 0.0)));
+    let cost = |by, avoid_motorways, work: &mut crate::graph::Work| {
+        let o = RouteOptions {
+            by,
+            avoid_motorways,
+        };
+        g.route_with(&from, None, &to, &o, work).unwrap().cost
+    };
+    // The motorway: about 4 min; by distance the street, 3 km (30,000
+    // dm); off motorways the country road, 4.5 min.
+    let fastest = cost(RouteBy::Fastest, false, &mut work);
+    assert!((240_000..250_000).contains(&fastest), "{fastest}");
+    let shortest = cost(RouteBy::Shortest, false, &mut work);
+    assert!((29_900..30_100).contains(&shortest), "{shortest}");
+    let avoid = cost(RouteBy::Fastest, true, &mut work);
+    assert!((268_000..276_000).contains(&avoid), "{avoid}");
+}
+
+#[test]
+fn version_1_road_data_still_routes() {
+    let nodes = [at(0.0, 0.0), at(400.0, 0.0), at(400.0, 400.0)];
+    let mut m = road(0, 1, "A1");
+    m.motorway = true;
+    let bytes = write_with(&nodes, &[m, road(1, 2, "B")], &[], 1);
+    let g = Graph::from_bytes(&bytes).unwrap();
+    g.check().unwrap();
+    assert_eq!(g.cameras(), 0);
+    assert!(!g.edge(0).motorway, "version 1 has no motorway marks");
+    let r = Router::new(g, None);
+    let o = RouteOptions {
+        by: RouteBy::Shortest,
+        avoid_motorways: true,
+    };
+    let t = r
+        .route_with(at(5.0, 0.0), None, at(400.0, 395.0), &o)
+        .unwrap();
+    assert!((785.0..805.0).contains(&f64::from(t.metres())));
+    // And a version LEHU does not know is refused.
+    let mut later = bytes;
+    later[8..12].copy_from_slice(&3u32.to_le_bytes());
+    assert!(Graph::from_bytes(&later).is_err());
 }
 
 #[test]
