@@ -11,7 +11,7 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
-use lehu_map::{Ahead, Marker, Route, TileSet, Track, Turn, View, Viewer};
+use lehu_map::{Ahead, Drive, Marker, Route, TileSet, Track, Turn, View, Viewer};
 use lehu_ui::{
     Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
     NavArrow, NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
@@ -23,10 +23,9 @@ use toml::{Table, Value};
 
 use crate::audio::Audio;
 
-/// A replayed drive's position moves on this often: 25 times a second,
-/// smooth on the panel, and a move that only shifts the map's window (or
-/// patches the marker, without a sprite plane) costs about a millisecond.
-const MAP_TRACK_STEP_MS: u64 = 40;
+/// The map's bar follows a replayed drive this often (the map itself
+/// moves along it by itself, in step with the panel).
+const MAP_TRACK_STEP_MS: u64 = 200;
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,7 +191,7 @@ pub struct AppHost {
     map_marker: Option<Marker>,
     /// A drive replayed as the position (map.fake-track), and when it
     /// started: it goes on while the map is closed.
-    map_track: Option<Track>,
+    map_track: Option<Arc<Track>>,
     map_track_start: Option<u64>,
     map_track_shown: u64,
     /// The map keeps where we are in the middle, until it is dragged.
@@ -201,8 +200,8 @@ pub struct AppHost {
     /// along it for the map's bar.
     map_route: Option<Route>,
     map_guide: Option<NavCard>,
-    /// Which way is up while it follows a drive: the heading, smoothed.
-    map_up: Option<(f64, f64)>,
+    /// The drive's speed, km/h, and the road's limit, for the bar.
+    map_speed: Option<(u32, Option<u16>)>,
     map_note: String,
     map_label: String,
 }
@@ -290,7 +289,7 @@ impl AppHost {
             map_follow: true,
             map_route: None,
             map_guide: None,
-            map_up: None,
+            map_speed: None,
             map_note: String::new(),
             map_label: String::new(),
         }
@@ -640,8 +639,9 @@ impl AppHost {
                     self.map_route = Some(Route::from(track.line()));
                     self.map_guide = track
                         .ahead(lehu_core::clock::now_ms() - start)
-                        .map(|a| guidance(&a));
-                    self.map_track = Some(track);
+                        .map(|a| guidance(&a, local_time_ms(self.zone_min)));
+                    self.map_speed = Some((fix.kmh, fix.limit));
+                    self.map_track = Some(Arc::new(track));
                 }
                 Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
             }
@@ -666,13 +666,33 @@ impl AppHost {
         }
         view.zoom_by(0, set.min_zoom, set.top_zoom());
         view.clamp(&set.bounds);
-        match Viewer::start(display, set.clone(), view) {
+        // The night tiles, when the set has them.
+        let night = match set.night() {
+            Some(Ok(n)) => Some(n),
+            Some(Err(e)) => {
+                log::warn!("map: night tiles: {e}");
+                None
+            }
+            None => None,
+        };
+        match Viewer::start(display, set.clone(), night, view) {
             Ok(viewer) => {
+                viewer.set_night(self.settings.display.night_mode == settings::NightMode::Night);
                 viewer.set_position(self.map_marker);
                 viewer.set_route(self.map_route.clone());
-                if let Some(Marker::Arrow(_, _, heading)) = self.map_marker {
-                    self.map_up = None;
-                    viewer.set_heading(self.steer(heading, 0));
+                // A replayed drive: the map moves along it by itself.
+                if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
+                    let ago = lehu_core::clock::now_ms().saturating_sub(start);
+                    let now = std::time::Instant::now();
+                    viewer.set_drive(Some(Drive {
+                        track: Arc::clone(track),
+                        start: now
+                            .checked_sub(std::time::Duration::from_millis(ago))
+                            .unwrap_or(now),
+                        bounds: set.bounds,
+                        top_zoom: set.top_zoom(),
+                    }));
+                    viewer.follow(self.map_follow.then_some(view.zoom));
                 }
                 self.map = Some(viewer);
                 self.map_view = view;
@@ -698,13 +718,10 @@ impl AppHost {
         })
     }
 
-    /// Each turn of the loop while the map is up: a replayed drive moves
-    /// on, and the map with it while it follows.
+    /// Each turn of the loop while the map is up: where a replayed drive
+    /// is, for the Me key and the bar (the map moves along it by itself).
     pub fn map_tick(&mut self) {
         let Some(start) = self.map_track_start else {
-            return;
-        };
-        let Some(bounds) = self.map_set.as_ref().map(|s| s.bounds) else {
             return;
         };
         let now = lehu_core::clock::now_ms();
@@ -715,57 +732,32 @@ impl AppHost {
             return;
         };
         let fix = track.at(now - start);
-        self.map_guide = track.ahead(now - start).map(|a| guidance(&a));
-        let since = now.saturating_sub(self.map_track_shown);
+        self.map_guide = track
+            .ahead(now - start)
+            .map(|a| guidance(&a, local_time_ms(self.zone_min)));
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
-        // The arrow along the smoothed heading too: heading up, it then
-        // points straight up, not a step's way at each bend.
-        let heading = self.steer(fix.heading, since);
-        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
-        let up = if self.map_follow {
-            (self.map_view.x, self.map_view.y) = (fix.x, fix.y);
-            self.map_view.clamp(&bounds);
-            heading
-        } else {
-            None
-        };
-        if let Some(viewer) = &self.map {
-            viewer.set(self.map_view, self.map_marker, up);
-        }
+        self.map_speed = Some((fix.kmh, fix.limit));
     }
 
-    /// The way up while following: the drive's heading, turned towards
-    /// by how long it has been, `since` ms (0: at once), as a bend turns
-    /// the map over about a second; at once when it reverses; None before
-    /// it has moved.
-    fn steer(&mut self, heading: (i32, i32), since: u64) -> Option<(i32, i32)> {
-        // 45% of the way each 200 ms, however often it is asked.
-        let keep = if since == 0 {
-            0.0
-        } else {
-            0.55f64.powf(since.min(1000) as f64 / 200.0)
-        };
-        let unit = |x: f64, y: f64| {
-            let len = x.hypot(y);
-            (len > 0.0).then(|| (x / len, y / len))
-        };
-        if let Some(target) = unit(f64::from(heading.0), f64::from(heading.1)) {
-            self.map_up = Some(match self.map_up {
-                Some(h) if h.0 * target.0 + h.1 * target.1 > -0.5 => unit(
-                    h.0 * keep + target.0 * (1.0 - keep),
-                    h.1 * keep + target.1 * (1.0 - keep),
-                )
-                .unwrap_or(target),
-                _ => target,
-            });
+    /// Following a drive, the view the map shows (it moves by itself);
+    /// otherwise the one it was given.
+    fn map_view_now(&self) -> View {
+        match &self.map {
+            Some(viewer) if self.map_follow && self.map_track.is_some() => {
+                // Its zoom is the one asked for, not one closer near a turn.
+                View {
+                    zoom: self.map_view.zoom,
+                    ..viewer.view()
+                }
+            }
+            _ => self.map_view,
         }
-        self.map_up
-            .map(|h| ((h.0 * 1024.0) as i32, (h.1 * 1024.0) as i32))
     }
 
     /// The map goes; where it was left is kept for next time.
     pub fn map_stop(&mut self) {
+        self.map_view = self.map_view_now();
         if let Some(viewer) = self.map.take() {
             viewer.stop();
         }
@@ -955,7 +947,11 @@ impl Host for AppHost {
         self.resume = true;
     }
 
-    fn night_mode_changed(&mut self) {}
+    fn night_mode_changed(&mut self) {
+        if let Some(viewer) = &self.map {
+            viewer.set_night(self.settings.display.night_mode == settings::NightMode::Night);
+        }
+    }
 
     fn request_power(&mut self, action: Power) {
         self.power = Some(action);
@@ -1027,16 +1023,21 @@ impl Host for AppHost {
     }
 
     fn map_pan(&mut self, dx: i32, dy: i32) {
+        // Moved by hand: from where it was, it stays where it was put,
+        // north up.
+        self.map_view = self.map_view_now();
         let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
             return;
         };
+        if self.map_follow {
+            // As shown: a level closer near a turn.
+            self.map_view.zoom = viewer.view().zoom;
+        }
+        viewer.follow(None);
         self.map_view.pan(dx, dy, &set.bounds);
         viewer.set_view(self.map_view);
-        // Moved by hand: it stays where it was put, north up.
         self.map_follow = false;
-        if let Some(viewer) = &self.map {
-            viewer.set_heading(None);
-        }
+        viewer.set_heading(None);
     }
 
     fn map_zoom(&mut self, step: i32) {
@@ -1044,7 +1045,11 @@ impl Host for AppHost {
             return;
         };
         self.map_view.zoom_by(step, set.min_zoom, set.top_zoom());
-        viewer.set_view(self.map_view);
+        if self.map_follow && self.map_track.is_some() {
+            viewer.follow(Some(self.map_view.zoom));
+        } else {
+            viewer.set_view(self.map_view);
+        }
         self.update_map_label();
     }
 
@@ -1057,10 +1062,17 @@ impl Host for AppHost {
         self.map_view.clamp(&set.bounds);
         viewer.set_view(self.map_view);
         self.map_follow = true;
+        if self.map_track.is_some() {
+            viewer.follow(Some(self.map_view.zoom));
+        }
     }
 
     fn map_guidance(&self) -> Option<&NavCard> {
         self.map.as_ref().and(self.map_guide.as_ref())
+    }
+
+    fn map_speed(&self) -> Option<(u32, Option<u16>)> {
+        self.map.as_ref().and(self.map_speed)
     }
 
     fn map_has_position(&self) -> bool {
@@ -1312,7 +1324,10 @@ impl Host for AppHost {
 
 /// The map's bar while it guides: the next turn, how far, onto what, and
 /// what is left of the route.
-fn guidance(a: &Ahead<'_>) -> NavCard {
+/// The bar's guidance for the next turn. `time_of_day`: now, in ms since
+/// local midnight, for the arrival as a clock time; None while the clock is
+/// not set (then the minutes left).
+fn guidance(a: &Ahead<'_>, time_of_day: Option<u64>) -> NavCard {
     let (arrow, maneuver) = match a.maneuver.turn {
         Turn::Straight => (NavArrow::Straight, "Continue".to_string()),
         Turn::SlightLeft => (NavArrow::SlightLeft, "Bear left".to_string()),
@@ -1333,14 +1348,24 @@ fn guidance(a: &Ahead<'_>) -> NavCard {
         _ => a.maneuver.road.clone(),
     };
     let minutes = a.left_ms.div_ceil(60_000).max(1);
+    let (eta, eta_note) = match time_of_day {
+        Some(now) => {
+            let at = (now + a.left_ms) / 60_000 % (24 * 60);
+            (
+                format!("{:02}:{:02}", at / 60, at % 60),
+                format!("{minutes} min, {}", distance(a.left_metres)),
+            )
+        }
+        None => (format!("{minutes} min"), distance(a.left_metres)),
+    };
     NavCard {
         active: true,
         arrow,
         maneuver,
         distance: distance(a.metres),
         road,
-        eta: format!("{minutes} min"),
-        eta_note: distance(a.left_metres),
+        eta,
+        eta_note,
     }
 }
 
@@ -1373,7 +1398,26 @@ fn ordinal(n: u8) -> String {
 
 #[cfg(test)]
 mod guidance_tests {
-    use super::{distance, ordinal};
+    use super::{distance, guidance, ordinal};
+
+    #[test]
+    fn the_arrival_is_a_clock_time_once_the_clock_is_set() {
+        let gpx = r#"<gpx>
+<wpt lat="49.6010" lon="6.1300"><name></name><type>arrive</type></wpt>
+<trk><trkseg>
+<trkpt lat="49.6000" lon="6.1300"><time>2027-01-15T08:00:00Z</time></trkpt>
+<trkpt lat="49.6010" lon="6.1300"><time>2027-01-15T08:10:00Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+        let track = lehu_map::Track::parse_gpx(gpx).unwrap();
+        let ahead = track.ahead(0).unwrap();
+        // 23:55 and ten minutes to go: past midnight.
+        let card = guidance(&ahead, Some((23 * 60 + 55) * 60_000));
+        assert_eq!(card.eta, "00:05");
+        assert_eq!(card.eta_note, "10 min, 100 m");
+        let card = guidance(&ahead, None);
+        assert_eq!(card.eta, "10 min");
+        assert_eq!(card.eta_note, "100 m");
+    }
 
     #[test]
     fn distances_read_as_a_driver_reads_them() {

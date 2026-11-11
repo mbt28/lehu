@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use lehu_drm::{Canvas, Display, Show};
 
+use crate::drive::{Drive, NEAR_TURN_M, Steer};
 use crate::hw::HwJpeg;
 use crate::nv12;
 use crate::sprite::Sprites;
@@ -43,8 +44,23 @@ pub enum Marker {
     Arrow(i64, i64, (i32, i32)),
 }
 
+/// How far along the route the drive is: the track point it heads for,
+/// and where it is. The route behind it is drawn grey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Progress {
+    step: usize,
+    at: (i64, i64),
+}
+
 struct Inner {
     want: View,
+    /// A drive the map moves along by itself, and the zoom it follows it
+    /// at; None: it does not follow, the view is the loop's.
+    drive: Option<Drive>,
+    follow: Option<u8>,
+    progress: Option<Progress>,
+    /// The night tiles.
+    night: bool,
     /// Where we are.
     position: Option<Marker>,
     /// The route, drawn under the marker.
@@ -59,7 +75,9 @@ struct Inner {
 
 struct Shared {
     inner: Mutex<Inner>,
+    /// The map thread's, and the drive thread's.
     wake: Condvar,
+    drive_wake: Condvar,
 }
 
 impl Shared {
@@ -72,6 +90,7 @@ impl Shared {
 pub struct Viewer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<Vec<Canvas>>>,
+    driver: Option<JoinHandle<()>>,
     display: Arc<Display>,
 }
 
@@ -79,7 +98,13 @@ impl Viewer {
     /// The canvases are made here, so a lack of video memory is said at
     /// once, and the video engine's JPEG decoder opened when there is one.
     /// The phone decoder's frames are held off the plane until `stop`.
-    pub fn start(display: Arc<Display>, set: TileSet, view: View) -> Result<Self, String> {
+    /// `night`: the night tiles, shown while `set_night` says so.
+    pub fn start(
+        display: Arc<Display>,
+        set: TileSet,
+        night: Option<TileSet>,
+        view: View,
+    ) -> Result<Self, String> {
         let panel = (display.width(), display.height());
         // Enough whole tiles that the panel fits at any offset, and a tile
         // to spare each way: 1280 x 768 for 800 x 480.
@@ -127,6 +152,10 @@ impl Viewer {
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 want: view,
+                drive: None,
+                follow: None,
+                progress: None,
+                night: false,
                 position: None,
                 route: None,
                 heading: None,
@@ -134,6 +163,7 @@ impl Viewer {
                 shown: false,
             }),
             wake: Condvar::new(),
+            drive_wake: Condvar::new(),
         });
         // Heading-up frames: the panel and some road ahead and to the
         // sides, which the window moves over until the map turns again.
@@ -162,7 +192,7 @@ impl Viewer {
         let thread = {
             let shared = Arc::clone(&shared);
             let display = Arc::clone(&display);
-            let tiles = Tiles::new(set, hw);
+            let tiles = Tiles::new(set, night, hw);
             let frames = Frames {
                 canvases,
                 ups,
@@ -173,9 +203,18 @@ impl Viewer {
                 .spawn(move || run(&shared, &display, tiles, frames, panel, (cols, rows)))
                 .map_err(|e| format!("map thread: {e}"))?
         };
+        let driver = {
+            let shared = Arc::clone(&shared);
+            let display = Arc::clone(&display);
+            thread::Builder::new()
+                .name("map-drive".into())
+                .spawn(move || drive(&shared, &display))
+                .map_err(|e| format!("map drive thread: {e}"))?
+        };
         Ok(Self {
             shared,
             thread: Some(thread),
+            driver: Some(driver),
             display,
         })
     }
@@ -234,6 +273,44 @@ impl Viewer {
         }
     }
 
+    /// Move along `drive` by itself, or stop doing so: the marker, and the
+    /// view too while it follows.
+    pub fn set_drive(&self, drive: Option<Drive>) {
+        let mut inner = self.shared.lock();
+        if drive.is_none() {
+            inner.progress = None;
+        }
+        inner.drive = drive;
+        self.shared.drive_wake.notify_one();
+        self.shared.wake.notify_one();
+    }
+
+    /// Follow the drive at `zoom` (a level closer near a turn), heading
+    /// up; None: stay where `set_view` puts it, north up.
+    pub fn follow(&self, zoom: Option<u8>) {
+        let mut inner = self.shared.lock();
+        inner.follow = zoom;
+        if zoom.is_none() {
+            inner.heading = None;
+        }
+        self.shared.wake.notify_one();
+    }
+
+    /// The view shown, or about to be: while it follows a drive, the
+    /// drive's.
+    pub fn view(&self) -> View {
+        self.shared.lock().want
+    }
+
+    /// The night tiles, or the day's.
+    pub fn set_night(&self, night: bool) {
+        let mut inner = self.shared.lock();
+        if inner.night != night {
+            inner.night = night;
+            self.shared.wake.notify_one();
+        }
+    }
+
     /// The first picture is on the plane.
     pub fn picture_ready(&self) -> bool {
         self.shared.lock().shown
@@ -250,6 +327,12 @@ impl Viewer {
             let mut inner = self.shared.lock();
             inner.stop = true;
             self.shared.wake.notify_one();
+            self.shared.drive_wake.notify_one();
+        }
+        if let Some(t) = self.driver.take()
+            && t.join().is_err()
+        {
+            log::error!("map: the drive thread panicked");
         }
         if let Some(t) = self.thread.take() {
             let joined = t.join();
@@ -275,11 +358,118 @@ impl Drop for Viewer {
     }
 }
 
-/// What a canvas holds: its tiles, and the marker drawn on them.
+/// What a canvas holds: its tiles, the marker drawn on them, and where
+/// the route's grey part ends.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Held {
     layout: Layout,
     marker: Option<Marker>,
+    progress: Option<Progress>,
+}
+
+/// The route's grey part may end this many pixels behind the marker (the
+/// arrow covers it) before the picture is drawn anew.
+const ROUTE_LAG: i64 = 12;
+
+/// A picture's grey part, drawn to `drawn`, still meets the marker at
+/// `now`: within `ROUTE_LAG` pixels at `zoom`. Always, without a route.
+fn fresh(drawn: Option<Progress>, now: Option<Progress>, route: bool, zoom: u8) -> bool {
+    if !route {
+        return true;
+    }
+    match (drawn, now) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let s = WORLD_Z - zoom.min(WORLD_Z);
+            ((a.at.0 - b.at.0).abs() >> s) + ((a.at.1 - b.at.1).abs() >> s) <= ROUTE_LAG
+        }
+        _ => false,
+    }
+}
+
+/// The drive thread: while there is a drive, every second refresh of the
+/// panel, where it is now, as the marker, the route's progress, and the
+/// view and the way up while it follows; the map thread then shows that
+/// before the next refresh, so the map moves in even steps. Above the map
+/// thread's drawing (a little real-time priority, when it may have it), so
+/// a turn being drawn does not make it late.
+fn drive(shared: &Shared, display: &Display) {
+    let param = libc::sched_param { sched_priority: 2 };
+    // SAFETY: plain call on this thread's own handle; a refusal (no
+    // RLIMIT_RTPRIO) leaves it as it was.
+    unsafe {
+        libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param);
+    }
+    let mut steer = Steer::default();
+    let mut last: Option<Instant> = None;
+    let mut next: Option<u32> = None;
+    loop {
+        let drive = {
+            let mut inner = shared.lock();
+            loop {
+                if inner.stop {
+                    return;
+                }
+                if let Some(d) = &inner.drive {
+                    break d.clone();
+                }
+                (last, next) = (None, None);
+                inner = shared
+                    .drive_wake
+                    .wait(inner)
+                    .unwrap_or_else(PoisonError::into_inner);
+            }
+        };
+        match display.wait_vblank(next) {
+            Ok(n) => next = Some(n.wrapping_add(2)),
+            Err(_) => {
+                // No refresh count: a thirtieth of a second, roughly.
+                thread::sleep(Duration::from_millis(33));
+                next = None;
+            }
+        }
+        let now = Instant::now();
+        let ms = now.saturating_duration_since(drive.start).as_millis() as u64;
+        let fix = drive.track.at(ms);
+        let since = last.map_or(0, |l| now.duration_since(l).as_millis() as u64);
+        last = Some(now);
+        let heading = steer.step(fix.heading, since);
+        let marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
+        let progress = Some(Progress {
+            step: fix.step,
+            at: (fix.x, fix.y),
+        });
+        let near = drive
+            .track
+            .ahead(ms)
+            .is_some_and(|a| a.metres < NEAR_TURN_M);
+        let mut inner = shared.lock();
+        // Following, as it is now: the loop may just have stopped it.
+        let (want, up) = match inner.follow {
+            Some(base) => {
+                let zoom = if near {
+                    base.saturating_add(1).min(drive.top_zoom.max(base))
+                } else {
+                    base
+                };
+                let mut v = View {
+                    zoom,
+                    x: fix.x,
+                    y: fix.y,
+                };
+                v.clamp(&drive.bounds);
+                (v, heading)
+            }
+            None => (inner.want, None),
+        };
+        if (inner.want, inner.position, inner.heading, inner.progress)
+            != (want, marker, up, progress)
+        {
+            (inner.want, inner.position, inner.heading, inner.progress) =
+                (want, marker, up, progress);
+            shared.wake.notify_one();
+        }
+    }
 }
 
 /// The thread's pictures: the north-up canvases, the heading-up frames,
@@ -323,9 +513,12 @@ fn run(
     // leaves the one shown.
     let mut heading_of_view = (0i64, 0i64);
     let mut ahead: Option<Layout> = None;
-    // Where we are, as the canvases should show it, and the route.
+    // Where we are, as the canvases should show it, the route, how far
+    // along it, and day or night.
     let mut position: Option<Marker> = None;
     let mut route: Option<Route> = None;
+    let mut progress: Option<Progress> = None;
+    let mut night = false;
     loop {
         let want = {
             let mut inner = shared.lock();
@@ -344,6 +537,20 @@ fn run(
                 }
                 if inner.heading != heading {
                     heading = inner.heading.filter(|_| !ups.is_empty());
+                    shown = None;
+                }
+                if inner.night != night {
+                    night = inner.night;
+                    if tiles.set_night(night) {
+                        // Every picture has the other tiles.
+                        held.fill(None);
+                        up_held.fill(None);
+                        ahead = None;
+                        shown = None;
+                    }
+                }
+                if inner.progress != progress {
+                    progress = inner.progress;
                     shown = None;
                 }
                 if inner.position != position {
@@ -392,6 +599,7 @@ fn run(
                     &layout,
                     baked,
                     route.as_deref(),
+                    progress,
                 ) {
                     log::debug!(
                         "map: zoom {} at {},{} ready ahead in {} ms (canvas {i})",
@@ -417,7 +625,11 @@ fn run(
                     .flatten()
                     .copied()
                     .chain(0..ups.len())
-                    .find_map(|i| up_held[i]?.window(&want, h, size, panel).map(|w| (i, w)))
+                    .find_map(|i| {
+                        let u = up_held[i]?;
+                        fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
+                        u.window(&want, h, size, panel).map(|w| (i, w))
+                    })
             } else {
                 None
             };
@@ -447,6 +659,7 @@ fn run(
                         h,
                         baked,
                         route.as_deref(),
+                        progress,
                         anchor_on(panel, window),
                         top,
                     ));
@@ -507,6 +720,7 @@ fn run(
             .find_map(|i| {
                 let h = held[i]?;
                 (h.marker == baked).then_some(())?;
+                fresh(h.progress, progress, route.is_some(), h.layout.zoom).then_some(())?;
                 h.layout.window(&want, panel).map(|w| (i, w))
             })
             // Else the free canvas, if it holds the window: only the
@@ -522,13 +736,23 @@ fn run(
                     let rect = marker_rect(&h.layout, old);
                     tiles.compose_rect(&h.layout, canvas.pixels(), pitch, chroma, rect);
                     if let Some(line) = route.as_deref() {
-                        draw_route(canvas.pixels(), pitch, chroma, size, &h.layout, rect, line);
+                        draw_route(
+                            canvas.pixels(),
+                            pitch,
+                            chroma,
+                            size,
+                            &h.layout,
+                            rect,
+                            line,
+                            progress,
+                        );
                     }
                 }
                 draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, baked);
                 held[i] = Some(Held {
                     layout: h.layout,
                     marker: baked,
+                    progress,
                 });
                 Some((i, w))
             });
@@ -546,6 +770,7 @@ fn run(
                     &layout,
                     baked,
                     route.as_deref(),
+                    progress,
                 ) else {
                     log::error!("map: no canvas free to compose into");
                     break;
@@ -734,6 +959,7 @@ struct UpHeld {
     h: (i64, i64),
     anchor: (i64, i64),
     top: u32,
+    progress: Option<Progress>,
 }
 
 impl UpHeld {
@@ -806,6 +1032,7 @@ fn render_up(
     h: (i64, i64),
     marker: Option<Marker>,
     route: Option<&[(i64, i64)]>,
+    progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
 ) -> UpHeld {
@@ -818,6 +1045,7 @@ fn render_up(
         h,
         anchor,
         top,
+        progress,
     };
     let (p, across, down) = (held.p, held.across(), held.down());
     // The drawn part's corners on the map, for the tiles under them.
@@ -856,7 +1084,16 @@ fn render_up(
     }
     if let Some(line) = route {
         let points: Vec<(i64, i64)> = line.iter().map(|&q| held.sixteenth(q)).collect();
-        nv12::route(out.pixels(), pitch, chroma, size, (0, t, w, ht), &points);
+        let split = progress.map(|q| (q.step, held.sixteenth(q.at)));
+        draw_split(
+            out.pixels(),
+            pitch,
+            chroma,
+            size,
+            (0, t, w, ht),
+            &points,
+            split,
+        );
     }
     match marker {
         Some(Marker::Dot(x, y)) => {
@@ -880,7 +1117,9 @@ fn render_up(
     held
 }
 
-/// The route on a canvas, only inside `clip` (its pixels).
+/// The route on a canvas, only inside `clip` (its pixels), grey up to
+/// `progress`.
+#[allow(clippy::too_many_arguments)]
 fn draw_route(
     dst: &mut [u8],
     pitch: usize,
@@ -889,9 +1128,35 @@ fn draw_route(
     layout: &Layout,
     clip: (i64, i64, i64, i64),
     line: &[(i64, i64)],
+    progress: Option<Progress>,
 ) {
     let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
-    nv12::route(dst, pitch, chroma, size, clip, &points);
+    let split = progress.map(|p| (p.step, layout.sixteenth(p.at)));
+    draw_split(dst, pitch, chroma, size, clip, &points, split);
+}
+
+/// The route's points (1/16 px of the canvas), grey behind the split: the
+/// points before `step`, then `at`.
+fn draw_split(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    clip: (i64, i64, i64, i64),
+    points: &[(i64, i64)],
+    split: Option<(usize, (i64, i64))>,
+) {
+    match split {
+        Some((step, at)) if 0 < step && step < points.len() => {
+            let mut behind = points[..step].to_vec();
+            behind.push(at);
+            let mut ahead = vec![at];
+            ahead.extend_from_slice(&points[step..]);
+            nv12::route_behind(dst, pitch, chroma, size, clip, &behind);
+            nv12::route(dst, pitch, chroma, size, clip, &ahead);
+        }
+        _ => nv12::route(dst, pitch, chroma, size, clip, points),
+    }
 }
 
 /// The part of a canvas a marker covers, in its pixels: left, top, right,
@@ -906,6 +1171,7 @@ fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
 /// Compose `layout` into a canvas that is neither on scanout nor just
 /// replaced, with the marker at `position`, and say which; None when there
 /// is none such.
+#[allow(clippy::too_many_arguments)]
 fn compose_free(
     tiles: &mut Tiles,
     canvases: &mut [Canvas],
@@ -914,6 +1180,7 @@ fn compose_free(
     layout: &Layout,
     position: Option<Marker>,
     route: Option<&[(i64, i64)]>,
+    progress: Option<Progress>,
 ) -> Option<usize> {
     let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
     let canvas = &mut canvases[index];
@@ -923,12 +1190,22 @@ fn compose_free(
     tiles.compose(layout, canvas.pixels(), pitch, chroma);
     if let Some(line) = route {
         let whole = (0, 0, i64::from(size.0), i64::from(size.1));
-        draw_route(canvas.pixels(), pitch, chroma, size, layout, whole, line);
+        draw_route(
+            canvas.pixels(),
+            pitch,
+            chroma,
+            size,
+            layout,
+            whole,
+            line,
+            progress,
+        );
     }
     draw_marker(canvas.pixels(), pitch, chroma, size, layout, position);
     held[index] = Some(Held {
         layout: *layout,
         marker: position,
+        progress,
     });
     Some(index)
 }
@@ -948,6 +1225,7 @@ mod tests {
             h,
             anchor: anchor_on(PANEL, WINDOW),
             top,
+            progress: None,
         }
     }
 

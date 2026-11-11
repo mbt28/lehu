@@ -151,6 +151,44 @@ LABEL_BUCKETS = {}  # zoom -> {(tile x, tile y): [label index]}
 FONT_PATH = DEFAULT_FONT
 
 
+def night():
+    """The night palette: dark land and areas, roads lighter than the land
+    and keeping their colours (dimmed), light names on dark halos."""
+    global LAND, BUILDING_EDGE, ROADS, RAIL, WATER, STREET_TEXT, PLACE_TEXT, HALO
+    LAND = (30, 34, 40)
+    dark = {
+        "forest": (30, 48, 38),
+        "grass": (34, 50, 40),
+        "farmland": (36, 40, 40),
+        "residential": (40, 43, 50),
+        "industrial": (46, 42, 52),
+        "commercial": (50, 42, 48),
+        "park": (32, 54, 42),
+        "cemetery": (34, 46, 40),
+        "water": (20, 38, 60),
+        "building": (54, 57, 66),
+    }
+    for kind, colour in dark.items():
+        AREAS[kind] = (colour, AREAS[kind][1])
+    BUILDING_EDGE = (68, 72, 82)
+    colours = {
+        "path": ((130, 80, 72), None),
+        "service": ((78, 84, 94), (52, 56, 64)),
+        "minor": ((88, 94, 104), (52, 56, 64)),
+        "tertiary": ((100, 106, 116), (56, 60, 70)),
+        "secondary": ((128, 124, 86), (70, 68, 50)),
+        "primary": ((156, 122, 74), (96, 74, 44)),
+        "trunk": ((166, 104, 84), (104, 64, 52)),
+        "motorway": ((164, 92, 110), (104, 56, 70)),
+    }
+    ROADS = [(r[0], *colours[r[0]], *r[3:]) for r in ROADS]
+    RAIL = ((90, 90, 96), *RAIL[1:])
+    WATER = AREAS["water"][0]
+    STREET_TEXT = (200, 204, 210)
+    PLACE_TEXT = (226, 228, 232)
+    HALO = (24, 26, 30)
+
+
 def world(lon, lat):
     """Longitude and latitude to world pixels at zoom 0 (0..256)."""
     lat = max(-85.05112878, min(85.05112878, lat))
@@ -563,7 +601,11 @@ def main():
     ap.add_argument("--quality", type=int, default=80)
     ap.add_argument("--font", default=DEFAULT_FONT, help="the labels' TrueType font")
     ap.add_argument("--no-labels", action="store_true", help="no street or place names")
+    ap.add_argument("--night", action="store_true",
+                    help="the night palette (LEHU shows the set in <map>/night at night)")
     a = ap.parse_args()
+    if a.night:
+        night()
     global FONT_PATH
     FONT_PATH = a.font
     labels = not a.no_labels
@@ -621,6 +663,7 @@ def main():
         f.write(f"center = [{int(cx * k)}, {int(cy * k)}]\n")
         f.write(f"start-zoom = {min(max(z0, 12), z1)}\n")
         f.write('attribution = "© OpenStreetMap contributors"\n')
+        f.write(f"# Where there is no tile.\nland = [{LAND[0]}, {LAND[1]}, {LAND[2]}]\n")
     os.replace(os.path.join(a.out, "map.toml.tmp"), os.path.join(a.out, "map.toml"))
     print(f"done in {time.time() - t:.0f} s", flush=True)
 

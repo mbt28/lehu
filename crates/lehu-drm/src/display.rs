@@ -1328,6 +1328,21 @@ impl Display {
         true
     }
 
+    /// Wait for the panel's refresh number `sequence`, or the next one if
+    /// it has gone by (None: the next refresh); the number of the one
+    /// waited for. Refreshes are counted by the kernel from when the CRTC
+    /// came up; the display's lock is not held meanwhile.
+    pub fn wait_vblank(&self, sequence: Option<u32>) -> io::Result<u32> {
+        const ABSOLUTE: u32 = 0;
+        const RELATIVE: u32 = 1;
+        const NEXT_ON_MISS: u32 = 0x1000_0000;
+        let (kind, n) = match sequence {
+            Some(n) => (ABSOLUTE | NEXT_ON_MISS, n),
+            None => (RELATIVE, 1),
+        };
+        drm_ffi::wait_vblank(self.card.as_fd(), kind, n, 0).map(|r| r.sequence)
+    }
+
     /// Take the sprite down, waiting for the flip.
     pub fn hide_sprite(&self) {
         let mut st = self.lock();

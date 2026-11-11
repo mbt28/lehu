@@ -423,6 +423,11 @@ pub trait Host {
     fn map_guidance(&self) -> Option<&NavCard> {
         None
     }
+    /// How fast we go, km/h, and the road's speed limit when it is
+    /// known; None when there is no position on the move.
+    fn map_speed(&self) -> Option<(u32, Option<u16>)> {
+        None
+    }
     /// Over the map, while there is no picture: why, or that it loads.
     fn map_note(&self) -> &str {
         ""

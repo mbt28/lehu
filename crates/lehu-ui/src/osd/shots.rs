@@ -488,9 +488,13 @@ fn shots() {
         maneuver: "Turn left".into(),
         distance: "350 m".into(),
         road: "Avenue de la Porte-Neuve".into(),
-        eta: "4 min".into(),
-        eta_note: "3.6 km".into(),
+        eta: "14:32".into(),
+        eta_note: "4 min, 3.6 km".into(),
     });
+    s.osd.host_mut().map_speed = Some((47, Some(50)));
     s.goto(MAP);
     s.save("71-map-guiding");
+    s.osd.host_mut().map_speed = Some((58, Some(50)));
+    s.goto(MAP);
+    s.save("72-map-over-the-limit");
 }

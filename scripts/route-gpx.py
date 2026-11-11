@@ -13,7 +13,8 @@ at those speeds, slowing for sharp turns, so LEHU can replay it as a
 drive (map.fake-track) until there is a real position. The turns come as
 waypoints before the track, in order: each at its junction, its <type> the
 manoeuvre (left, slight-right, u-turn, roundabout-2, arrive...) and its
-<name> the road it leads onto. It needs pyosmium
+<name> the road it leads onto. A track point on a road with a speed
+limit of its own carries it as <extensions><maxspeed>. It needs pyosmium
 (python3 -m venv v && v/bin/pip install osmium).
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0.
@@ -58,14 +59,19 @@ def bearing(a, b):
     return math.degrees(math.atan2(y, x))
 
 
-def maxspeed(tags, cls):
+def limit(tags):
+    """The road's own speed limit, km/h, or None where it has none."""
     v = tags.get("maxspeed", "")
     try:
         if v.endswith(" mph"):
-            return float(v[:-4]) * 1.609
-        return float(v)
+            return round(float(v[:-4]) * 1.609)
+        return round(float(v))
     except ValueError:
-        return SPEED[cls]
+        return None
+
+
+def maxspeed(tags, cls):
+    return limit(tags) or SPEED[cls]
 
 
 class Roads(osmium.SimpleHandler):
@@ -73,7 +79,7 @@ class Roads(osmium.SimpleHandler):
         super().__init__()
         self.where = {}  # node id -> (lat, lon)
         self.edges = {}  # node id -> [(next node, seconds, metres, way)]
-        self.ways = []  # (name, roundabout) by way index
+        self.ways = []  # (name, roundabout, speed limit or None) by way index
         self.near = {}  # node id -> the nodes next to it on any road
 
     def way(self, w):
@@ -93,7 +99,7 @@ class Roads(osmium.SimpleHandler):
         kmh = max(5.0, maxspeed(tags, cls))
         way = len(self.ways)
         name = tags.get("name") or tags.get("ref") or ""
-        self.ways.append((name, tags.get("junction") in ("roundabout", "circular")))
+        self.ways.append((name, tags.get("junction") in ("roundabout", "circular"), limit(tags)))
         nodes = []
         for n in w.nodes:
             if not n.location.valid():
@@ -255,22 +261,24 @@ def maneuvers(roads, path):
 
 
 def track(roads, path, start):
-    """A point each second along the path, (lat, lon, unix seconds)."""
+    """A point each second along the path, (lat, lon, unix seconds, the
+    road's speed limit or None)."""
     pts = [roads.where[n] for n in path]
     v = speeds(roads, path)
-    out = [(pts[0][0], pts[0][1], start)]
+    limits = [roads.ways[step_way(roads, a, b)][2] for a, b in zip(path, path[1:])]
+    out = [(pts[0][0], pts[0][1], start, limits[0])]
     t = 0.0
     next_t = 1.0
-    for (a, b), speed in zip(zip(pts, pts[1:]), v):
+    for (a, b), speed, lim in zip(zip(pts, pts[1:]), v, limits):
         d = metres(a, b)
         dt = d / speed
         while next_t <= t + dt:
             f = (next_t - t) / dt if dt > 0 else 1.0
-            out.append((a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, start + next_t))
+            out.append((a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, start + next_t, lim))
             next_t += 1.0
         t += dt
     if out[-1][:2] != pts[-1]:
-        out.append((pts[-1][0], pts[-1][1], start + t))
+        out.append((pts[-1][0], pts[-1][1], start + t, limits[-1]))
     return out, t, sum(metres(a, b) for a, b in zip(pts, pts[1:]))
 
 
@@ -313,9 +321,11 @@ def main():
             f.write(f'<wpt lat="{lat:.7f}" lon="{lon:.7f}"><name>{escape(onto)}</name>'
                     f"<type>{kind}</type></wpt>\n")
         f.write(f"<trk><name>{escape(a.name)}</name><trkseg>\n")
-        for lat, lon, t in pts:
+        for lat, lon, t, lim in pts:
             stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t)))
-            f.write(f'<trkpt lat="{lat:.7f}" lon="{lon:.7f}"><time>{stamp}Z</time></trkpt>\n')
+            # The road's speed limit, where it has one, in an extension.
+            ext = f"<extensions><maxspeed>{lim}</maxspeed></extensions>" if lim else ""
+            f.write(f'<trkpt lat="{lat:.7f}" lon="{lon:.7f}"><time>{stamp}Z</time>{ext}</trkpt>\n')
         f.write("</trkseg></trk>\n</gpx>\n")
     os.replace(a.out + ".tmp", a.out)
     print(f"{dist / 1000:.1f} km in {secs / 60:.1f} min, {len(pts)} points, "

@@ -78,8 +78,9 @@ pub struct TestHost {
     pub camera_gen: u32,
     pub camera_failure: Option<String>,
     pub camera_request: CameraRequest,
-    /// The map's guidance along a route, when it guides.
+    /// The map's guidance along a route, when it guides, and the speed.
     pub map_guide: Option<NavCard>,
+    pub map_speed: Option<(u32, Option<u16>)>,
     pub learned_key: Option<u32>,
 
     pub bt_available: bool,
@@ -153,6 +154,7 @@ impl TestHost {
             camera_failure: None,
             camera_request: CameraRequest::None,
             map_guide: None,
+            map_speed: None,
             learned_key: None,
             bt_available: true,
             bt_gen: 1,
@@ -423,6 +425,10 @@ impl Host for TestHost {
 
     fn map_guidance(&self) -> Option<&NavCard> {
         self.map_guide.as_ref()
+    }
+
+    fn map_speed(&self) -> Option<(u32, Option<u16>)> {
+        self.map_speed
     }
 
     fn map_label(&self) -> &str {

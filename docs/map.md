@@ -39,11 +39,16 @@ follows, the map turns so that the way ahead is up, with more road ahead
 than behind. When the GPX
 has the route's turns as waypoints, the map draws the route and guides
 along it: the bar shows the next turn, its distance and the road it leads
-onto, and the time and distance left.
+onto, the time of arrival, and the time and distance left. The route
+already driven turns grey. Following, the map zooms in a level within
+250 m of a turn, and back out after it. Where the drive's points carry
+the road's speed limit, the bar shows a limit sign beside the speed, the
+speed in red when it is over.
 
 `scripts/route-gpx.py` makes such a drive from the same extract as the
 tiles: the fastest car route between two points, keeping to one-way
-streets, timed at each road's speed, with its turns.
+streets, timed at each road's speed, with its turns and the roads' speed
+limits (OSM `maxspeed`, where the road has one).
 
 ```sh
 v/bin/python scripts/route-gpx.py luxembourg-latest.osm.pbf \
@@ -69,6 +74,15 @@ country takes a while on a PC: Luxembourg, zoom 8 to 16, is 41,000 tiles,
 levels (zoom 8 to 14 is 26 MB), so mind the space on the card: the system
 updater needs room of its own there.
 
+At night (Settings, Night) the map shows night tiles, dark with light
+names, when the map has them: a second set in `night/` under the map's
+directory, drawn with `--night` over the same area and zooms. The night
+set of the Luxembourg example is about 30 MB.
+
+```sh
+v/bin/python scripts/map-tiles.py luxembourg-latest.osm.pbf maps/night --zoom 8-16 --night
+```
+
 The tiles are drawn by the script, never fetched from OpenStreetMap's tile
 servers: their usage policy forbids offline use. The drawing is plain:
 land use, water, buildings, roads and railways, with the names of streets
@@ -86,6 +100,10 @@ it. Scrolling moves the window, which costs one commit and no copy; when
 the window would leave the canvas, the next canvas is composed around it.
 Everything runs on a thread of its own, so the screens and the input never
 wait for a decode.
+
+A drive moves the map by itself, from a thread of its own that wakes at
+every second refresh of the panel, so the map moves in even steps, thirty
+times a second.
 
 Heading up, the map is turned on the CPU into a picture a little larger
 than the panel, with some road ahead; driving on moves the window over it,

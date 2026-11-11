@@ -313,6 +313,9 @@ fn fill(
 /// The route line: its fill and edge, and their half widths in 1/16 px.
 const ROUTE: [u8; 3] = [66, 133, 244];
 const ROUTE_EDGE: [u8; 3] = [24, 82, 190];
+/// The part driven: grey, its edge darker.
+const BEHIND: [u8; 3] = [160, 164, 172];
+const BEHIND_EDGE: [u8; 3] = [112, 116, 124];
 const ROUTE_R: i64 = 4 * 16;
 const ROUTE_EDGE_R: i64 = 6 * 16;
 
@@ -338,6 +341,28 @@ pub fn route(
         ROUTE_EDGE,
     );
     thick(dst, pitch, chroma, size, clip, points, ROUTE_R, ROUTE);
+}
+
+/// The route already driven: as `route`, in grey.
+pub fn route_behind(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    clip: (i64, i64, i64, i64),
+    points: &[(i64, i64)],
+) {
+    thick(
+        dst,
+        pitch,
+        chroma,
+        size,
+        clip,
+        points,
+        ROUTE_EDGE_R,
+        BEHIND_EDGE,
+    );
+    thick(dst, pitch, chroma, size, clip, points, ROUTE_R, BEHIND);
 }
 
 /// Every pixel (by its middle) and chroma pair (by its block's) within

@@ -238,6 +238,11 @@ export global Bridge {
     in property <string> map-road;
     in property <string> map-eta;
     in property <string> map-eta-note;
+    // How fast, km/h, and the road's limit ("" when not known), and
+    // whether we are over it.
+    in property <string> map-speed;
+    in property <string> map-limit;
+    in property <bool> map-over;
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -2352,6 +2357,45 @@ component ScreenMap inherits Rectangle {
                     color: Theme.dim;
                     font-size: 18px;
                     overflow: elide;
+                }
+            }
+            // How fast we go, by the road's limit sign when it has one; in
+            // the warning colour over the limit.
+            if Bridge.map-speed != "": HorizontalLayout {
+                spacing: 8px;
+                if Bridge.map-limit != "": VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 52px;
+                        height: 52px;
+                        border-radius: 26px;
+                        background: Theme.night ? #B8BEC4 : #FFFFFF;
+                        border-width: 6px;
+                        border-color: Theme.danger;
+                        Text {
+                            text: Bridge.map-limit;
+                            color: #000000;
+                            font-size: 22px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    min-width: 44px;
+                    Text {
+                        text: Bridge.map-speed;
+                        color: Bridge.map-over ? Theme.danger : Theme.text;
+                        font-size: 26px;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "km/h";
+                        color: Theme.dim;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                    }
                 }
             }
             VerticalLayout {

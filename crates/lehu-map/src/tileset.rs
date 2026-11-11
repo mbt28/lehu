@@ -25,6 +25,7 @@ struct Meta {
     center: [i64; 2],
     start_zoom: Option<u8>,
     attribution: String,
+    land: Option<[u8; 3]>,
 }
 
 /// The tiles under one directory, as its `map.toml` describes them.
@@ -41,6 +42,8 @@ pub struct TileSet {
     pub center: (i64, i64),
     pub start_zoom: u8,
     pub attribution: String,
+    /// The colour where there is no tile (R, G, B).
+    pub land: [u8; 3],
 }
 
 /// Zooms the map goes past the set's last, its tiles enlarged: softer,
@@ -56,6 +59,13 @@ impl TileSet {
     /// The tiles are JPEG files (else PNG).
     pub fn is_jpeg(&self) -> bool {
         self.ext == "jpg"
+    }
+
+    /// The night tiles, `night/` under this set's directory, when there
+    /// are; the error when they are there but will not open.
+    pub fn night(&self) -> Option<Result<Self, String>> {
+        let dir = self.dir.join("night");
+        dir.join("map.toml").exists().then(|| Self::open(&dir))
     }
 
     /// Read `<dir>/map.toml`. The error says what is wrong, for the screen.
@@ -106,6 +116,7 @@ impl TileSet {
             center: (meta.center[0].clamp(l, r), meta.center[1].clamp(t, b)),
             start_zoom: start,
             attribution: meta.attribution,
+            land: meta.land.unwrap_or(crate::tiles::LAND),
         })
     }
 

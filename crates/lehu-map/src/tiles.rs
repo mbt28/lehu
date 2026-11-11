@@ -19,7 +19,8 @@ const SIDE: usize = TILE as usize;
 /// Bytes of an NV12 tile: the luma, then the chroma at half the height.
 pub const TILE_BYTES: usize = SIDE * SIDE * 3 / 2;
 
-/// What shows where there is no tile: the map's land colour.
+/// What shows where there is no tile, unless the set says otherwise: the
+/// map's land colour.
 pub const LAND: [u8; 3] = [242, 239, 233];
 
 /// Tiles kept decoded: a canvas is 15, so a step in any direction or a
@@ -50,6 +51,9 @@ struct Entry {
 /// The decoded tiles, least recently used out first.
 pub struct Tiles {
     set: TileSet,
+    /// The other set, day or night, when there is one: `set_night` swaps.
+    other: Option<TileSet>,
+    night: bool,
     hw: Option<HwJpeg>,
     entries: Vec<Entry>,
     clock: u64,
@@ -70,11 +74,13 @@ pub struct Tiles {
 
 impl Tiles {
     /// `hw`: the video engine's decoder, for a set of JPEG tiles.
-    pub fn new(set: TileSet, hw: Option<HwJpeg>) -> Self {
-        let (y, cb, cr) = nv12::ycc(LAND);
+    pub fn new(set: TileSet, night: Option<TileSet>, hw: Option<HwJpeg>) -> Self {
+        let (y, cb, cr) = nv12::ycc(set.land);
         let hw = if set.is_jpeg() { hw } else { None };
         Self {
             set,
+            other: night,
+            night: false,
             hw,
             entries: Vec::with_capacity(CACHED + MISSING),
             clock: 0,
@@ -134,6 +140,23 @@ impl Tiles {
         at
     }
 
+    /// Show the night tiles, or the day's; false when that changes
+    /// nothing (no night tiles, or already so). Every tile kept is let go.
+    pub fn set_night(&mut self, night: bool) -> bool {
+        if night == self.night || self.other.is_none() {
+            return false;
+        }
+        if let Some(other) = self.other.take() {
+            self.other = Some(std::mem::replace(&mut self.set, other));
+        }
+        self.night = night;
+        self.entries.clear();
+        let (y, cb, cr) = nv12::ycc(self.set.land);
+        self.land_y = vec![y; SIDE].into_boxed_slice();
+        self.land_c = [cb, cr].repeat(SIDE / 2).into_boxed_slice();
+        true
+    }
+
     /// The tile, and how many times it was enlarged.
     fn load(&mut self, (z, x, y): Key) -> Option<(Box<[u8]>, u8)> {
         match self.set.read(z, x, y, &mut self.path, &mut self.file) {
@@ -156,7 +179,7 @@ impl Tiles {
                 Err(HwError::Io(e)) => log::warn!("map: tile {z}/{x}/{y} in hardware: {e}"),
             }
         }
-        let picture = match lehu_image::decode(&self.file, TILE as u32, LAND) {
+        let picture = match lehu_image::decode(&self.file, TILE as u32, self.set.land) {
             Ok(p) if p.width as usize == SIDE && p.height as usize == SIDE => p,
             Ok(p) => {
                 self.failed += 1;
@@ -287,7 +310,7 @@ impl Tiles {
                 break;
             }
         }
-        let (y, cb, cr) = nv12::ycc(LAND);
+        let (y, cb, cr) = nv12::ycc(self.set.land);
         nv12::Grid {
             tiles: slots
                 .iter()

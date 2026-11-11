@@ -78,5 +78,18 @@ impl<H: Host> State<H> {
             bridge.set_map_eta(SharedString::from(g.eta.as_str()));
             bridge.set_map_eta_note(SharedString::from(g.eta_note.as_str()));
         }
+        let speed = self.host.map_speed();
+        if self.p_map_speed != Some(speed) {
+            self.p_map_speed = Some(speed);
+            let (kmh, limit) = match speed {
+                Some((v, l)) => (v.to_string(), l.map(|l| l.to_string()).unwrap_or_default()),
+                None => (String::new(), String::new()),
+            };
+            bridge.set_map_speed(SharedString::from(kmh.as_str()));
+            bridge.set_map_limit(SharedString::from(limit.as_str()));
+            // Over the limit by more than a speedometer's error.
+            let over = matches!(speed, Some((v, Some(l))) if v > u32::from(l) + 3);
+            bridge.set_map_over(over);
+        }
     }
 }

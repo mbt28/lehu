@@ -194,7 +194,7 @@ fn a_canvas_is_composed_from_the_tiles_with_land_where_there_are_none() {
     std::fs::create_dir_all(dir.join("3/3")).unwrap();
     std::fs::write(dir.join("3/3/2.png"), b"not a picture").unwrap();
     let set = TileSet::open(&dir).unwrap();
-    let mut tiles = Tiles::new(set, None);
+    let mut tiles = Tiles::new(set, None, None);
     // Columns 0..4 of row 2 at zoom 3: none, red, blue, broken; then
     // the row below, all missing.
     let layout = Layout {
@@ -289,7 +289,7 @@ fn colours_convert_to_the_limited_range() {
 fn tiles_outside_the_world_are_land() {
     let dir = temp("edge");
     std::fs::write(dir.join("map.toml"), META).unwrap();
-    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None, None);
     let layout = Layout {
         zoom: 2,
         tx: -1,
@@ -421,7 +421,7 @@ fn a_missing_tile_is_the_one_a_zoom_out_enlarged() {
     std::fs::write(dir.join("map.toml"), META).unwrap();
     // Zoom 3 has tile 1/1, red; zoom 4 has nothing.
     write_png(&dir.join("3/1/1.png"), [255, 0, 0]);
-    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None, None);
     let layout = Layout {
         zoom: 4,
         tx: 2,
@@ -603,7 +603,7 @@ fn a_markers_patch_comes_back_as_the_map_under_it() {
     std::fs::write(dir.join("map.toml"), META).unwrap();
     write_png(&dir.join("3/1/2.png"), [255, 0, 0]);
     write_png(&dir.join("3/2/2.png"), [0, 0, 255]);
-    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None);
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None, None);
     let layout = Layout {
         zoom: 3,
         tx: 0,
@@ -694,6 +694,25 @@ fn a_drive_with_turns_says_the_next_one_and_how_far() {
     assert!((54..=57).contains(&c.metres), "{}", c.metres);
     // A track without waypoints guides nowhere.
     assert!(crate::Track::parse_gpx(GPX).unwrap().ahead(0).is_none());
+}
+
+#[test]
+fn a_fix_says_its_step_its_speed_and_the_roads_limit() {
+    let gpx = GUIDED.replace(
+        "<time>2027-01-15T08:00:00Z</time>",
+        "<time>2027-01-15T08:00:00Z</time><extensions><maxspeed>30</maxspeed></extensions>",
+    );
+    let track = crate::Track::parse_gpx(&gpx).unwrap();
+    // On the first step: 72 m in 10 s is 26 km/h, on a 30 road.
+    let a = track.at(5_000);
+    assert_eq!(a.step, 1);
+    assert!((25..=27).contains(&a.kmh), "{}", a.kmh);
+    assert_eq!(a.limit, Some(30));
+    // The second: 111 m in 10 s, 40 km/h, no limit given.
+    let b = track.at(15_000);
+    assert_eq!(b.step, 2);
+    assert!((39..=41).contains(&b.kmh), "{}", b.kmh);
+    assert_eq!(b.limit, None);
 }
 
 #[test]
@@ -929,7 +948,7 @@ fn turned_shot() {
     let dir = std::env::var("LEHU_MAP_DIR").unwrap();
     let shots = std::path::PathBuf::from(std::env::var("LEHU_SHOTS").unwrap());
     let set = TileSet::open(Path::new(&dir)).unwrap();
-    let mut tiles = Tiles::new(set, None);
+    let mut tiles = Tiles::new(set, None, None);
     let (lat, lon) = (49.6116, 6.1300);
     let (wx, wy) = crate::world_from_degrees(lat, lon).unwrap();
     let zoom = 16u8;

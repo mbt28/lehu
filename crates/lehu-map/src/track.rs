@@ -17,6 +17,12 @@ pub struct Fix {
     /// The way it goes, as a vector of length about 1024 (x right, y down);
     /// (0, 0) before it has moved.
     pub heading: (i32, i32),
+    /// The track point it is heading for: the route behind it is the
+    /// points before this one, then the fix.
+    pub step: usize,
+    /// Its speed, km/h, and the road's speed limit where the track has it.
+    pub kmh: u32,
+    pub limit: Option<u16>,
 }
 
 /// What to do at a turn.
@@ -74,12 +80,13 @@ pub struct Ahead<'a> {
 }
 
 /// The drive: points in world pixels at `WORLD_Z`, each with its time in
-/// milliseconds from the first, and the metres along the route to it; the
-/// turns, in order.
+/// milliseconds from the first, the metres along the route to it, and the
+/// speed limit of the road it is on; the turns, in order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     points: Vec<(i64, i64, u64)>,
     metres: Vec<f64>,
+    limits: Vec<Option<u16>>,
     maneuvers: Vec<Maneuver>,
 }
 
@@ -88,6 +95,7 @@ impl Track {
     /// a track without times is driven at a point a second.
     pub fn parse_gpx(text: &str) -> Result<Self, String> {
         let mut points = Vec::new();
+        let mut limits = Vec::new();
         let mut first: Option<i64> = None;
         let mut rest = text;
         while let Some(at) = rest.find("<trkpt") {
@@ -112,6 +120,9 @@ impl Track {
                 (None, _) => points.len() as u64 * 1000,
             };
             points.push((x, y, ms));
+            // The road's speed limit: LEHU's extension, as route-gpx.py
+            // writes it.
+            limits.push(element(&rest[..next], "maxspeed").and_then(|v| v.parse().ok()));
         }
         if points.len() < 2 {
             return Err("a track wants two points or more".into());
@@ -135,6 +146,7 @@ impl Track {
         Ok(Self {
             points,
             metres,
+            limits,
             maneuvers,
         })
     }
@@ -202,10 +214,19 @@ impl Track {
                 ay + ((i128::from(by - ay) * f) / span) as i64,
             )
         };
+        // The step's speed: its metres over its time.
+        let kmh = if span == 0 {
+            0
+        } else {
+            ((self.metres[i] - self.metres[i - 1]) * 3600.0 / span as f64).round() as u32
+        };
         Fix {
             x,
             y,
             heading: self.heading(i),
+            step: i,
+            kmh,
+            limit: self.limits[i - 1],
         }
     }
 

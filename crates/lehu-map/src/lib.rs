@@ -17,6 +17,7 @@
 //! input never wait for a decode. Coordinates are integers: world pixels
 //! at zoom 22.
 
+mod drive;
 mod hw;
 mod nv12;
 mod sprite;
@@ -26,6 +27,7 @@ mod track;
 mod view;
 mod viewer;
 
+pub use drive::Drive;
 pub use tileset::TileSet;
 pub use track::{Ahead, Fix, Maneuver, Track, Turn};
 pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
