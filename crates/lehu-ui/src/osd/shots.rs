@@ -497,4 +497,75 @@ fn shots() {
     s.osd.host_mut().map_speed = Some((58, Some(50)));
     s.goto(MAP);
     s.save("72-map-over-the-limit");
+
+    // ── Map > Go to: the bar's keys, then the destination screen ──
+    let names = |host: &mut TestHost| {
+        let d = |name: &str, detail: &str, place: bool| crate::host::Destination {
+            name: name.into(),
+            detail: detail.into(),
+            place,
+        };
+        host.map_can_search = true;
+        host.map_names = vec![
+            d("Kirchberg", "Luxembourg, 3.1 km", true),
+            d("Rue de Kirchberg", "Luxembourg, 3.4 km", false),
+            d("Kirchbierg", "Mamer, 9.8 km", false),
+            d("Avenue John F. Kennedy", "Luxembourg, 3.6 km", false),
+        ];
+        host.map_recent = vec![
+            d("Boulevard Robert Schuman", "Luxembourg, 2.2 km", false),
+            d("Gare", "Luxembourg, 1.2 km", true),
+        ];
+    };
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.save("73-map-bar-go-to");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().map_on_route = true;
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Right,
+        maneuver: "Turn right".into(),
+        distance: "1.2 km".into(),
+        road: "Avenue John F. Kennedy".into(),
+        eta: "14:32".into(),
+        eta_note: "6 min, 4.1 km".into(),
+    });
+    s.osd.host_mut().map_speed = Some((47, Some(50)));
+    s.goto(MAP);
+    s.save("74-map-guiding-stop");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.goto(DEST);
+    s.save("75-go-to-recent");
+    s.bridge().invoke_dest_type();
+    s.tick();
+    s.save("76-go-to-typing");
+    for c in "kirch".chars() {
+        s.bridge().invoke_osk_key(c.to_string().into());
+        s.tick();
+    }
+    s.save("77-go-to-typed");
+    s.bridge().invoke_osk_ok();
+    s.tick();
+    s.save("78-go-to-list");
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.save("79-go-to-finding");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().map_recent.clear();
+    s.osd.host_mut().map_route_note = "No road near the destination".into();
+    s.osd.host_mut().map_stages = [crate::host::RouteStage::Failed].into();
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_osk_key("k".into());
+    s.tick();
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.tick();
+    s.save("80-go-to-no-route");
 }

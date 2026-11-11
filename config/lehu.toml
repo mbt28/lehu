@@ -185,6 +185,17 @@ voice = true
 # scripts/voice-clips.py makes them on a PC (see docs/map.md). Missing
 # clips: a line in the log, and the prompts stay silent.
 voice-dir = "/var/lib/lehu/voice/en"
+# Map > Go to finds destinations by name and routes to them on the head
+# unit, from the road network and the names scripts/map-graph.py writes
+# (roads.bin and places.bin). They are looked for here; empty means the
+# map's own directory (dir above). Without them the Go to key is not there.
+route-dir = ""
+# The destinations last driven to, offered before anything is typed;
+# written by Map > Go to, the latest first. For example:
+# [[map.recent]]
+# name = "Boulevard Royal"
+# town = "Luxembourg"
+# at = "49.61190, 6.12842"
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

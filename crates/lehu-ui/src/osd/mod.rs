@@ -28,16 +28,17 @@ use slint::platform::{Key, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, ModelRc, SharedString, VecModel};
 use toml::Value;
 
-use crate::host::{AudioOutput, CameraRequest, Host, NavCard};
+use crate::host::{AudioOutput, CameraRequest, Destination, Host, NavCard};
 use crate::input::{Input, KEY_QUEUE, KeyEvent};
 use crate::{
-    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DeviceRow, MapBar, NavCardBox, VolumeBar,
-    platform, text,
+    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DestRow, DeviceRow, MapBar, NavCardBox,
+    VolumeBar, platform, text,
 };
 
 mod audio;
 mod bluetooth;
 mod camera;
+mod dest;
 mod devices;
 mod dialog;
 mod editor;
@@ -95,8 +96,9 @@ const CONNECTION: i32 = 16;
 const SYSTEM: i32 = 17;
 const INFO: i32 = 18;
 const MAP: i32 = 19;
+const DEST: i32 = 20;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 20;
+const SCREENS: usize = 21;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -143,6 +145,10 @@ enum Action {
     MapDrag(i32, i32),
     MapZoom(i32),
     MapLocate,
+    MapGoto,
+    MapEndRoute,
+    DestPick(i32),
+    DestType,
     EditField(i32),
     OskKey(SharedString),
     OskBackspace,
@@ -398,6 +404,20 @@ struct State<H> {
     p_map_position: Option<bool>,
     p_map_guidance: Option<NavCard>,
     p_map_speed: Option<Option<(u32, Option<u16>)>>,
+    p_map_search: Option<(bool, bool)>,
+
+    // ── Map > Go to ─────────────────────────────────────────────────────
+    /// What is typed; the keyboard is up (else the list); a route is
+    /// being found; none was, and the note says why.
+    dest_query: String,
+    dest_typing: bool,
+    dest_busy: bool,
+    dest_error: bool,
+    dest_rows: Rc<VecModel<DestRow>>,
+    dest_top: Rc<VecModel<DestRow>>,
+    p_dests: Option<Vec<Destination>>,
+    p_dest_caption: Last,
+    p_dest_note: Last,
 
     // ── Settings > Audio ────────────────────────────────────────────────
     p_levels: Option<[u32; 4]>,
@@ -565,6 +585,16 @@ impl<H: Host> State<H> {
             p_map_position: None,
             p_map_guidance: None,
             p_map_speed: None,
+            p_map_search: None,
+            dest_query: String::new(),
+            dest_typing: false,
+            dest_busy: false,
+            dest_error: false,
+            dest_rows: Rc::new(VecModel::default()),
+            dest_top: Rc::new(VecModel::default()),
+            p_dests: None,
+            p_dest_caption: Last::default(),
+            p_dest_note: Last::default(),
             p_levels: None,
             outputs: Vec::new(),
             outputs_seen: false,
@@ -629,6 +659,7 @@ impl<H: Host> State<H> {
             CAMERA => Some(self.cam_return),
             DEVICES => Some(self.devices_parent),
             MEDIA | SETTINGS | MAP => Some(HOME),
+            DEST => Some(MAP),
             _ => Some(SETTINGS),
         }
     }
@@ -734,6 +765,10 @@ impl<H: Host> State<H> {
             Action::MapDrag(dx, dy) => self.map_drag(dx, dy),
             Action::MapZoom(step) => self.host.map_zoom(step),
             Action::MapLocate => self.host.map_locate(),
+            Action::MapGoto => bridge.set_screen(DEST),
+            Action::MapEndRoute => self.host.map_end_route(),
+            Action::DestPick(index) => self.dest_pick(&bridge, index),
+            Action::DestType => self.dest_type(ui),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
@@ -742,6 +777,13 @@ impl<H: Host> State<H> {
                 if (0..editor::FIELD_COUNT).contains(&id) {
                     self.set_editing(ui, id);
                 }
+            }
+            // The keyboard is the editor's, or Go to's.
+            Action::OskKey(key) if self.dest_keys(&bridge) => self.dest_key(&bridge, key.as_str()),
+            Action::OskBackspace if self.dest_keys(&bridge) => self.dest_backspace(&bridge),
+            Action::OskOk if self.dest_keys(&bridge) => self.dest_list(ui),
+            Action::OskCancel if self.dest_keys(&bridge) => {
+                self.back(&bridge);
             }
             Action::OskKey(key) => self.osk_key(&bridge, key.as_str()),
             Action::OskBackspace => self.osk_backspace(&bridge),
@@ -888,6 +930,10 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
     on!(on_map_zoom, |step| Action::MapZoom(step));
     on!(on_map_locate, || Action::MapLocate);
+    on!(on_map_goto, || Action::MapGoto);
+    on!(on_map_end_route, || Action::MapEndRoute);
+    on!(on_dest_pick, |index| Action::DestPick(index));
+    on!(on_dest_type, || Action::DestType);
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
     on!(on_osk_backspace, || Action::OskBackspace);
@@ -927,6 +973,8 @@ impl<H: Host> Osd<H> {
             bridge.set_bt_paired(ModelRc::from(st.bt_paired.clone()));
             bridge.set_bt_found(ModelRc::from(st.bt_found.clone()));
             bridge.set_devices(ModelRc::from(st.devices.clone()));
+            bridge.set_dest_rows(ModelRc::from(st.dest_rows.clone()));
+            bridge.set_dest_top(ModelRc::from(st.dest_top.clone()));
         }
         let pixels = width as usize * height as usize;
         log::info!(
@@ -1229,6 +1277,8 @@ impl<H: Host> Osd<H> {
             st.media_due(now),
             st.link_due(),
             st.info_due(),
+            // A route being found: looked for again soon.
+            st.dest_busy.then_some(now + 50),
             // The clock's next minute, while it shows the time.
             matches!(st.p_clock, Some(Some(_))).then_some(st.clock_due),
         ]

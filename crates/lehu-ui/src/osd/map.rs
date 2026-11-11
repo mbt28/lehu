@@ -5,11 +5,13 @@
 //!
 //! A drag moves the map with the finger. The arrows move it a quarter of
 //! the panel, the knob zooms, Back leaves. The bar's Me key, there when
-//! there is a position, centres the map on it.
+//! there is a position, centres the map on it; its Go to key, there when
+//! the map has names to search, opens the destination screen (see
+//! `dest.rs`), and Stop ends a route found there.
 
 use slint::SharedString;
 
-use super::{Bridge, Host, MAP, State};
+use super::{Bridge, Host, MAP, State, clean};
 use crate::keys::OsdKey;
 
 /// An arrow moves the map this far: a quarter of the 800 x 480 panel.
@@ -74,9 +76,16 @@ impl<H: Host> State<H> {
             bridge.set_map_arrow(g.arrow.id());
             bridge.set_map_maneuver(SharedString::from(g.maneuver.as_str()));
             bridge.set_map_distance(SharedString::from(g.distance.as_str()));
-            bridge.set_map_road(SharedString::from(g.road.as_str()));
+            // A road's name may have accents the font has not.
+            bridge.set_map_road(clean(&mut self.scratch, &g.road));
             bridge.set_map_eta(SharedString::from(g.eta.as_str()));
             bridge.set_map_eta_note(SharedString::from(g.eta_note.as_str()));
+        }
+        let search = (self.host.map_can_search(), self.host.map_on_route());
+        if self.p_map_search != Some(search) {
+            self.p_map_search = Some(search);
+            bridge.set_map_can_search(search.0);
+            bridge.set_map_on_route(search.1);
         }
         let speed = self.host.map_speed();
         if self.p_map_speed != Some(speed) {

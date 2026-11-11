@@ -49,6 +49,14 @@ export struct DeviceRow {
     nearby: bool,
 }
 
+// A destination on Map > Go to; text composed in Rust. `place`: a city, a
+// town or a village (or a part of one), not a street.
+export struct DestRow {
+    name: string,
+    detail: string,
+    place: bool,
+}
+
 export global Bridge {
     // app -> UI
     in property <bool> night;                 // the night palette
@@ -222,7 +230,8 @@ export global Bridge {
     // 0 home, 1 settings, 3 wireless, 4 bluetooth, 5 bt device,
     // 6 audio, 8 video, 9 camera view, 10 phones, 11 media,
     // 12 access point, 13 link speed, 14 update, 15 update from the phone,
-    // 16 connection, 17 system, 18 info, 19 map
+    // 16 connection, 17 system, 18 info, 19 map, 20 go to (the map's
+    // destination)
     in-out property <int> screen;
 
     // The map: what it says over the picture (why there is none, or that
@@ -243,6 +252,17 @@ export global Bridge {
     in property <string> map-speed;
     in property <string> map-limit;
     in property <bool> map-over;
+    // Map > Go to: the bar's keys, and the destination screen.
+    in property <bool> map-can-search;        // the bar's Go to key
+    in property <bool> map-on-route;          // a route found here is driven: the bar's Stop key
+    in property <bool> dest-typing;           // the keyboard is up; else the list
+    in property <string> dest-query;          // what is typed
+    in property <string> dest-note;           // the header: "Go to", "Finding the route", why none
+    in property <bool> dest-error;            // the note says why there is no route
+    in property <string> dest-caption;        // over the list: "Recent", "No match"; "" none
+    in property <bool> dest-busy;             // the route is being found: taps wait
+    in property <[DestRow]> dest-rows;        // the list
+    in property <[DestRow]> dest-top;         // the best two, over the keyboard
 
     // UI -> app
     callback back();                          // the bar's back key
@@ -261,6 +281,10 @@ export global Bridge {
     callback map-drag(int, int);              // it moved: pixels from where it went down
     callback map-zoom(int);                   // -1 out, +1 in
     callback map-locate();                    // centre on where we are
+    callback map-goto();                      // the bar's Go to key
+    callback map-end-route();                 // the bar's Stop key
+    callback dest-pick(int);                  // a tap on a destination: drive there
+    callback dest-type();                     // from the list back to the keyboard
     callback edit-field(int);                 // open the editor on a field
     callback osk-key(string);                 // literal character
     callback osk-backspace();
@@ -2318,7 +2342,7 @@ component ScreenMap inherits Rectangle {
         if Bridge.map-guiding: HorizontalLayout {
             padding: 6px;
             padding-left: 12px;
-            spacing: 10px;
+            spacing: 8px;
             VerticalLayout {
                 alignment: center;
                 Rectangle {
@@ -2418,10 +2442,24 @@ component ScreenMap inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
                     height: 56px;
-                    OskKey { label: "-"; weight: 0; width: 56px; pressed => { Bridge.map-zoom(-1); } }
-                    OskKey { label: "+"; weight: 0; width: 56px; pressed => { Bridge.map-zoom(1); } }
-                    OskKey { label: "Me"; weight: 0; width: 56px; pressed => { Bridge.map-locate(); } }
-                    OskKey { label: "Back"; weight: 0; width: 72px; pressed => { Bridge.back(); } }
+                    OskKey { label: "-"; weight: 0; width: 44px; pressed => { Bridge.map-zoom(-1); } }
+                    OskKey { label: "+"; weight: 0; width: 44px; pressed => { Bridge.map-zoom(1); } }
+                    OskKey { label: "Me"; weight: 0; width: 52px; pressed => { Bridge.map-locate(); } }
+                    // A route of our own ends with Stop; a replayed one is
+                    // replaced by going somewhere.
+                    if Bridge.map-on-route: OskKey {
+                        label: "Stop";
+                        weight: 0;
+                        width: 64px;
+                        pressed => { Bridge.map-end-route(); }
+                    }
+                    if !Bridge.map-on-route && Bridge.map-can-search: OskKey {
+                        label: "Go to";
+                        weight: 0;
+                        width: 64px;
+                        pressed => { Bridge.map-goto(); }
+                    }
+                    OskKey { label: "Back"; weight: 0; width: Bridge.map-can-search ? 64px : 72px; pressed => { Bridge.back(); } }
                 }
                 Text {
                     text: "© OpenStreetMap contributors";
@@ -2435,28 +2473,121 @@ component ScreenMap inherits Rectangle {
             padding: 6px;
             spacing: 6px;
             OskKey { label: "Back"; weight: 0; width: 120px; pressed => { Bridge.back(); } }
-            OskKey { label: "-"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(-1); } }
-            OskKey { label: "+"; weight: 0; width: 96px; pressed => { Bridge.map-zoom(1); } }
+            OskKey { label: "-"; weight: 0; width: 80px; pressed => { Bridge.map-zoom(-1); } }
+            OskKey { label: "+"; weight: 0; width: 80px; pressed => { Bridge.map-zoom(1); } }
             if Bridge.map-has-position: OskKey {
                 label: "Me";
                 weight: 0;
-                width: 96px;
+                width: 80px;
                 pressed => { Bridge.map-locate(); }
             }
-            Text {
+            if Bridge.map-on-route: OskKey {
+                label: "Stop";
+                weight: 0;
+                width: 120px;
+                pressed => { Bridge.map-end-route(); }
+            }
+            if !Bridge.map-on-route && Bridge.map-can-search: OskKey {
+                label: "Go to";
+                weight: 0;
+                width: 120px;
+                pressed => { Bridge.map-goto(); }
+            }
+            VerticalLayout {
                 horizontal-stretch: 1;
-                text: Bridge.map-label;
-                color: Theme.text;
-                font-size: 20px;
-                vertical-alignment: center;
-                overflow: elide;
+                alignment: center;
+                Text {
+                    text: Bridge.map-label;
+                    color: Theme.text;
+                    font-size: 16px;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
+                Text {
+                    text: "© OpenStreetMap contributors";
+                    color: Theme.dim;
+                    font-size: 12px;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
             }
-            Text {
-                text: "© OpenStreetMap contributors";
-                color: Theme.dim;
-                font-size: 16px;
-                vertical-alignment: center;
-            }
+        }
+    }
+}
+
+// The keyboard's four rows: letters (or symbols), Shift and Del, then
+// ?123, the comma, Space, the full stop and OK. Its ring is Osk's.
+component OskKeys inherits VerticalLayout {
+    in property <string> ok-label: "OK";
+    spacing: Theme.gap;
+    vertical-stretch: 1;
+    HorizontalLayout {
+        spacing: 6px;
+        for k[i] in Osk.r1: OskKey {
+            label: k;
+            focused: Osk.row == 1 && Osk.col == i;
+            pressed => { Bridge.osk-key(k); }
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        for k[i] in Osk.r2: OskKey {
+            label: k;
+            focused: Osk.row == 2 && Osk.col == i;
+            pressed => { Bridge.osk-key(k); }
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        if !Osk.symbols: OskKey {
+            label: "Shift"; weight: 1.5;
+            focused: Osk.row == 3 && Osk.col == 0;
+            pressed => { Osk.shift = !Osk.shift; }
+        }
+        for k[i] in Osk.r3: OskKey {
+            label: k;
+            focused: Osk.row == 3 && Osk.col == Osk.r3-first + i;
+            pressed => { Bridge.osk-key(k); }
+        }
+        OskKey {
+            label: "Del"; weight: 1.5;
+            focused: Osk.row == 3 && Osk.col == Osk.r3-first + Osk.r3.length;
+            pressed => { Bridge.osk-backspace(); }
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        OskKey {
+            label: Osk.symbols ? "abc" : "?123"; weight: 1.5;
+            focused: Osk.row == 4 && Osk.col == 0;
+            pressed => { Osk.symbols = !Osk.symbols; Osk.shift = false; }
+        }
+        // The backtick is outside the compiler's default glyph set: this
+        // key embeds it, so one typed on a keyboard is drawn too.
+        if Osk.symbols: OskKey {
+            label: "`";
+            focused: Osk.row == 4 && Osk.col == 1;
+            pressed => { Bridge.osk-key("`"); }
+        }
+        OskKey {
+            label: ",";
+            focused: Osk.row == 4 && Osk.col == 1 + Osk.r4-extra;
+            pressed => { Bridge.osk-key(","); }
+        }
+        OskKey {
+            label: "Space"; weight: 3;
+            focused: Osk.row == 4 && Osk.col == 2 + Osk.r4-extra;
+            pressed => { Bridge.osk-key(" "); }
+        }
+        OskKey {
+            label: ".";
+            focused: Osk.row == 4 && Osk.col == 3 + Osk.r4-extra;
+            pressed => { Bridge.osk-key("."); }
+        }
+        OskKey {
+            label: root.ok-label; weight: 1.5;
+            focused: Osk.row == 4 && Osk.col == 4 + Osk.r4-extra;
+            pressed => { Bridge.osk-ok(); }
         }
     }
 }
@@ -2503,74 +2634,117 @@ component Editor inherits Rectangle {
             }
         }
 
+        OskKeys { }
+    }
+}
+
+// One destination over the keyboard: its name, and the town and how far
+// under it. For touch: the ring is on the keyboard there.
+component DestRowView inherits Rectangle {
+    in property <DestRow> dest;
+    in property <bool> dim;
+    callback clicked;
+    height: 60px;
+    border-radius: 12px;
+    background: ta.pressed ? Theme.surface2 : Theme.surface;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 16px;
+        spacing: 16px;
+        RowIcon { kind: root.dest.place ? "map" : "navigation"; }
+        RowText {
+            label: root.dest.name;
+            detail: root.dest.detail;
+            label-color: root.dim ? Theme.dim : Theme.text;
+        }
+    }
+}
+
+// Map > Go to: a destination by name. While typing, the keyboard fills
+// the lower half and the two best matches sit over it, a tap away; its OK
+// (List) shows them all as rows the ring walks. Before anything is typed
+// the list shows the recent destinations. A tap on one finds the route and
+// goes back to the map, which drives it; Cancel and Back go back without.
+// Keys and their ring positions follow Osk (row, col), as in the editor.
+component ScreenDest inherits Rectangle {
+    background: Theme.bg;
+    if Bridge.dest-typing: VerticalLayout {
+        width: 100%;
+        height: 100%;
+        padding: Theme.gap;
+        spacing: Theme.gap;
         HorizontalLayout {
-            spacing: 6px;
-            for k[i] in Osk.r1: OskKey {
-                label: k;
-                focused: Osk.row == 1 && Osk.col == i;
-                pressed => { Bridge.osk-key(k); }
+            height: 48px;
+            spacing: Theme.gap;
+            padding-left: 16px;
+            Text {
+                text: Bridge.dest-note;
+                color: Bridge.dest-error ? Theme.danger : Theme.text;
+                font-size: 20px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            OskKey { label: "Cancel"; width: 120px; focused: Osk.row == 0; pressed => { Bridge.osk-cancel(); } }
+        }
+        // What is typed, with a plain underscore caret.
+        Rectangle {
+            height: 52px;
+            border-radius: 10px;
+            background: Theme.bar;
+            border-width: 2px;
+            border-color: Theme.accent;
+            Text {
+                x: 16px;
+                width: parent.width - 32px;
+                text: Bridge.dest-query + "_";
+                color: Theme.text;
+                font-size: 20px;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
-        HorizontalLayout {
+        VerticalLayout {
+            height: 2 * 60px + 6px;
             spacing: 6px;
-            for k[i] in Osk.r2: OskKey {
-                label: k;
-                focused: Osk.row == 2 && Osk.col == i;
-                pressed => { Bridge.osk-key(k); }
+            alignment: start;
+            for r[i] in Bridge.dest-top: DestRowView {
+                dest: r;
+                dim: Bridge.dest-busy;
+                clicked => { Bridge.dest-pick(i); }
+            }
+            if Bridge.dest-top.length == 0: Text {
+                height: 60px;
+                x: 16px;
+                text: Bridge.dest-caption;
+                color: Theme.dim;
+                font-size: 20px;
+                vertical-alignment: center;
             }
         }
-        HorizontalLayout {
-            spacing: 6px;
-            if !Osk.symbols: OskKey {
-                label: "Shift"; weight: 1.5;
-                focused: Osk.row == 3 && Osk.col == 0;
-                pressed => { Osk.shift = !Osk.shift; }
-            }
-            for k[i] in Osk.r3: OskKey {
-                label: k;
-                focused: Osk.row == 3 && Osk.col == Osk.r3-first + i;
-                pressed => { Bridge.osk-key(k); }
-            }
-            OskKey {
-                label: "Del"; weight: 1.5;
-                focused: Osk.row == 3 && Osk.col == Osk.r3-first + Osk.r3.length;
-                pressed => { Bridge.osk-backspace(); }
-            }
+        OskKeys { ok-label: "List"; }
+    }
+    if !Bridge.dest-typing: ListPage {
+        width: 100%;
+        height: 100%;
+        title: "Go to";
+        note: Bridge.dest-note;
+        NavRow {
+            ring-key: "dest-type";
+            icon: "search";
+            label: Bridge.dest-query == "" ? "Type a street or a place" : Bridge.dest-query;
+            clicked => { Bridge.dest-type(); }
         }
-        HorizontalLayout {
-            spacing: 6px;
-            OskKey {
-                label: Osk.symbols ? "abc" : "?123"; weight: 1.5;
-                focused: Osk.row == 4 && Osk.col == 0;
-                pressed => { Osk.symbols = !Osk.symbols; Osk.shift = false; }
-            }
-            // The backtick is outside the compiler's default glyph set: this
-            // key embeds it, so one typed on a keyboard is drawn too.
-            if Osk.symbols: OskKey {
-                label: "`";
-                focused: Osk.row == 4 && Osk.col == 1;
-                pressed => { Bridge.osk-key("`"); }
-            }
-            OskKey {
-                label: ",";
-                focused: Osk.row == 4 && Osk.col == 1 + Osk.r4-extra;
-                pressed => { Bridge.osk-key(","); }
-            }
-            OskKey {
-                label: "Space"; weight: 3;
-                focused: Osk.row == 4 && Osk.col == 2 + Osk.r4-extra;
-                pressed => { Bridge.osk-key(" "); }
-            }
-            OskKey {
-                label: ".";
-                focused: Osk.row == 4 && Osk.col == 3 + Osk.r4-extra;
-                pressed => { Bridge.osk-key("."); }
-            }
-            OskKey {
-                label: "OK"; weight: 1.5;
-                focused: Osk.row == 4 && Osk.col == 4 + Osk.r4-extra;
-                pressed => { Bridge.osk-ok(); }
-            }
+        if Bridge.dest-caption != "": Caption { text: Bridge.dest-caption; }
+        for r[i] in Bridge.dest-rows: NavRow {
+            ring-key: "dest-" + i;
+            icon: r.place ? "map" : "navigation";
+            label: r.name;
+            detail: r.detail;
+            label-color: Bridge.dest-busy ? Theme.dim : Theme.text;
+            more: false;
+            clicked => { Bridge.dest-pick(i); }
         }
     }
 }
@@ -2693,6 +2867,7 @@ export component AppWindow inherits Window {
     if Bridge.screen == 17 && !root.modal: ScreenSystem   { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 18 && !root.modal: ScreenInfo     { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 19 && !root.modal: ScreenMap      { }
+    if Bridge.screen == 20 && !root.modal: ScreenDest     { y: root.top; height: root.height - root.top; }
     if Bridge.nav-card: NavCardView {}
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}

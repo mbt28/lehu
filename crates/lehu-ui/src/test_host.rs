@@ -10,8 +10,8 @@ use lehu_wifi::{Applied, Band, Link, Radio};
 use toml::Value;
 
 use crate::host::{
-    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt, Update,
+    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host, KnownDevice, Media,
+    MediaKey, NavCard, Power, Prompt, RouteStage, Update,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +34,9 @@ pub enum Call {
     MapPan(i32, i32),
     MapZoom(i32),
     MapLocate,
+    MapSearch(String),
+    MapGo(usize),
+    MapEndRoute,
     SetKeyLearning(bool),
     BtPromptAccept,
     BtPromptCancel,
@@ -81,6 +84,17 @@ pub struct TestHost {
     /// The map's guidance along a route, when it guides, and the speed.
     pub map_guide: Option<NavCard>,
     pub map_speed: Option<(u32, Option<u16>)>,
+    /// Map > Go to: the names searched (a search keeps those whose name
+    /// holds the text typed, any case), the recent ones (an empty search),
+    /// what the last search found, and how the route goes: each poll
+    /// takes the next stage queued (Finding while there is none).
+    pub map_can_search: bool,
+    pub map_names: Vec<Destination>,
+    pub map_recent: Vec<Destination>,
+    pub map_found: Vec<Destination>,
+    pub map_stages: std::collections::VecDeque<RouteStage>,
+    pub map_route_note: String,
+    pub map_on_route: bool,
     pub learned_key: Option<u32>,
 
     pub bt_available: bool,
@@ -155,6 +169,13 @@ impl TestHost {
             camera_request: CameraRequest::None,
             map_guide: None,
             map_speed: None,
+            map_can_search: false,
+            map_names: Vec::new(),
+            map_recent: Vec::new(),
+            map_found: Vec::new(),
+            map_stages: std::collections::VecDeque::new(),
+            map_route_note: String::new(),
+            map_on_route: false,
             learned_key: None,
             bt_available: true,
             bt_gen: 1,
@@ -433,6 +454,49 @@ impl Host for TestHost {
 
     fn map_label(&self) -> &str {
         "Test  -  zoom 12"
+    }
+
+    fn map_can_search(&self) -> bool {
+        self.map_can_search
+    }
+
+    fn map_search(&mut self, query: &str) {
+        self.calls.push(Call::MapSearch(query.to_string()));
+        let q = query.to_lowercase();
+        self.map_found = if q.is_empty() {
+            self.map_recent.clone()
+        } else {
+            self.map_names
+                .iter()
+                .filter(|d| d.name.to_lowercase().contains(&q))
+                .cloned()
+                .collect()
+        };
+    }
+
+    fn map_destinations(&self) -> &[Destination] {
+        &self.map_found
+    }
+
+    fn map_go(&mut self, index: usize) {
+        self.calls.push(Call::MapGo(index));
+    }
+
+    fn map_route_poll(&mut self) -> RouteStage {
+        self.map_stages.pop_front().unwrap_or(RouteStage::Finding)
+    }
+
+    fn map_route_note(&self) -> &str {
+        &self.map_route_note
+    }
+
+    fn map_on_route(&self) -> bool {
+        self.map_on_route
+    }
+
+    fn map_end_route(&mut self) {
+        self.calls.push(Call::MapEndRoute);
+        self.map_on_route = false;
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {

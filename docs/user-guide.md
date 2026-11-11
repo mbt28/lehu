@@ -19,7 +19,11 @@ Five tiles:
 - **Now playing**: the title, the artist and the progress. Opens the media
   page, with the album art and large previous, play/pause and next keys.
 - **Linked Phones**: the phones LEHU knows.
-- **Map**: the offline map from the SD card ([map.md](map.md)).
+- **Map**: the offline map from the SD card ([map.md](map.md)). Its bar's
+  Go to key opens the destination screen: the recent destinations, one
+  tap each, or a keyboard to type a street or a place, with the two best
+  matches over it (List shows them all). A tap on one finds the route on
+  the head unit and guides along it; the bar's Stop key ends it.
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,

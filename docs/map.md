@@ -1,9 +1,10 @@
 # The offline map
 
 Home > Map shows an OpenStreetMap map from the SD card, with no phone and
-no internet. It is the first step towards offline navigation: today the
-map can be scrolled and zoomed; the position, routes and guidance come
-later.
+no internet. It scrolls and zooms, finds a destination by name and the
+fastest route there, and guides along it. There is no GPS yet: the
+position is a stand-in (see "Where we are"), and a route found is driven
+by itself from there, as a replayed drive is.
 
 ## Controls
 
@@ -14,6 +15,8 @@ later.
 | Knob, or the - and + keys of the bar | zoom out and in |
 | Enter | zoom in |
 | The bar's Me key | centre on where we are, and follow it |
+| The bar's Go to key | find a destination and drive there ([below](#going-somewhere)) |
+| The bar's Stop key, on a route found there | end the route |
 | Back, or the bar's Back key | leave the map |
 
 LEHU opens the map where it was left, or on where we are when it knows.
@@ -45,10 +48,11 @@ already driven turns grey. Following, the map zooms in a level within
 the road's speed limit, the bar shows a limit sign beside the speed, the
 speed in red when it is over.
 
-`scripts/route-gpx.py` makes such a drive from the same extract as the
-tiles: the fastest car route between two points, keeping to one-way
+`scripts/route-gpx.py` makes such a drive on a PC from the same extract as
+the tiles: the fastest car route between two points, keeping to one-way
 streets, timed at each road's speed, with its turns and the roads' speed
-limits (OSM `maxspeed`, where the road has one).
+limits (OSM `maxspeed`, where the road has one). The head unit finds
+routes of its own too: see [Going somewhere](#going-somewhere).
 
 ```sh
 v/bin/python scripts/route-gpx.py luxembourg-latest.osm.pbf \
@@ -101,7 +105,106 @@ all at one loudness, so the board only copies them. `--demo` also writes
 a few whole prompts, put together as the board does, to hear on the PC.
 Copy the directory to the head unit as `map.voice-dir`, readable by
 LEHU's user. A clip that is missing is named once in the log, and the
-prompts that need it stay silent.
+prompts that need it stay silent. Routes found on the board (below) are
+spoken the same way.
+
+## Going somewhere
+
+The bar's Go to key, there when the map has the road network and the
+names (see [Routing data](#routing-data)), opens the destination screen.
+It opens on the destinations driven to last, when there are some: one
+tap on one drives there again. Otherwise, or after a tap on the top row,
+it is a keyboard: type a few letters of a street or a place, and the two
+best matches show over the keyboard, each with its town and how far it is
+from here. A tap on one finds the route; the keyboard's List key shows
+all the matches as rows (a knob or a remote walks them, Enter takes one).
+Case and accents never matter, and every word typed has to begin a word
+of the name or of its town: "gare" finds Gare and Avenue de la Gare,
+"gare esch" the Rue de la Gare in Esch-sur-Alzette. Places come before
+streets, and among equal matches the nearest first.
+
+The route is found on the head unit, from where we are now (the replayed
+drive's position, else `map.fake-position`, else the middle of the map) to
+the nearest road to the destination: the fastest by car, keeping to
+one-way streets and roundabouts, timed at each road's speed. The screen
+says "Finding the route" meanwhile, then goes back to the map, which
+drives the route at the roads' speeds (slowing for sharp turns), as it
+replays a drive: the route line with the part driven grey, the next turn
+on the bar, closer in near turns, the speed limit and the time of
+arrival. It replaces a replayed drive. Leaving the map and coming back
+keeps it, driven on meanwhile. The bar's Stop key ends it, and so does
+arriving, half a minute later; where it ended is the position from then
+on (until LEHU restarts). When there is no route, the screen says why.
+
+### Routing data
+
+`scripts/map-graph.py` writes the road network and the names from the
+same extract as the tiles, into two files: `roads.bin` and `places.bin`.
+
+```sh
+v/bin/python scripts/map-graph.py luxembourg-latest.osm.pbf maps
+```
+
+Luxembourg makes a 6.6 MB `roads.bin` (63,000 junctions, 75,000 roads)
+and a 0.5 MB `places.bin` (10,000 streets, 2,200 places) in half a
+minute. Copy them into the map's directory, beside `map.toml`, or into
+another directory named by `map.route-dir`. The roads and their speeds
+are the ones `scripts/route-gpx.py` drives, so both find the same routes;
+only the part of the network where every junction can be reached from
+every other is kept, so a destination is never in a car park with no way
+out.
+
+The files are little-endian 32-bit words, mapped from the card and read
+in place rather than loaded, so they cost the head unit page cache, not
+memory of its own; a route looks at only part of the network.
+
+`roads.bin` starts with a header of 18 words: "LEHUROAD", the version
+(1), the numbers of junctions, arcs, roads, shape points, road kinds,
+grid entries and name bytes, the grid (its corner, its cell size as a
+shift of world pixels, its columns and rows), the time a straight line
+takes at the top speed (milliseconds per 65,536 world pixels) and the
+top speed (km/h). Then, each right after the one before:
+
+| Section | Words each | What |
+|---|---|---|
+| junctions, and one more | 4 | x, y (world pixels at zoom 22), its first arc, how many roads meet there |
+| arcs | 3 | the junction it leads to, milliseconds, road × 2 (+ 1 when it runs the road from its b to its a) |
+| roads, and one more | 5 | a, b, decimetres, kind + 2^24 when it may be driven from a to b + 2^25 from b to a, its first shape point |
+| shape points | 1 | all the x, then all the y |
+| road kinds | 2 | the name (a byte offset into the names), the speed limit in km/h (0 none) + 2^16 for a roundabout |
+| grid cells, and one more | 1 | each cell's first entry |
+| grid entries | 1 | the roads with a piece in the cell |
+| names | bytes | each a length byte, then UTF-8 |
+
+A junction's arcs are the ways a car may leave it, up to the next
+junction's first arc; a road's shape is the points between its a and its
+b, up to the next road's first.
+
+`places.bin` starts with 6 words: "LEHUFIND", the version (1), the
+numbers of names and towns, and the text's bytes. Then the towns, 2 words
+each (the name and its folded key, byte offsets into the text); the
+names, 5 words each (x, y, the name, its folded key, and the town's index
++ the kind × 2^16 (0 a street, 1 a place) + the rank × 2^24, lower more
+important); then the text, each string a length byte and UTF-8. A key is
+the name folded: lower case, without accents, its words split by single
+spaces. A street is in the city, town or village nearest it (a city
+counts from three times as far, a town twice); it has one name for each
+town it runs through, at the middle of its longest piece.
+
+### How routing works
+
+The route is A* by time over the junctions: integer arithmetic only, and
+the time still to go is never more than the straight line at the
+network's top speed, so the route found is the fastest. The start and
+the goal are taken to the nearest point of the nearest road (the grid
+finds it), and setting off against the way the drive is going costs a
+U-turn's half minute. The turns are found as `scripts/route-gpx.py`
+finds them: at a junction, a turn of 45 degrees or more or a road with
+another name; into a roundabout, the exit to take. On a PC the sample
+drive above (Gare to Kirchberg) takes about 2 ms; across Luxembourg, Schengen to
+Troisvierges (112 km), 15 to 45 ms; a search, 1 ms. The board is some
+tens of times slower: the test `routing_cost` in
+`crates/lehu-map/src/routing_tests.rs` times both there.
 
 ## Making a map
 

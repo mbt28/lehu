@@ -11,10 +11,13 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
-use lehu_map::{Ahead, Drive, Marker, Route, TileSet, Track, Turn, View, Viewer};
+use lehu_map::{
+    Ahead, Drive, Found, FoundKind, Marker, Route, Router, TileSet, Track, Turn, View, Viewer,
+};
 use lehu_ui::{
-    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavArrow, NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
+    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host, KnownDevice, Media,
+    MediaKey, NavArrow, NavCard, Power, Prompt, RouteStage, SystemNames, Update, UpdateOutcome,
+    UpdateStage,
 };
 use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
@@ -27,6 +30,21 @@ use crate::voice::Speaker;
 /// The map's bar follows a replayed drive this often (the map itself
 /// moves along it by itself, in step with the panel).
 const MAP_TRACK_STEP_MS: u64 = 200;
+
+/// A route found on the board ends this long after its arrival; where it
+/// arrived stays the position.
+const MAP_ARRIVED_MS: u64 = 30_000;
+
+/// Map > Go to offers this many destinations, and remembers this many.
+const MAP_RESULTS: usize = 20;
+const MAP_RECENT: usize = 5;
+
+/// A route being found on its thread, and where to.
+type Finding = (std::sync::mpsc::Receiver<Result<Track, String>>, Found);
+
+/// A point, world pixels at zoom 22, and the way we go there (x right,
+/// y down) while we move.
+type Here = (Option<(i64, i64)>, Option<(i32, i32)>);
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +227,18 @@ pub struct AppHost {
     map_voice: Option<Speaker>,
     map_note: String,
     map_label: String,
+    /// Map > Go to: the road network and the names (looked for each time
+    /// the map opens), what the last search found and how the screen shows
+    /// it, the route being found and why none was.
+    map_router: Option<Arc<Router>>,
+    map_found: Vec<Found>,
+    map_dests: Vec<Destination>,
+    map_finding: Option<Finding>,
+    map_route_note: String,
+    /// The drive is a route found here, not the replayed one; where the
+    /// last such route ended, the position from then on.
+    map_routed: bool,
+    map_left_at: Option<(i64, i64)>,
 }
 
 impl AppHost {
@@ -298,6 +328,13 @@ impl AppHost {
             map_voice: None,
             map_note: String::new(),
             map_label: String::new(),
+            map_router: None,
+            map_found: Vec::new(),
+            map_dests: Vec::new(),
+            map_finding: None,
+            map_route_note: String::new(),
+            map_routed: false,
+            map_left_at: None,
         }
     }
 
@@ -613,19 +650,40 @@ impl AppHost {
                 return false;
             }
         };
-        let m = &self.settings.map;
-        self.map_position = match lehu_map::parse_position(&m.fake_position) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("map.fake-position {e}");
-                None
+        // The road network and the names, for Go to, when the card has
+        // them.
+        if self.map_router.is_none() {
+            let m = &self.settings.map;
+            let dir = if m.route_dir.is_empty() {
+                &m.dir
+            } else {
+                &m.route_dir
+            };
+            match Router::open(std::path::Path::new(dir)) {
+                Ok(r) => self.map_router = Some(Arc::new(r)),
+                Err(e) => log::info!("map: no routing: {e}"),
             }
+        }
+        let m = &self.settings.map;
+        // Where a route of ours ended outranks the settings' stand-ins.
+        self.map_position = match self.map_left_at {
+            Some(p) => Some(p),
+            None => match lehu_map::parse_position(&m.fake_position) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("map.fake-position {e}");
+                    None
+                }
+            },
         };
         self.map_marker = self.map_position.map(|(x, y)| Marker::Dot(x, y));
-        self.map_track = None;
         self.map_route = None;
         self.map_guide = None;
-        if !m.fake_track.is_empty() {
+        if self.map_routed {
+            // A route found here, driven on while the map was closed.
+            self.map_arrived();
+        } else if self.map_left_at.is_none() && !m.fake_track.is_empty() {
+            self.map_track = None;
             match std::fs::read_to_string(&m.fake_track)
                 .map_err(|e| e.to_string())
                 .and_then(|text| Track::parse_gpx(&text))
@@ -636,22 +694,27 @@ impl AppHost {
                         m.fake_track,
                         track.duration() / 1000
                     );
-                    let start = *self
-                        .map_track_start
+                    self.map_track_start
                         .get_or_insert_with(lehu_core::clock::now_ms);
-                    let fix = track.at(lehu_core::clock::now_ms() - start);
-                    self.map_position = Some((fix.x, fix.y));
-                    self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
-                    self.map_route = Some(Route::from(track.line()));
-                    self.map_guide = track
-                        .ahead(lehu_core::clock::now_ms() - start)
-                        .map(|a| guidance(&a, local_time_ms(self.zone_min)));
-                    self.map_speed = Some((fix.kmh, fix.limit));
                     self.map_track = Some(Arc::new(track));
                 }
                 Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
             }
+        } else {
+            self.map_track = None;
         }
+        if let (Some(track), Some(start)) = (self.map_track.clone(), self.map_track_start) {
+            let now = lehu_core::clock::now_ms();
+            let fix = track.at(now - start);
+            self.map_position = Some((fix.x, fix.y));
+            self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+            self.map_route = Some(Route::from(track.line()));
+            self.map_guide = track
+                .ahead(now - start)
+                .map(|a| guidance(&a, local_time_ms(self.zone_min)));
+            self.map_speed = Some((fix.kmh, fix.limit));
+        }
+        let m = &self.settings.map;
         self.map_follow = true;
         let mut view = if m.zoom == 0 {
             View {
@@ -762,6 +825,68 @@ impl AppHost {
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
         self.map_speed = Some((fix.kmh, fix.limit));
+        self.map_arrived();
+    }
+
+    /// The prompts of the drive left go with it; a new drive's start
+    /// afresh.
+    fn map_quiet(&mut self) {
+        self.map_voice = None;
+    }
+
+    /// A route of ours arrived a while ago: it ends.
+    fn map_arrived(&mut self) {
+        if let (true, Some(track), Some(start)) =
+            (self.map_routed, &self.map_track, self.map_track_start)
+            && lehu_core::clock::now_ms().saturating_sub(start) > track.duration() + MAP_ARRIVED_MS
+        {
+            log::info!("map: arrived");
+            self.map_end_route();
+        }
+    }
+
+    /// Where we are, world pixels at zoom 22, for a search's distances and
+    /// a route's start: on the drive, where it is now (and the way it
+    /// goes, while it moves); else the position shown; else the middle of
+    /// the map.
+    fn map_here(&self) -> Here {
+        if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
+            let fix = track.at(lehu_core::clock::now_ms().saturating_sub(start));
+            let heading = (fix.kmh > 0 && fix.heading != (0, 0)).then_some(fix.heading);
+            return (Some((fix.x, fix.y)), heading);
+        }
+        if let Some(p) = self.map_position {
+            return (Some(p), None);
+        }
+        let v = self.map_view_now();
+        (self.map_set.is_some().then_some((v.x, v.y)), None)
+    }
+
+    /// A route found: the drive from now on, remembered across the map
+    /// closing as the replayed one is; the destination goes first among
+    /// the recent ones.
+    fn map_take_route(&mut self, track: Track, to: &Found) {
+        self.map_track = Some(Arc::new(track));
+        self.map_track_start = Some(lehu_core::clock::now_ms());
+        self.map_track_shown = 0;
+        self.map_routed = true;
+        self.map_left_at = None;
+        self.map_follow = true;
+        // The prompts start afresh on the new route.
+        self.map_quiet();
+        let (lat, lon) = lehu_map::degrees_from_world(to.x, to.y);
+        let place = settings::MapPlace {
+            name: to.name.clone(),
+            town: to.town.clone(),
+            at: format!("{lat:.6}, {lon:.6}"),
+        };
+        let mut recent = self.settings.map.recent.clone();
+        recent.retain(|p| (p.name.as_str(), p.town.as_str()) != (&place.name, &place.town));
+        recent.insert(0, place);
+        recent.truncate(MAP_RECENT);
+        if recent != self.settings.map.recent {
+            self.persist_any("map.recent", recent);
+        }
     }
 
     /// Following a drive, the view the map shows (it moves by itself);
@@ -1114,6 +1239,130 @@ impl Host for AppHost {
         &self.map_label
     }
 
+    fn map_can_search(&self) -> bool {
+        self.map_router.as_ref().is_some_and(|r| r.can_search())
+    }
+
+    fn map_search(&mut self, query: &str) {
+        let near = self.map_here().0;
+        self.map_found = if query.trim().is_empty() {
+            // The recent destinations.
+            self.settings
+                .map
+                .recent
+                .iter()
+                .filter_map(|p| {
+                    let (x, y) = lehu_map::parse_position(&p.at).ok().flatten()?;
+                    Some(Found {
+                        name: p.name.clone(),
+                        town: p.town.clone(),
+                        kind: FoundKind::Street,
+                        x,
+                        y,
+                        metres: near.map(|n| lehu_map::metres_between(n, (x, y))),
+                    })
+                })
+                .collect()
+        } else {
+            self.map_router
+                .as_ref()
+                .map_or_else(Vec::new, |r| r.search(query, near, MAP_RESULTS))
+        };
+        self.map_dests = self.map_found.iter().map(destination).collect();
+    }
+
+    fn map_destinations(&self) -> &[Destination] {
+        &self.map_dests
+    }
+
+    fn map_go(&mut self, index: usize) {
+        let Some(to) = self.map_found.get(index).cloned() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (from, heading) = self.map_here();
+        match (self.map_router.clone(), from) {
+            (Some(router), Some(from)) => {
+                let goal = (to.x, to.y);
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("map-route".into())
+                        .spawn(move || {
+                            let _ = tx.send(router.route(from, heading, goal));
+                        });
+                if let Err(e) = spawned {
+                    log::warn!("map: no thread to route on: {e}");
+                }
+            }
+            (None, _) => {
+                let _ = tx.send(Err("No road data".into()));
+            }
+            (_, None) => {
+                let _ = tx.send(Err("Where we are is not known".into()));
+            }
+        }
+        log::info!("map: routing to {}, {}", to.name, to.town);
+        self.map_finding = Some((rx, to));
+    }
+
+    fn map_route_poll(&mut self) -> RouteStage {
+        let Some((rx, _)) = &self.map_finding else {
+            return RouteStage::Idle;
+        };
+        let answer = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return RouteStage::Finding,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("No route there".to_string()),
+            Ok(answer) => answer,
+        };
+        let Some((_, to)) = self.map_finding.take() else {
+            return RouteStage::Idle;
+        };
+        match answer {
+            Ok(track) => {
+                self.map_take_route(track, &to);
+                RouteStage::Found
+            }
+            Err(e) => {
+                log::info!("map: no route to {}: {e}", to.name);
+                self.map_route_note = e;
+                RouteStage::Failed
+            }
+        }
+    }
+
+    fn map_route_note(&self) -> &str {
+        &self.map_route_note
+    }
+
+    fn map_on_route(&self) -> bool {
+        self.map_routed
+    }
+
+    fn map_end_route(&mut self) {
+        if !self.map_routed {
+            return;
+        }
+        let here = self.map_here().0;
+        self.map_view = self.map_view_now();
+        self.map_routed = false;
+        self.map_track = None;
+        self.map_track_start = None;
+        self.map_route = None;
+        self.map_guide = None;
+        self.map_speed = None;
+        self.map_left_at = here;
+        self.map_position = here;
+        self.map_quiet();
+        self.map_marker = here.map(|(x, y)| Marker::Dot(x, y));
+        if let Some(viewer) = &self.map {
+            viewer.set_drive(None);
+            viewer.set_route(None);
+            viewer.set_position(self.map_marker);
+            viewer.follow(None);
+            viewer.set_view(self.map_view);
+        }
+    }
+
     fn take_camera_failure(&mut self, why: &mut String) -> bool {
         match self.camera_failure.take() {
             Some(text) => {
@@ -1396,6 +1645,30 @@ fn guidance(a: &Ahead<'_>, time_of_day: Option<u64>) -> NavCard {
     }
 }
 
+/// A destination as Go to shows it: the name, and under it the town (when
+/// it is not the name itself) and how far.
+fn destination(f: &Found) -> Destination {
+    let mut detail = String::new();
+    if !f.town.is_empty() && f.town != f.name {
+        detail.push_str(&f.town);
+    }
+    if let Some(m) = f.metres {
+        if !detail.is_empty() {
+            detail.push_str(", ");
+        }
+        if m < 10 {
+            detail.push_str("here");
+        } else {
+            detail.push_str(&distance(m));
+        }
+    }
+    Destination {
+        name: f.name.clone(),
+        detail,
+        place: f.kind == FoundKind::Place,
+    }
+}
+
 /// A distance as a driver reads it: the nearest 10 m under 100 m, 50 m
 /// under a kilometre, a tenth of a kilometre under ten, then whole ones.
 fn distance(metres: u32) -> String {
@@ -1425,7 +1698,30 @@ fn ordinal(n: u8) -> String {
 
 #[cfg(test)]
 mod guidance_tests {
-    use super::{distance, guidance, ordinal};
+    use super::{destination, distance, guidance, ordinal};
+
+    #[test]
+    fn a_destination_shows_its_town_and_how_far() {
+        let found = |name: &str, town: &str, metres| lehu_map::Found {
+            name: name.into(),
+            town: town.into(),
+            kind: lehu_map::FoundKind::Street,
+            x: 0,
+            y: 0,
+            metres,
+        };
+        let d = destination(&found("Rue de la Gare", "Ettelbruck", Some(24_600)));
+        assert_eq!((d.detail.as_str(), d.place), ("Ettelbruck, 25 km", false));
+        // A town is not in itself; right here is "here", not "Now".
+        assert_eq!(
+            destination(&found("Mamer", "Mamer", Some(3))).detail,
+            "here"
+        );
+        assert_eq!(
+            destination(&found("Gare", "Luxembourg", None)).detail,
+            "Luxembourg"
+        );
+    }
 
     #[test]
     fn the_arrival_is_a_clock_time_once_the_clock_is_set() {

@@ -23,9 +23,9 @@ pub(crate) mod test_host;
 pub mod text;
 
 pub use host::{
-    ART_SIZE, Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media,
-    MediaKey, NavArrow, NavCard, Power, Prompt, PromptKind, SystemNames, Update, UpdateOutcome,
-    UpdateStage,
+    ART_SIZE, Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host,
+    KnownDevice, Media, MediaKey, NavArrow, NavCard, Power, Prompt, PromptKind, RouteStage,
+    SystemNames, Update, UpdateOutcome, UpdateStage,
 };
 pub use input::Input;
 pub use keys::OsdKey;

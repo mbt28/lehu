@@ -4,7 +4,8 @@
 //! GPX track (scripts/route-gpx.py writes one), its points timed, followed
 //! in real time and from the start again at its end. Its waypoints, when
 //! it has them, are the route's turns, so the drive is also a route to be
-//! guided along.
+//! guided along. A route found on the board makes a drive too (see
+//! [`Track::from_route`]): driven once, it stops at the destination.
 
 use crate::view::world_from_degrees;
 
@@ -88,7 +89,31 @@ pub struct Track {
     metres: Vec<f64>,
     limits: Vec<Option<u16>>,
     maneuvers: Vec<Maneuver>,
+    /// Driven once, it stays at its end (a route); else it goes round.
+    ends: bool,
 }
+
+/// A route as the board's router found it, to be driven: its points along
+/// the roads (world pixels at `WORLD_Z`), for each step between two points
+/// the road's speed (centimetres a second) and speed limit, and the turns,
+/// each at its point, the arrival last.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Leg {
+    pub points: Vec<(i64, i64)>,
+    pub steps: Vec<LegStep>,
+    pub turns: Vec<(usize, Turn, String)>,
+}
+
+/// One step of a [`Leg`]: the road's speed and its speed limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LegStep {
+    pub cm_s: u32,
+    pub limit: Option<u16>,
+}
+
+/// A turn sharper than this many degrees is taken at `TURN_KMH`, as
+/// scripts/route-gpx.py has it: cos 60 degrees is a half.
+const TURN_KMH: f64 = 20.0;
 
 impl Track {
     /// A GPX file's track points, in order. A point's `<time>` times it;
@@ -148,7 +173,114 @@ impl Track {
             metres,
             limits,
             maneuvers,
+            ends: false,
         })
+    }
+
+    /// A route found on the board, driven as scripts/route-gpx.py drives
+    /// one: each step at its road's speed, slowed to 20 km/h where the
+    /// road turns by more than 60 degrees at either end of it, with a
+    /// point at every point of the roads and every second between. It is
+    /// driven once: at its end it stays there.
+    pub fn from_route(leg: &Leg) -> Result<Self, String> {
+        let n = leg.points.len();
+        if n < 2 || leg.steps.len() != n - 1 {
+            return Err("a route wants two points or more, and a step between each".into());
+        }
+        let p = &leg.points;
+        let m: Vec<f64> = p.windows(2).map(|w| ground_px(w[0], w[1])).collect();
+        // The road turns at point i by more than 60 degrees.
+        let sharp = |i: usize| {
+            if i == 0 || i >= n - 1 {
+                return false;
+            }
+            let u = ((p[i].0 - p[i - 1].0) as f64, (p[i].1 - p[i - 1].1) as f64);
+            let v = ((p[i + 1].0 - p[i].0) as f64, (p[i + 1].1 - p[i].1) as f64);
+            let dot = u.0 * v.0 + u.1 * v.1;
+            let lens = (u.0 * u.0 + u.1 * u.1) * (v.0 * v.0 + v.1 * v.1);
+            dot < 0.0 || 4.0 * dot * dot < lens
+        };
+        let mut points = Vec::with_capacity(n * 2);
+        let mut metres = Vec::with_capacity(n * 2);
+        let mut limits = Vec::with_capacity(n * 2);
+        // Where each of the leg's points is in the track.
+        let mut at = Vec::with_capacity(n);
+        points.push((p[0].0, p[0].1, 0));
+        metres.push(0.0);
+        limits.push(leg.steps[0].limit);
+        at.push(0);
+        let (mut t, mut run, mut next) = (0.0f64, 0.0f64, 1.0f64);
+        for (i, step) in leg.steps.iter().enumerate() {
+            let mut v = f64::from(step.cm_s) / 100.0;
+            if sharp(i) || sharp(i + 1) {
+                v = v.min(TURN_KMH / 3.6);
+            }
+            let v = v.max(1.0);
+            let dt = m[i] / v;
+            // A point every whole second within the step.
+            while next < t + dt {
+                let f = (next - t) / dt;
+                let (a, b) = (p[i], p[i + 1]);
+                points.push((
+                    a.0 + ((b.0 - a.0) as f64 * f) as i64,
+                    a.1 + ((b.1 - a.1) as f64 * f) as i64,
+                    (next * 1000.0) as u64,
+                ));
+                metres.push(run + m[i] * f);
+                limits.push(step.limit);
+                next += 1.0;
+            }
+            t += dt;
+            run += m[i];
+            points.push((p[i + 1].0, p[i + 1].1, (t * 1000.0).round() as u64));
+            metres.push(run);
+            limits.push(leg.steps.get(i + 1).unwrap_or(step).limit);
+            at.push(points.len() - 1);
+        }
+        // Times only go forward.
+        for i in 1..points.len() {
+            points[i].2 = points[i].2.max(points[i - 1].2);
+        }
+        if points[points.len() - 1].2 == 0 {
+            return Err("the route takes no time".into());
+        }
+        let maneuvers = leg
+            .turns
+            .iter()
+            .filter(|t| t.0 < n)
+            .map(|(i, turn, road)| Maneuver {
+                turn: *turn,
+                road: road.clone(),
+                point: at[*i],
+            })
+            .collect();
+        Ok(Self {
+            points,
+            metres,
+            limits,
+            maneuvers,
+            ends: true,
+        })
+    }
+
+    /// Driven once, it stays at its end (a route found on the board).
+    pub fn ends(&self) -> bool {
+        self.ends
+    }
+
+    /// The route's length, metres.
+    pub fn metres(&self) -> u32 {
+        self.metres[self.metres.len() - 1] as u32
+    }
+
+    /// The milliseconds into the drive that `ms` after its start is: the
+    /// same, up to the end of a route; round again for a replayed drive.
+    fn time(&self, ms: u64) -> u64 {
+        if self.ends {
+            ms.min(self.duration())
+        } else {
+            ms % self.duration().max(1)
+        }
     }
 
     /// The route as a line: its points, world pixels at `WORLD_Z`.
@@ -164,7 +296,7 @@ impl Track {
     /// The next turn `ms` after the drive started (as `at` has it), and
     /// what is left of the route; None for a track without turns.
     pub fn ahead(&self, ms: u64) -> Option<Ahead<'_>> {
-        let t = ms % self.duration().max(1);
+        let t = self.time(ms);
         let i = self
             .points
             .partition_point(|p| p.2 <= t)
@@ -204,10 +336,10 @@ impl Track {
         self.points[self.points.len() - 1].2
     }
 
-    /// Where the drive is `ms` after it started, from the start again past
-    /// its end.
+    /// Where the drive is `ms` after it started: from the start again past
+    /// its end, or at its end for a route, standing.
     pub fn at(&self, ms: u64) -> Fix {
-        let t = ms % self.duration().max(1);
+        let t = self.time(ms);
         // The step that holds t: the last point at or before it.
         let i = self
             .points
@@ -227,7 +359,7 @@ impl Track {
             )
         };
         // The step's speed: its metres over its time.
-        let kmh = if span == 0 {
+        let kmh = if span == 0 || (self.ends && ms >= self.duration()) {
             0
         } else {
             ((self.metres[i] - self.metres[i - 1]) * 3600.0 / span as f64).round() as u32
@@ -262,14 +394,28 @@ impl Track {
 /// a Mercator pixel is the equator's length over the world's pixels,
 /// shrunk by the cosine of the latitude.
 fn ground(a: (i64, i64, u64), b: (i64, i64, u64)) -> f64 {
+    ground_px((a.0, a.1), (b.0, b.1))
+}
+
+/// Metres on the ground between two points, world pixels at `WORLD_Z`.
+pub fn metres_between(a: (i64, i64), b: (i64, i64)) -> u32 {
+    ground_px(a, b) as u32
+}
+
+/// The same for two points without times.
+pub(crate) fn ground_px(a: (i64, i64), b: (i64, i64)) -> f64 {
+    let px = ((b.0 - a.0) as f64).hypot((b.1 - a.1) as f64);
+    px * metres_per_px((a.1 + b.1) / 2)
+}
+
+/// Metres on the ground of a world pixel at zoom 22, at height `y`.
+pub(crate) fn metres_per_px(y: i64) -> f64 {
     const EQUATOR: f64 = 40_075_016.686;
     let size = 256.0 * f64::from(1u32 << crate::view::WORLD_Z);
-    let y = (a.1 + b.1) as f64 / 2.0;
-    let lat = (std::f64::consts::PI * (1.0 - 2.0 * y / size))
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * y as f64 / size))
         .sinh()
         .atan();
-    let px = ((b.0 - a.0) as f64).hypot((b.1 - a.1) as f64);
-    px * EQUATOR / size * lat.cos()
+    EQUATOR / size * lat.cos()
 }
 
 /// The GPX's waypoints as the route's turns, each at the track point

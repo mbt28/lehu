@@ -23,12 +23,20 @@
 //!
 //! Along a guided drive, [`voice`] decides the spoken turn prompts, which
 //! the program plays from clips made on a PC.
+//!
+//! Destinations are searched by name and routes found on the board too,
+//! from a road network and a list of names written on a PC
+//! (`scripts/map-graph.py`) and mapped from the card: see [`Router`].
 
+mod blob;
 mod drive;
 mod glyphs;
+mod graph;
 mod hw;
 mod labels;
 mod nv12;
+mod route;
+mod search;
 mod sprite;
 mod tiles;
 mod tileset;
@@ -38,11 +46,16 @@ mod viewer;
 pub mod voice;
 
 pub use drive::Drive;
+pub use graph::{Graph, ROADS_FILE, Snap};
+pub use route::Router;
+pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
 pub use tileset::TileSet;
-pub use track::{Ahead, Fix, Maneuver, Track, Turn};
-pub use view::{View, WORLD_Z, parse_position, world_from_degrees};
+pub use track::{Ahead, Fix, Leg, LegStep, Maneuver, Track, Turn, metres_between};
+pub use view::{View, WORLD_Z, degrees_from_world, parse_position, world_from_degrees};
 pub use viewer::{Marker, Route, Viewer};
 pub use voice::{Clip, Voice};
 
+#[cfg(test)]
+mod routing_tests;
 #[cfg(test)]
 mod tests;

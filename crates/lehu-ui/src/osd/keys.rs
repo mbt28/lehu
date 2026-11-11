@@ -31,8 +31,10 @@ impl<H: Host> State<H> {
         // A held Backspace keeps deleting only if it was pressed in the
         // editor: the press that cancels a dialog over it must not then eat
         // the text beneath.
+        // Go to's keyboard types like the editor's.
+        let typing = self.editing >= 0 || (self.dest_keys(&bridge) && self.dest_typing);
         if nav == OsdKey::Erase && !repeat {
-            self.erase_edits = bridge.get_prompt_kind() == 0 && self.editing >= 0;
+            self.erase_edits = bridge.get_prompt_kind() == 0 && typing;
         }
 
         if matches!(nav, OsdKey::Home | OsdKey::Menu) {
@@ -132,7 +134,19 @@ impl<H: Host> State<H> {
             return;
         }
 
-        if self.editing >= 0 {
+        // Go to's list: a letter typed goes back to typing, with it.
+        if self.dest_keys(&bridge)
+            && !typing
+            && !repeat
+            && nav != OsdKey::Ok
+            && let Some(c) = key.ch.filter(|c| (' '..='~').contains(c))
+        {
+            self.dest_type(ui);
+            let mut utf8 = [0u8; 4];
+            self.dest_key(&bridge, c.encode_utf8(&mut utf8));
+            return;
+        }
+        if typing {
             // Arrows move the on-screen keyboard's ring (how a remote types)
             // and Enter presses the ringed key. Typing on a keyboard hides
             // the ring again, so its Enter saves.

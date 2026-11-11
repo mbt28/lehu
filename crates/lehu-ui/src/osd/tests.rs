@@ -2846,3 +2846,178 @@ fn guiding_the_map_bar_shows_the_next_turn_and_grows() {
     let bar = osd.over_video().expect("the bar's window");
     assert_eq!((bar.y, bar.height), (416, 64));
 }
+
+// ── Map > Go to ──────────────────────────────────────────────────────────
+
+fn dest(name: &str, detail: &str) -> crate::host::Destination {
+    crate::host::Destination {
+        name: name.into(),
+        detail: detail.into(),
+        place: false,
+    }
+}
+
+/// A map with names to search: Gare, two streets and Kirchberg.
+fn with_names() -> TestHost {
+    let mut host = TestHost::new();
+    host.map_can_search = true;
+    host.map_names = vec![
+        dest("Gare", "Luxembourg, 1.2 km"),
+        dest("Avenue de la Gare", "Luxembourg, 900 m"),
+        dest("Rue de la Gare", "Ettelbruck, 25 km"),
+        dest("Kirchberg", "Luxembourg, 3.1 km"),
+    ];
+    host
+}
+
+fn br(osd: &Osd<TestHost>) -> Bridge<'_> {
+    osd.ui.global::<Bridge<'_>>()
+}
+
+fn dest_rows(osd: &Osd<TestHost>, top: bool) -> Vec<String> {
+    let b = br(osd);
+    let model = if top {
+        b.get_dest_top()
+    } else {
+        b.get_dest_rows()
+    };
+    model.iter().map(|r| r.name.to_string()).collect()
+}
+
+#[test]
+fn go_to_types_a_destination_and_drives_there() {
+    use crate::host::RouteStage;
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    assert!(br(&osd).get_map_can_search());
+    assert!(!br(&osd).get_map_on_route());
+    // Go to: nothing recent, so the keyboard, and a hint.
+    br(&osd).invoke_map_goto();
+    tick(&mut osd);
+    assert_eq!(screen(&osd), DEST);
+    assert!(osd.host().has(&Call::SetMapRunning(false)));
+    assert!(br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_caption), "Type a street or a place");
+    assert_eq!(prop!(osd, get_dest_note), "Go to");
+    // Each key searches; the best two over the keyboard, all in the list.
+    for c in "gar".chars() {
+        br(&osd).invoke_osk_key(c.to_string().into());
+        tick(&mut osd);
+    }
+    assert!(osd.host().has(&Call::MapSearch("gar".into())));
+    assert_eq!(prop!(osd, get_dest_query), "gar");
+    assert_eq!(dest_rows(&osd, true), ["Gare", "Avenue de la Gare"]);
+    assert_eq!(dest_rows(&osd, false).len(), 3);
+    // A leading or a double space is not typed; Del takes the last letter.
+    br(&osd).invoke_osk_key(" ".into());
+    br(&osd).invoke_osk_key(" ".into());
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_dest_query), "gar ");
+    br(&osd).invoke_osk_backspace();
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_dest_query), "gar");
+    // Typed on a keyboard, and nothing found.
+    typed(&mut osd, 'x');
+    assert_eq!(prop!(osd, get_dest_caption), "No match");
+    assert!(dest_rows(&osd, true).is_empty());
+    press(&mut osd, OsdKey::Erase);
+    assert_eq!(dest_rows(&osd, true).len(), 2);
+    // OK shows the list; a tap on a row asks for the route.
+    br(&osd).invoke_osk_ok();
+    tick(&mut osd);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_dest_typing());
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Found].into();
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(1);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGo(1)));
+    assert!(osd.ui.global::<Bridge<'_>>().get_dest_busy());
+    assert_eq!(prop!(osd, get_dest_note), "Finding the route");
+    // Ticked again soon, to see it come.
+    assert!(osd.next_due().is_some_and(|d| d.as_millis() <= 50));
+    // Taps wait meanwhile.
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(0);
+    tick(&mut osd);
+    assert!(!osd.host().has(&Call::MapGo(0)));
+    // Found: back on the map, which drives it; its bar has Stop.
+    osd.host_mut().map_on_route = true;
+    tick(&mut osd);
+    assert_eq!(screen(&osd), MAP);
+    assert!(
+        osd.host()
+            .calls
+            .iter()
+            .rev()
+            .find(|c| matches!(c, Call::SetMapRunning(_)))
+            == Some(&Call::SetMapRunning(true))
+    );
+    assert!(br(&osd).get_map_on_route());
+    br(&osd).invoke_map_end_route();
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapEndRoute));
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_on_route());
+}
+
+#[test]
+fn go_to_opens_on_the_recent_destinations_and_says_why_there_is_no_route() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    host.map_route_note = "No route there".into();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    assert!(!br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_caption), "Recent");
+    assert_eq!(dest_rows(&osd, false), ["Kirchberg"]);
+    // None found: the screen stays and says why.
+    osd.host_mut().map_stages = [RouteStage::Failed].into();
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(0);
+    tick(&mut osd);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), DEST);
+    assert!(osd.ui.global::<Bridge<'_>>().get_dest_error());
+    assert_eq!(prop!(osd, get_dest_note), "No route there");
+    // A letter typed on the list goes to the keyboard with it.
+    typed(&mut osd, 'k');
+    assert!(br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_query), "k");
+    assert!(!br(&osd).get_dest_error());
+    // Cancel, and Back from the list: the map.
+    br(&osd).invoke_osk_cancel();
+    tick(&mut osd);
+    assert_eq!(screen(&osd), MAP);
+    goto(&mut osd, DEST);
+    // Opened afresh: nothing typed, the recent ones again.
+    assert_eq!(prop!(osd, get_dest_query), "");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), MAP);
+}
+
+#[test]
+fn go_to_types_with_a_remote_and_picks_with_the_knob() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    // The arrows ring the keyboard's keys, as in the editor: the first
+    // shows the ring on q; Enter types it.
+    press(&mut osd, OsdKey::Down);
+    assert_eq!(osk_pos(&osd), (1, 0));
+    // Down to the a, s, d row; right to... k: row 2, col 7.
+    press(&mut osd, OsdKey::Down);
+    for _ in 0..7 {
+        press(&mut osd, OsdKey::Right);
+    }
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(prop!(osd, get_dest_query), "k");
+    assert_eq!(dest_rows(&osd, true), ["Kirchberg"]);
+    // Enter with no ring: the list, the ring on its first stop.
+    typed(&mut osd, 'i');
+    press(&mut osd, OsdKey::Ok);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_dest_typing());
+    // The knob walks Back, the search row, then the destinations.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "dest-0");
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapGo(0)));
+}

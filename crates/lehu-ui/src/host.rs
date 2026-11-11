@@ -222,6 +222,30 @@ pub struct NavCard {
     pub eta_note: String,
 }
 
+/// A destination Map > Go to offers: its name, and under it the town it is
+/// in and how far it is ("Luxembourg, 1.2 km"). `place`: a city, a town, a
+/// village or a part of one, rather than a street.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Destination {
+    pub name: String,
+    pub detail: String,
+    pub place: bool,
+}
+
+/// Where finding the route to a destination is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteStage {
+    /// Nothing asked, or the last answer taken.
+    #[default]
+    Idle,
+    /// Being found, on a thread of its own.
+    Finding,
+    /// Found: the map drives it now.
+    Found,
+    /// None found: `map_route_note` says why.
+    Failed,
+}
+
 /// An ALSA playback device, as the Output row offers it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AudioOutput {
@@ -436,6 +460,36 @@ pub trait Host {
     fn map_label(&self) -> &str {
         ""
     }
+    /// There are names to search and roads to route over: the bar has a
+    /// Go to key.
+    fn map_can_search(&self) -> bool {
+        false
+    }
+    /// Search the destinations for `query`; empty: the recent ones. The
+    /// results are `map_destinations` from now.
+    fn map_search(&mut self, _query: &str) {}
+    /// The destinations the last search found, the best first.
+    fn map_destinations(&self) -> &[Destination] {
+        &[]
+    }
+    /// Find the route from where we are to one of them, on a thread of
+    /// its own; `map_route_poll` says how it goes.
+    fn map_go(&mut self, _index: usize) {}
+    /// How finding the route goes; Found and Failed are said once, then
+    /// it is Idle again. Found: the map now drives the route.
+    fn map_route_poll(&mut self) -> RouteStage {
+        RouteStage::Idle
+    }
+    /// Why no route was found.
+    fn map_route_note(&self) -> &str {
+        ""
+    }
+    /// A route found on the board is being driven: the bar has a Stop key.
+    fn map_on_route(&self) -> bool {
+        false
+    }
+    /// Stop guiding along it; where we are stays.
+    fn map_end_route(&mut self) {}
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);
     /// The key that was learned, once (its Linux key code).

@@ -274,6 +274,22 @@ pub struct Map {
     /// The prompts' clips, as scripts/voice-clips.py makes them: one WAV
     /// file a phrase fragment.
     pub voice_dir: String,
+    /// The road network and the names for Map > Go to (roads.bin and
+    /// places.bin, written by scripts/map-graph.py). Empty: `dir`.
+    pub route_dir: String,
+    /// The destinations last driven to, the latest first, offered before
+    /// anything is typed. Written by Map > Go to.
+    pub recent: Vec<MapPlace>,
+}
+
+/// A destination Map > Go to drove to: its name, the town it is in, and
+/// where, "latitude, longitude" in degrees.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct MapPlace {
+    pub name: String,
+    pub town: String,
+    pub at: String,
 }
 
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
@@ -453,6 +469,8 @@ impl Default for Map {
             fake_track: String::new(),
             voice: true,
             voice_dir: "/var/lib/lehu/voice/en".into(),
+            route_dir: String::new(),
+            recent: Vec::new(),
         }
     }
 }
@@ -1190,6 +1208,17 @@ mod tests {
                 }],
             )
             .unwrap();
+        loaded
+            .user
+            .set(
+                "map.recent",
+                vec![MapPlace {
+                    name: "Boulevard Royal".into(),
+                    town: "Luxembourg".into(),
+                    at: "49.611900, 6.128420".into(),
+                }],
+            )
+            .unwrap();
         assert!(loaded.user.is_dirty());
         assert!(loaded.user.save_if_dirty().unwrap());
         assert!(!loaded.user.save_if_dirty().unwrap());
@@ -1198,6 +1227,7 @@ mod tests {
         assert_eq!(again.settings.display.night_mode, NightMode::Night);
         assert_eq!(again.settings.camera.inputs[0].brightness, Some(40));
         assert_eq!(again.settings.camera.inputs[0].contrast, None);
+        assert_eq!(again.settings.map.recent[0].town, "Luxembourg");
         // Setting the same value again is not a change.
         let mut user = again.user;
         user.set("audio.buffer-ms", 750u32).unwrap();

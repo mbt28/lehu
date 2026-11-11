@@ -74,6 +74,27 @@ def maxspeed(tags, cls):
     return limit(tags) or SPEED[cls]
 
 
+def road(tags):
+    """A road cars may take, as (forward, backward, km/h, name, roundabout,
+    speed limit or None); None for anything else. Forward is the way's
+    own direction; a one-way street or a roundabout goes forward only."""
+    cls = tags.get("highway")
+    if cls not in SPEED or tags.get("area") == "yes":
+        return None
+    if tags.get("access") in ("no", "private") or tags.get("motor_vehicle") in ("no", "private"):
+        return None
+    oneway = tags.get("oneway", "")
+    ring = tags.get("junction") in ("roundabout", "circular")
+    forward = backward = True
+    if oneway in ("yes", "1", "true") or ring or (cls == "motorway" and oneway != "no"):
+        backward = False
+    elif oneway == "-1":
+        forward = False
+    kmh = max(5.0, maxspeed(tags, cls))
+    name = tags.get("name") or tags.get("ref") or ""
+    return forward, backward, kmh, name, ring, limit(tags)
+
+
 class Roads(osmium.SimpleHandler):
     def __init__(self):
         super().__init__()
@@ -83,23 +104,12 @@ class Roads(osmium.SimpleHandler):
         self.near = {}  # node id -> the nodes next to it on any road
 
     def way(self, w):
-        tags = w.tags
-        cls = tags.get("highway")
-        if cls not in SPEED or tags.get("area") == "yes":
+        r = road(w.tags)
+        if r is None:
             return
-        if tags.get("access") in ("no", "private") or tags.get("motor_vehicle") in ("no", "private"):
-            return
-        oneway = tags.get("oneway", "")
-        forward = backward = True
-        if oneway in ("yes", "1", "true") or tags.get("junction") in ("roundabout", "circular") \
-                or (cls == "motorway" and oneway != "no"):
-            backward = False
-        elif oneway == "-1":
-            forward = False
-        kmh = max(5.0, maxspeed(tags, cls))
+        forward, backward, kmh, name, ring, lim = r
         way = len(self.ways)
-        name = tags.get("name") or tags.get("ref") or ""
-        self.ways.append((name, tags.get("junction") in ("roundabout", "circular"), limit(tags)))
+        self.ways.append((name, ring, lim))
         nodes = []
         for n in w.nodes:
             if not n.location.valid():

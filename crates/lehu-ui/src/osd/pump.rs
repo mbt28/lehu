@@ -9,8 +9,8 @@ use slint::{ComponentHandle, SharedString};
 use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
 
 use super::{
-    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEVICES,
-    HOME, Host, INFO, LINK, MAP, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO,
+    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEST,
+    DEVICES, HOME, Host, INFO, LINK, MAP, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO,
     VOLUME_BAR_MS, clean, compose,
 };
 use crate::AppWindow;
@@ -182,6 +182,8 @@ impl<H: Host> State<H> {
         }
 
         self.pump_update(&bridge);
+        // A route found goes back to the map, seen as a switch below.
+        self.pump_dest_route(&bridge);
         let screen = bridge.get_screen();
         if screen != self.p_screen {
             // The position is shown afresh, at the new screen's pace.
@@ -229,6 +231,8 @@ impl<H: Host> State<H> {
                 self.open_link();
             } else if screen == INFO {
                 self.open_info(&bridge);
+            } else if screen == DEST {
+                self.open_dest(ui);
             } else if screen == UPDATE_PHONE {
                 // The page is served while the phone may come for it.
                 self.host.update_serve();

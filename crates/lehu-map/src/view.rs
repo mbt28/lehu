@@ -168,6 +168,17 @@ pub fn world_from_degrees(lat: f64, lon: f64) -> Option<(i64, i64)> {
     Some((x as i64, y as i64))
 }
 
+/// World pixels at `WORLD_Z` as a latitude and longitude in degrees.
+pub fn degrees_from_world(x: i64, y: i64) -> (f64, f64) {
+    let size = (TILE as f64) * f64::from(1u32 << WORLD_Z);
+    let lon = x as f64 / size * 360.0 - 180.0;
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * y as f64 / size))
+        .sinh()
+        .atan()
+        .to_degrees();
+    (lat, lon)
+}
+
 /// A position as the settings give it, "latitude, longitude" in degrees,
 /// as world pixels. Empty: none.
 pub fn parse_position(text: &str) -> Result<Option<(i64, i64)>, String> {
