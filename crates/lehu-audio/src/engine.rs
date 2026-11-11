@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
-//! The mixer's work for one period, with no device in sight: the two
-//! sources rendered, ducked, volumed and clamped into one period of S16
-//! stereo, and the decisions around it (prefill, the jitter buffer, the
-//! latency cap, silence). The thread in `mixer.rs` owns the device and
-//! calls this once per period; the tests call it with their own clock.
+//! The mixer's work for one period, with no device in sight: the sources
+//! (music, the phone's voice, LEHU's own spoken prompts) rendered, ducked,
+//! volumed and clamped into one period of S16 stereo, and the decisions
+//! around it (prefill, the jitter buffer, the latency cap, silence). The
+//! thread in `mixer.rs` owns the device and calls this once per period;
+//! the tests call it with their own clock.
 
 use std::sync::Arc;
 
@@ -45,6 +46,14 @@ const AUX_PREFILL_SEGMENTS: usize = 2;
 /// seconds late. Voice is capped much tighter (`voice_max_latency_ms`),
 /// since a prompt heard late is wrong; music heard late is only late.
 const LATENCY_SLACK_MS: u32 = 1000;
+/// A spoken prompt waits this long for the phone's voice (a call, the
+/// assistant, the phone's own navigation) to finish, and is dropped after:
+/// a turn announced late is worse than one not announced.
+pub const PROMPT_WAIT_MS: u64 = 1500;
+/// The phone's voice has finished when it has been quiet this many periods
+/// (about half a second): longer than a pause between words, and silence
+/// on a stream the phone keeps open is quiet too.
+const PHONE_QUIET_PERIODS: u32 = 24;
 
 /// The settings the engine runs with, fixed at start.
 #[derive(Clone, Copy, Debug)]
@@ -71,12 +80,18 @@ pub struct Period {
 pub struct Engine {
     pub main: Source,
     pub aux: Source,
+    /// LEHU's own prompts (the map's turns): each a whole phrase in one
+    /// segment, played at once unless the phone's voice is playing, never
+    /// capped, summed with the rest and ducking the music as voice does.
+    pub prompt: Source,
     /// Ducked by the voice.
     main_vol_q15: i32,
     main_target_q15: i32,
     /// The software volume, as ramped so far.
     volume_q15: i32,
     aux_silent_periods: u32,
+    /// Periods since the phone's voice was last audible.
+    phone_quiet_periods: u32,
     /// The music buffer applied so far.
     buffer_ms: Option<u32>,
     idle_periods: u32,
@@ -89,16 +104,21 @@ impl Engine {
     pub fn new(
         main: Arc<Queue<Segment>>,
         aux: Arc<Queue<Segment>>,
+        prompt: Arc<Queue<Segment>>,
         recycle: Option<Arc<Queue<Segment>>>,
         tuning: Tuning,
     ) -> Self {
         Engine {
             main: Source::new(main, recycle.clone()),
             aux: Source::new(aux, recycle),
+            // Prompts are LEHU's own and sized to the phrase: never handed
+            // to a protocol's recycle pool.
+            prompt: Source::new(prompt, None),
             main_vol_q15: 32768,
             main_target_q15: 32768,
             volume_q15: 32768,
             aux_silent_periods: AUX_SILENT_RELEASE_PERIODS,
+            phone_quiet_periods: PHONE_QUIET_PERIODS,
             buffer_ms: None,
             idle_periods: 0,
             tuning,
@@ -113,14 +133,15 @@ impl Engine {
         self.main_vol_q15 = 32768;
         self.main_target_q15 = 32768;
         self.aux_silent_periods = AUX_SILENT_RELEASE_PERIODS;
+        self.phone_quiet_periods = PHONE_QUIET_PERIODS;
         self.idle_periods = 0;
         self.volume_q15 = soft_gain_q15;
         self.stats.reset();
     }
 
-    /// The device was closed: both sources prefill again before playing.
+    /// The device was closed: the sources prefill again before playing.
     pub fn on_close(&mut self) {
-        for s in [&mut self.main, &mut self.aux] {
+        for s in [&mut self.main, &mut self.aux, &mut self.prompt] {
             s.live = false;
             s.unprime();
         }
@@ -131,7 +152,8 @@ impl Engine {
     pub fn drop_silence(&mut self) -> bool {
         let main = self.main.drop_silence(SILENCE_LEVEL);
         let aux = self.aux.drop_silence(SILENCE_LEVEL);
-        main || aux
+        let prompt = self.prompt.drop_silence(SILENCE_LEVEL);
+        main || aux || prompt
     }
 
     /// The music buffer applied, for the stats line.
@@ -244,6 +266,7 @@ impl Engine {
         }
 
         self.cap_aux();
+        self.start_prompt(now_ms);
 
         self.mix.fill(0);
         self.aux.zero_acc = 0;
@@ -271,9 +294,32 @@ impl Engine {
                 .render(&mut self.mix, MIX_PERIOD, &mut unity, 32768);
         }
 
-        // Duck: audible voice pulls the music down to the fade floor; after
-        // the release window of silent or dry periods it ramps back up.
         if aux_rendered > 0 && self.aux.zero_acc != 0 {
+            self.phone_quiet_periods = 0;
+        } else {
+            self.phone_quiet_periods = self.phone_quiet_periods.saturating_add(1);
+        }
+        self.prompt.zero_acc = 0;
+        let mut prompt_rendered = 0;
+        if self.prompt.live {
+            let mut unity = 32768;
+            prompt_rendered = self
+                .prompt
+                .render(&mut self.mix, MIX_PERIOD, &mut unity, 32768);
+            // A prompt is one segment: once it has played the source waits
+            // for the next, which starts at once.
+            if prompt_rendered < MIX_PERIOD && !self.prompt.has(1) {
+                self.prompt.live = false;
+                self.prompt.unprime();
+            }
+        }
+
+        // Duck: audible voice or a prompt pulls the music down to the fade
+        // floor; after the release window of silent or dry periods it ramps
+        // back up.
+        if (aux_rendered > 0 && self.aux.zero_acc != 0)
+            || (prompt_rendered > 0 && self.prompt.zero_acc != 0)
+        {
             self.main_target_q15 = self.tuning.fade_floor_q15;
             self.aux_silent_periods = 0;
         } else {
@@ -317,9 +363,14 @@ impl Engine {
         // idle hiss), the period wakeups stop, and a future owner can
         // reconfigure the hardware. Not while a source fills its buffer:
         // that silence is a pause.
-        let filling = (!self.main.live && self.main.has(1)) || (!self.aux.live && self.aux.has(1));
-        let nothing =
-            main_rendered == 0 && aux_rendered == 0 && !self.main.has(1) && !self.aux.has(1);
+        let filling = (!self.main.live && self.main.has(1))
+            || (!self.aux.live && self.aux.has(1))
+            || self.prompt.has(1);
+        let nothing = main_rendered == 0
+            && aux_rendered == 0
+            && prompt_rendered == 0
+            && !self.main.has(1)
+            && !self.aux.has(1);
         let mut release = false;
         if (silent && !filling) || nothing {
             self.idle_periods += 1;
@@ -328,6 +379,30 @@ impl Engine {
             self.idle_periods = 0;
         }
         Period { silent, release }
+    }
+
+    /// A prompt waiting starts unless the phone's voice is playing or has
+    /// only just stopped; one that has waited `PROMPT_WAIT_MS` for it is
+    /// dropped.
+    fn start_prompt(&mut self, now_ms: u64) {
+        let p = &mut self.prompt;
+        if p.live || !p.has(1) {
+            p.wait_since = 0;
+            return;
+        }
+        if self.phone_quiet_periods >= PHONE_QUIET_PERIODS {
+            p.live = true;
+            p.dry_periods = 0;
+            p.wait_since = 0;
+            return;
+        }
+        if p.wait_since == 0 {
+            p.wait_since = now_ms.max(1);
+        } else if now_ms.saturating_sub(p.wait_since) >= PROMPT_WAIT_MS {
+            while p.drop_oldest() {}
+            p.wait_since = 0;
+            log::info!("mixer: a prompt dropped, the phone's voice went on");
+        }
     }
 
     fn apply_volume(&mut self, target_q15: i32) {
@@ -362,6 +437,7 @@ mod tests {
     struct Rig {
         main: Arc<Queue<Segment>>,
         aux: Arc<Queue<Segment>>,
+        prompt: Arc<Queue<Segment>>,
         e: Engine,
         now: u64,
         out: Vec<i16>,
@@ -371,11 +447,13 @@ mod tests {
         fn new() -> Self {
             let main = Arc::new(Queue::new(128));
             let aux = Arc::new(Queue::new(24));
-            let mut e = Engine::new(main.clone(), aux.clone(), None, TUNING);
+            let prompt = Arc::new(Queue::new(2));
+            let mut e = Engine::new(main.clone(), aux.clone(), prompt.clone(), None, TUNING);
             e.on_open(32768);
             Rig {
                 main,
                 aux,
+                prompt,
                 e,
                 now: 1000,
                 out: vec![0; MIX_PERIOD * MIX_CHANNELS],
@@ -428,6 +506,14 @@ mod tests {
                     &vec![value; 2 * MIX_PERIOD],
                 ));
             }
+        }
+
+        /// A spoken prompt of `ms` at `value`: 24 kHz mono, one segment.
+        fn say(&mut self, ms: usize, value: i16) {
+            self.prompt.push_drop_oldest(Segment::from_slice(
+                Format::new(24000, 1),
+                &vec![value; 24 * ms],
+            ));
         }
 
         /// `n` navigation segments: 48 kHz stereo, 20 ms.
@@ -679,6 +765,87 @@ mod tests {
         // A reopen starts at the level, no ramp.
         r.e.on_open(4096);
         assert_eq!(r.e.volume_q15, 4096);
+    }
+
+    #[test]
+    fn a_prompt_plays_at_once_whole_and_ducks_the_music() {
+        let mut r = Rig::new();
+        r.music(25, 10000);
+        r.period(1500);
+        assert!(r.e.main.live);
+        // 300 ms: about 14 periods, never capped like the phone's voice.
+        r.say(300, 2000);
+        r.period(1500);
+        assert!(r.e.prompt.live, "no prefill for a prompt");
+        assert_eq!(r.e.main_target_q15, TUNING.fade_floor_q15);
+        let mut periods = 1;
+        while r.e.prompt.live {
+            r.period(1500);
+            periods += 1;
+            assert!(periods < 40);
+        }
+        assert!((14..=16).contains(&periods), "{periods}");
+        // The music comes back after the release window.
+        for _ in 0..4 {
+            r.period(1500);
+        }
+        assert_eq!(r.e.main_target_q15, 32768);
+        // Another prompt starts at once again.
+        r.say(100, 2000);
+        r.period(1500);
+        assert!(r.e.prompt.live);
+    }
+
+    #[test]
+    fn a_prompt_waits_for_the_phones_voice_and_goes_stale() {
+        let mut r = Rig::new();
+        r.nav(40, 3000); // the phone talking
+        r.period(500);
+        assert!(r.e.aux.live);
+        r.say(200, 2000);
+        r.period(500);
+        assert!(!r.e.prompt.live, "the phone's voice first");
+        // The phone's voice ends; the prompt follows.
+        let mut periods = 0;
+        while !r.e.prompt.live {
+            r.period(500);
+            periods += 1;
+            assert!(periods < 60, "never started");
+        }
+        assert!(!r.e.aux.has(1));
+        // A phone that keeps talking: the prompt is dropped.
+        let mut r = Rig::new();
+        r.nav(2, 3000);
+        r.period(500);
+        r.say(200, 2000);
+        for _ in 0..80 {
+            r.nav(1, 3000);
+            r.period(500);
+            assert!(!r.e.prompt.live);
+        }
+        assert!(!r.e.prompt.has(1), "dropped after {PROMPT_WAIT_MS} ms");
+        // Silence on a voice stream the phone keeps open is no voice.
+        let mut r = Rig::new();
+        r.nav(2, 0);
+        r.period(500);
+        assert!(r.e.aux.live);
+        r.say(200, 2000);
+        r.nav(2, 0);
+        r.period(500);
+        assert!(r.e.prompt.live);
+        assert!(r.peak() > 0);
+    }
+
+    #[test]
+    fn a_prompt_wakes_a_closed_device_and_holds_it_open() {
+        let mut r = Rig::new();
+        r.e.on_close();
+        assert!(!r.e.drop_silence());
+        r.say(100, 2000);
+        assert!(r.e.drop_silence(), "audible: the device opens");
+        r.e.on_open(32768);
+        assert!(!r.period(500).release);
+        assert!(r.peak() > 0);
     }
 
     #[test]

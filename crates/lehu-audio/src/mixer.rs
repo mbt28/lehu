@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
-//! The playback thread: one thread owns the PCM and mixes the two queues
-//! (main = buffered media, aux = voice and prompts) in software, once per
-//! period.
+//! The playback thread: one thread owns the PCM and mixes the queues
+//! (main = buffered media, aux = the phone's voice and prompts, prompt =
+//! LEHU's own spoken prompts) in software, once per period.
 //!
 //! A blocking write sleeps on the codec's clock, so the thread wakes
 //! exactly once per period and idles at nothing; with no device open it
@@ -51,6 +51,9 @@ impl Input {
 pub const MAIN_DEPTH: usize = 128;
 /// The depth of the aux queue: a few hundred ms of voice.
 pub const AUX_DEPTH: usize = 24;
+/// The depth of the prompt queue: each is a whole phrase, and a phrase
+/// queued behind two others is stale.
+pub const PROMPT_DEPTH: usize = 2;
 
 /// How long the idle thread sleeps on the voice queue between looks at
 /// both queues, and how long after a failed open before the next try.
@@ -65,14 +68,16 @@ pub struct Mixer {
 
 impl Mixer {
     /// Start the thread on `device`. Segments it consumes are freed.
+    /// `prompt` carries LEHU's own spoken prompts, a phrase a segment.
     pub fn start(
         device: &str,
         settings: &Audio,
         main: Arc<Queue<Segment>>,
         aux: Arc<Queue<Segment>>,
+        prompt: Arc<Queue<Segment>>,
         volume: Arc<Volume>,
     ) -> Mixer {
-        Self::start_recycling(device, settings, main, aux, None, volume)
+        Self::start_recycling(device, settings, main, aux, prompt, None, volume)
     }
 
     /// As `start`, with consumed segments going back, cleared, into
@@ -82,6 +87,7 @@ impl Mixer {
         settings: &Audio,
         main: Arc<Queue<Segment>>,
         aux: Arc<Queue<Segment>>,
+        prompt: Arc<Queue<Segment>>,
         recycle: Option<Arc<Queue<Segment>>>,
         volume: Arc<Volume>,
     ) -> Mixer {
@@ -100,7 +106,7 @@ impl Mixer {
             active: active.clone(),
             buffer_ms: buffer_ms.clone(),
             aux_q: aux.clone(),
-            engine: Engine::new(main, aux, recycle, tuning),
+            engine: Engine::new(main, aux, prompt, recycle, tuning),
             volume,
             pcm: None,
             out: vec![0; MIX_PERIOD * MIX_CHANNELS],
@@ -291,6 +297,7 @@ mod tests {
             &settings,
             main.clone(),
             aux.clone(),
+            Arc::new(Queue::new(PROMPT_DEPTH)),
             volume,
         );
         m.set_buffer_ms(9000);
