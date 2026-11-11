@@ -619,9 +619,9 @@ Hungary the region planned for):
 
 | Data | Used for | Made by | On the card | Luxembourg | Hungary |
 |---|---|---|---|---|---|
-| Day map tiles | the map | `scripts/map-tiles.py` (via `map-region.py`) | `tiles.pmtiles` | 26.3 MB (z8-14, z15-16 over the city) | HU_TILES |
+| Day map tiles | the map | `scripts/map-tiles.py` (via `map-region.py`) | `tiles.pmtiles` | 26.3 MB (z8-14, z15-16 over the city) | about 0.5 GB (99,409 tiles: z8-14 over the country, 263 MB loose; z15-16 over Budapest and 17 towns) |
 | Night map tiles | the map at night | made on the head unit from the day tiles | none | 0 | 0 |
-| Names | street and place names LEHU draws | `map-tiles.py --labels data` | `labels.pack` | 0.3 MB | HU_LABELS |
+| Names | street and place names LEHU draws | `map-tiles.py --labels data` | `labels.pack` | 0.3 MB | 5.4 MB |
 | Road network | routing, turns, speed limits, motorways, the main-road layer | `scripts/map-graph.py` | `roads.bin` | 7.0 MB | 68.6 MB |
 | Places | Go to's search; fuel, parking, charging | `scripts/map-graph.py` | `places.bin` | 0.5 MB | 4.1 MB |
 | Speed cameras | the camera warning | `scripts/map-graph.py` (OSM `highway=speed_camera`) | `cameras.bin`, tied to its roads.bin | 1 kB, 39 cameras | 11.5 kB, 480 |

@@ -116,16 +116,17 @@ PRESETS = {
 # by its population.
 TOWN_KM = ((100_000, 6.0), (0, 4.0))
 
-# --estimate: the region's bytes for an extract's, and seconds an extract
-# MB on two workers, measured on a Raspberry Pi 5 (Luxembourg: 48 MB to
-# 34 MB in 200 s; Hungary: see docs/map.md). The time of drawing tiles
-# shrinks with more workers, reading and placing names does not.
+# --estimate, measured on a Raspberry Pi 5 with two workers: Luxembourg's
+# 48 MB extract makes 34 MB in about 200 s; Hungary's 330 MB about 0.6 GB
+# (99,409 tiles; zoom 8-14 alone 263 MB) in about 75 minutes, most of it
+# reading the extract and placing the names, which more workers do not
+# shorten; drawing the tiles they do.
 ESTIMATE = {
     # preset: (region bytes an extract byte, seconds an MB read and placed,
     #          seconds an MB drawn on one worker)
     "luxembourg": (0.71, 2.0, 4.6),
-    "hungary": (1.0, 6.5, 7.5),
-    "auto": (1.0, 6.5, 7.5),
+    "hungary": (1.8, 7.5, 5.5),
+    "auto": (1.8, 7.5, 5.5),
 }
 
 PROGRESS = False
