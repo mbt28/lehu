@@ -978,3 +978,80 @@ fn turned_shot() {
         std::fs::write(shots.join(format!("up-{name}.ppm")), ppm).unwrap();
     }
 }
+
+/// What a heading-up frame costs, by its parts, on the machine it runs on:
+/// `LEHU_TRACK=<drive.gpx> <test binary> heading_up_cost --ignored --nocapture`.
+#[test]
+#[ignore]
+fn heading_up_cost() {
+    use std::time::Instant;
+    let one = pattern_tiles();
+    let tiles: Vec<Vec<u8>> = (0..20).map(|i| one[i % 4].clone()).collect();
+    let grid = nv12::Grid {
+        tiles: tiles.iter().map(|t| Some(t.as_slice())).collect(),
+        cols: 5,
+        rows: 4,
+        side: 256,
+        land: (1, 2, 3),
+    };
+    let (w, h, pitch) = (800u32, 480u32, 800usize);
+    let chroma = pitch * h as usize;
+    let mut out = vec![0u8; chroma + pitch * h as usize / 2];
+    let frames = 10;
+    for degrees in [0.0f64, 30.0, 90.0] {
+        let r = degrees.to_radians();
+        let up = ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64);
+        let started = Instant::now();
+        for _ in 0..frames {
+            nv12::rotate(
+                &grid,
+                &mut out,
+                pitch,
+                chroma,
+                (w, h),
+                (640 << 16, 512 << 16),
+                (400, 331),
+                (-up.1, up.0),
+                (-up.0, -up.1),
+            );
+        }
+        let ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        println!("rotate {degrees}°: {ms:.1} ms a frame");
+    }
+    let Ok(path) = std::env::var("LEHU_TRACK") else {
+        return;
+    };
+    let track = crate::Track::parse_gpx(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let line = track.line();
+    let mut worst = 0.0f64;
+    let mut sum = 0.0;
+    let mut n = 0;
+    for ms in (0..track.duration()).step_by(5000) {
+        let f = track.at(ms);
+        let view = View {
+            zoom: 17,
+            x: f.x,
+            y: f.y,
+        };
+        let layout = Layout::around(&view, (w, h), 3, 2);
+        let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
+        let started = Instant::now();
+        nv12::route(
+            &mut out,
+            pitch,
+            chroma,
+            (w, h),
+            (0, 0, i64::from(w), i64::from(h)),
+            &points,
+        );
+        let took = started.elapsed().as_secs_f64() * 1000.0;
+        worst = worst.max(took);
+        sum += took;
+        n += 1;
+    }
+    println!(
+        "route: {:.1} ms a frame, {:.1} at most ({n} places)",
+        sum / f64::from(n),
+        worst
+    );
+}

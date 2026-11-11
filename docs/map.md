@@ -34,7 +34,9 @@ key that centres the map on it again.
 A recorded drive can stand in for a moving position: `map.fake-track`
 names a GPX file, which LEHU follows in real time, from the start again at
 its end. The position is a blue arrow along the road, and the map follows
-it until it is dragged; the Me key makes it follow again. When the GPX
+it until it is dragged; the Me key makes it follow again. While it
+follows, the map turns so that the way ahead is up, with more road ahead
+than behind. When the GPX
 has the route's turns as waypoints, the map draws the route and guides
 along it: the bar shows the next turn, its distance and the road it leads
 onto, and the time and distance left.
@@ -83,7 +85,14 @@ the panel on each side; the display engine shows a panel-sized window of
 it. Scrolling moves the window, which costs one commit and no copy; when
 the window would leave the canvas, the next canvas is composed around it.
 Everything runs on a thread of its own, so the screens and the input never
-wait for a decode. The phone's decoder makes way while the map is shown,
+wait for a decode.
+
+Heading up, the map is turned on the CPU into a picture a little larger
+than the panel, with some road ahead; driving on moves the window over it,
+and the map is turned anew only when the heading has changed by most of a
+degree or the road ahead runs out. The arrow is on a display plane of its
+own above the map, so the map moves under it without being redrawn; on a
+display without such a plane it is drawn into the map instead. The phone's decoder makes way while the map is shown,
 since both need video memory.
 
 The canvas is NV12, the video plane's own format, so the display's scaler

@@ -23,9 +23,10 @@ use toml::{Table, Value};
 
 use crate::audio::Audio;
 
-/// A replayed drive's position moves on this often: smooth at city speeds,
-/// and a move only patches the marker on the map (a millisecond or so).
-const MAP_TRACK_STEP_MS: u64 = 200;
+/// A replayed drive's position moves on this often: 25 times a second,
+/// smooth on the panel, and a move that only shifts the map's window (or
+/// patches the marker, without a sprite plane) costs about a millisecond.
+const MAP_TRACK_STEP_MS: u64 = 40;
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -671,7 +672,7 @@ impl AppHost {
                 viewer.set_route(self.map_route.clone());
                 if let Some(Marker::Arrow(_, _, heading)) = self.map_marker {
                     self.map_up = None;
-                    viewer.set_heading(self.steer(heading));
+                    viewer.set_heading(self.steer(heading, 0));
                 }
                 self.map = Some(viewer);
                 self.map_view = view;
@@ -715,13 +716,17 @@ impl AppHost {
         };
         let fix = track.at(now - start);
         self.map_guide = track.ahead(now - start).map(|a| guidance(&a));
+        let since = now.saturating_sub(self.map_track_shown);
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
-        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+        // The arrow along the smoothed heading too: heading up, it then
+        // points straight up, not a step's way at each bend.
+        let heading = self.steer(fix.heading, since);
+        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
         let up = if self.map_follow {
             (self.map_view.x, self.map_view.y) = (fix.x, fix.y);
             self.map_view.clamp(&bounds);
-            self.steer(fix.heading)
+            heading
         } else {
             None
         };
@@ -731,19 +736,27 @@ impl AppHost {
     }
 
     /// The way up while following: the drive's heading, turned towards
-    /// a little each step (a bend turns the map over about a second), at
-    /// once when it reverses; None before it has moved.
-    fn steer(&mut self, heading: (i32, i32)) -> Option<(i32, i32)> {
+    /// by how long it has been, `since` ms (0: at once), as a bend turns
+    /// the map over about a second; at once when it reverses; None before
+    /// it has moved.
+    fn steer(&mut self, heading: (i32, i32), since: u64) -> Option<(i32, i32)> {
+        // 45% of the way each 200 ms, however often it is asked.
+        let keep = if since == 0 {
+            0.0
+        } else {
+            0.55f64.powf(since.min(1000) as f64 / 200.0)
+        };
         let unit = |x: f64, y: f64| {
             let len = x.hypot(y);
             (len > 0.0).then(|| (x / len, y / len))
         };
         if let Some(target) = unit(f64::from(heading.0), f64::from(heading.1)) {
             self.map_up = Some(match self.map_up {
-                Some(h) if h.0 * target.0 + h.1 * target.1 > -0.5 => {
-                    unit(h.0 * 0.55 + target.0 * 0.45, h.1 * 0.55 + target.1 * 0.45)
-                        .unwrap_or(target)
-                }
+                Some(h) if h.0 * target.0 + h.1 * target.1 > -0.5 => unit(
+                    h.0 * keep + target.0 * (1.0 - keep),
+                    h.1 * keep + target.1 * (1.0 - keep),
+                )
+                .unwrap_or(target),
                 _ => target,
             });
         }

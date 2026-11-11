@@ -319,6 +319,10 @@ struct State {
     placeholder: Option<Dumb>,
     /// Video commits since the placeholder left the plane.
     placeholder_live: u32,
+    /// The sprite plane shows a picture.
+    sprite_on: bool,
+    /// The driver refused the sprite plane once: never asked again.
+    sprite_refused: bool,
     warned: Warned,
 }
 
@@ -341,6 +345,9 @@ pub struct Display {
     /// The video plane takes RGB565: the placeholder's format, else XRGB8888.
     video_rgb565: bool,
     ui_plane: Option<UiPlane>,
+    /// A plane with per-pixel alpha between the video and the UI (the
+    /// map's marker): its id and properties.
+    sprite_plane: Option<(u32, PlaneProps)>,
     ui_pitch: u32,
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
@@ -513,6 +520,26 @@ impl Display {
             }
         };
         let ui = ui.filter(|(p, _)| *p != video_plane);
+        // The sprite plane: another overlay that takes ARGB8888.
+        let mut sprite = None;
+        for p in card
+            .plane_handles()
+            .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+        {
+            let Ok(pi) = card.get_plane(p) else { continue };
+            if p == video_plane
+                || ui.is_some_and(|(u, _)| u == p)
+                || !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
+                || plane_type(&card, p) != Some(PlaneType::Overlay)
+                || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
+            {
+                continue;
+            }
+            if let Ok(props) = plane_props(&card, p) {
+                sprite = Some((u32::from(p), props));
+                break;
+            }
+        }
 
         let video_props = plane_props(&card, video_plane)?;
         let ui_plane = match ui {
@@ -571,6 +598,7 @@ impl Display {
             video_props,
             video_rgb565,
             ui_plane,
+            sprite_plane: sprite,
             ui_pitch,
             video_frames: AtomicU32::new(0),
             state: Mutex::new(State {
@@ -582,6 +610,8 @@ impl Display {
                 video_held: false,
                 placeholder: None,
                 placeholder_live: 0,
+                sprite_on: false,
+                sprite_refused: false,
                 warned: Warned::default(),
             }),
         })
@@ -711,8 +741,9 @@ impl Display {
         req.add(ui.id, p.crtc_y, u64::from(r.y0));
         req.add(ui.id, p.crtc_w, u64::from(r.width()));
         req.add(ui.id, p.crtc_h, u64::from(r.height()));
+        // Above the video, and above the sprite between them.
         if let Some(z) = p.zpos {
-            req.add(ui.id, z, 1);
+            req.add(ui.id, z, 2);
         }
     }
 
@@ -988,6 +1019,9 @@ impl Display {
 
         st.request.clear();
         let flags = self.add_modeset(st);
+        if st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
         self.add_plane_full(
             &mut st.request,
             self.video_plane,
@@ -1027,6 +1061,7 @@ impl Display {
             return Show::Failed;
         }
         st.modeset_done = true;
+        st.sprite_on = false;
         // Only the phone's frames say "video is flowing".
         if !camera {
             self.video_frames.fetch_add(1, Ordering::Relaxed);
@@ -1148,9 +1183,28 @@ pub enum CanvasFormat {
     /// XRGB8888, four bytes a pixel, little-endian (B, G, R, X).
     Xrgb8888,
     /// NV12, limited range: `height` rows of luma, then `height / 2` rows
-    /// of Cb, Cr pairs, all `pitch` apart. The window moves in steps of
-    /// two pixels.
+    /// of Cb, Cr pairs, all `pitch` apart. The window may sit at
+    /// any pixel: at an odd one the chroma (one pair for two by two
+    /// pixels) is half a pixel off, which nobody sees, where steps of two
+    /// show as a judder when the map glides.
     Nv12,
+    /// ARGB8888, four bytes a pixel, little-endian (B, G, R, A), alpha
+    /// not premultiplied: a sprite's.
+    Argb8888,
+}
+
+/// A part of a sprite canvas on the sprite plane: the `w` x `h` pixels
+/// at (`sx`, `sy`) of `canvas`, at (`x`, `y`) of the panel. The parts
+/// off the panel are cut off.
+#[derive(Clone, Copy)]
+pub struct Sprite<'a> {
+    pub canvas: &'a Canvas,
+    pub sx: u32,
+    pub sy: u32,
+    pub w: u32,
+    pub h: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Canvas {
@@ -1215,17 +1269,119 @@ impl Display {
         })
     }
 
+    /// There is a plane with per-pixel alpha above the video and beneath
+    /// the UI, and the driver has not refused it.
+    pub fn has_sprite(&self) -> bool {
+        self.sprite_plane.is_some() && !self.lock().sprite_refused
+    }
+
+    /// A transparent ARGB8888 canvas of `width` x `height` for the sprite
+    /// plane.
+    pub fn sprite_canvas(&self, width: u32, height: u32) -> Result<Canvas, Error> {
+        let dumb = Dumb::create(&self.card, width, height, DrmFourcc::Argb8888, 4)?;
+        Ok(Canvas {
+            dumb,
+            width,
+            height,
+            format: CanvasFormat::Argb8888,
+        })
+    }
+
+    /// The sprite plane off, in the request.
+    fn add_sprite_off(&self, req: &mut Request) {
+        if let Some((id, p)) = &self.sprite_plane {
+            req.add(*id, p.fb, 0);
+            req.add(*id, p.crtc, 0);
+        }
+    }
+
+    /// The sprite plane showing `s`, in the request; false when none of
+    /// it is on the panel.
+    fn add_sprite(&self, req: &mut Request, s: &Sprite<'_>) -> bool {
+        let Some((id, p)) = &self.sprite_plane else {
+            return false;
+        };
+        // Cut to the panel: the plane is never placed partly off it.
+        let (pw, ph) = (i64::from(self.width), i64::from(self.height));
+        let (x0, y0) = (i64::from(s.x).max(0), i64::from(s.y).max(0));
+        let x1 = (i64::from(s.x) + i64::from(s.w)).min(pw);
+        let y1 = (i64::from(s.y) + i64::from(s.h)).min(ph);
+        if x0 >= x1 || y0 >= y1 {
+            return false;
+        }
+        let sx = i64::from(s.sx) + x0 - i64::from(s.x);
+        let sy = i64::from(s.sy) + y0 - i64::from(s.y);
+        let (w, h) = ((x1 - x0) as u64, (y1 - y0) as u64);
+        req.add(*id, p.fb, u64::from(u32::from(s.canvas.dumb.fb)));
+        req.add(*id, p.crtc, u64::from(self.crtc));
+        req.add(*id, p.src_x, (sx as u64) << 16);
+        req.add(*id, p.src_y, (sy as u64) << 16);
+        req.add(*id, p.src_w, w << 16);
+        req.add(*id, p.src_h, h << 16);
+        req.add(*id, p.crtc_x, x0 as u64);
+        req.add(*id, p.crtc_y, y0 as u64);
+        req.add(*id, p.crtc_w, w);
+        req.add(*id, p.crtc_h, h);
+        if let Some(z) = p.zpos {
+            req.add(*id, z, 1);
+        }
+        true
+    }
+
+    /// Take the sprite down, waiting for the flip.
+    pub fn hide_sprite(&self) {
+        let mut st = self.lock();
+        if !st.sprite_on {
+            return;
+        }
+        st.request.clear();
+        self.add_sprite_off(&mut st.request);
+        if self.commit(&mut st, 0).is_ok() {
+            st.sprite_on = false;
+        }
+    }
+
     /// Show the panel-sized window of `canvas` whose top left is (`x`,
     /// `y`), 1:1, on the video plane. Like `show_camera`: the decoder's
     /// frames wait while `hold_video` holds them, a pending flip gives
     /// `Busy`, and the canvas stays on scanout until a later picture
-    /// replaces it (keep the last three shown alive).
+    /// replaces it (keep the last three shown alive). The sprite plane
+    /// goes off.
     pub fn show_canvas(&self, canvas: &Canvas, x: u32, y: u32) -> Show {
-        // NV12's chroma is shared by two by two pixels: an even window.
-        let (x, y) = match canvas.format {
-            CanvasFormat::Nv12 => (x & !1, y & !1),
-            _ => (x, y),
-        };
+        self.show_canvas_with(canvas, x, y, None)
+    }
+
+    /// `show_canvas`, and the sprite plane in the same commit: showing
+    /// `sprite`, or off. A sprite canvas shown stays on scanout as a
+    /// canvas does. Should the driver refuse the sprite plane, the canvas
+    /// is shown without it, and `has_sprite` is false from then on.
+    pub fn show_canvas_with(
+        &self,
+        canvas: &Canvas,
+        x: u32,
+        y: u32,
+        sprite: Option<Sprite<'_>>,
+    ) -> Show {
+        let shown = self.show_canvas_once(canvas, x, y, sprite.as_ref());
+        if shown != Show::Failed || sprite.is_none() {
+            return shown;
+        }
+        // Without it, then: if that is shown, the sprite was the trouble.
+        let again = self.show_canvas_once(canvas, x, y, None);
+        if again == Show::Shown {
+            self.lock().sprite_refused = true;
+            log::warn!("the sprite plane was refused; the map draws its marker itself");
+        }
+        again
+    }
+
+    fn show_canvas_once(
+        &self,
+        canvas: &Canvas,
+        x: u32,
+        y: u32,
+        sprite: Option<&Sprite<'_>>,
+    ) -> Show {
         if x.saturating_add(self.width) > canvas.width
             || y.saturating_add(self.height) > canvas.height
         {
@@ -1247,9 +1403,20 @@ impl Display {
         req.add(plane, p.crtc_y, 0);
         req.add(plane, p.crtc_w, u64::from(self.width));
         req.add(plane, p.crtc_h, u64::from(self.height));
+        let sprite = sprite.filter(|_| !st.sprite_refused);
+        let sprite_on = match sprite {
+            Some(s) => self.add_sprite(&mut st.request, s),
+            None => false,
+        };
+        if !sprite_on && st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
         if st.modeset_done {
             return match self.commit(&mut st, flags | NONBLOCK) {
-                Ok(()) => Show::Shown,
+                Ok(()) => {
+                    st.sprite_on = sprite_on;
+                    Show::Shown
+                }
                 Err(e) if e.kind() == io::ErrorKind::ResourceBusy => Show::Busy,
                 Err(e) => {
                     if !st.warned.video_commit {
@@ -1263,6 +1430,7 @@ impl Display {
         match self.commit(&mut st, flags) {
             Ok(()) => {
                 st.modeset_done = true;
+                st.sprite_on = sprite_on;
                 Show::Shown
             }
             Err(e) => {

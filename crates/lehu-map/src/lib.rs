@@ -19,6 +19,7 @@
 
 mod hw;
 mod nv12;
+mod sprite;
 mod tiles;
 mod tileset;
 mod track;

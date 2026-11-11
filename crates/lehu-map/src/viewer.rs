@@ -20,6 +20,7 @@ use lehu_drm::{Canvas, Display, Show};
 
 use crate::hw::HwJpeg;
 use crate::nv12;
+use crate::sprite::Sprites;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View, WORLD_Z};
@@ -134,11 +135,13 @@ impl Viewer {
             }),
             wake: Condvar::new(),
         });
-        // Heading-up frames: panel-sized, drawn whole each time. Without
-        // the memory for them the map stays north up.
+        // Heading-up frames: the panel and some road ahead and to the
+        // sides, which the window moves over until the map turns again.
+        // Without the memory for them the map stays north up.
+        let up_size = (panel.0 + 2 * UP_SIDE, panel.1 + UP_ROOM);
         let mut ups = Vec::with_capacity(CANVASES);
         for _ in 0..CANVASES {
-            match display.canvas(panel.0, panel.1, true) {
+            match display.canvas(up_size.0, up_size.1, true) {
                 Ok(c) => ups.push(c),
                 Err(e) => {
                     log::warn!("map: no video memory to turn the map ({e}); north up only");
@@ -149,14 +152,25 @@ impl Viewer {
                 }
             }
         }
+        // The marker on a plane of its own, when there is one: the map
+        // then moves under it without a redraw.
+        let sprites = Sprites::new(&display);
+        if sprites.is_some() {
+            log::info!("map: the marker is on the sprite plane");
+        }
         display.hold_video(true);
         let thread = {
             let shared = Arc::clone(&shared);
             let display = Arc::clone(&display);
             let tiles = Tiles::new(set, hw);
+            let frames = Frames {
+                canvases,
+                ups,
+                sprites,
+            };
             thread::Builder::new()
                 .name("map".into())
-                .spawn(move || run(&shared, &display, tiles, canvases, ups, panel, (cols, rows)))
+                .spawn(move || run(&shared, &display, tiles, frames, panel, (cols, rows)))
                 .map_err(|e| format!("map thread: {e}"))?
         };
         Ok(Self {
@@ -238,7 +252,11 @@ impl Viewer {
             self.shared.wake.notify_one();
         }
         if let Some(t) = self.thread.take() {
-            match t.join() {
+            let joined = t.join();
+            // The thread commits no more: the marker off its plane before
+            // its canvas goes.
+            self.display.hide_sprite();
+            match joined {
                 Ok(canvases) => {
                     for c in canvases {
                         self.display.free_canvas(c);
@@ -264,20 +282,36 @@ struct Held {
     marker: Option<Marker>,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The thread's pictures: the north-up canvases, the heading-up frames,
+/// and the marker's sprites.
+struct Frames {
+    canvases: Vec<Canvas>,
+    ups: Vec<Canvas>,
+    sprites: Option<Sprites>,
+}
+
 fn run(
     shared: &Shared,
     display: &Display,
     mut tiles: Tiles,
-    mut canvases: Vec<Canvas>,
-    mut ups: Vec<Canvas>,
+    frames: Frames,
     panel: (u32, u32),
     (cols, rows): (u32, u32),
 ) -> Vec<Canvas> {
-    // The heading-up frames shown last, as `recent` is for the canvases;
-    // and their cost, said every so often.
+    let Frames {
+        mut canvases,
+        mut ups,
+        mut sprites,
+    } = frames;
+    // The heading-up frames shown last, as `recent` is for the canvases,
+    // and what each holds; when the map last turned; and what it costs,
+    // said every so often.
     let mut recent_up: [Option<usize>; 2] = [None, None];
-    let mut up_stats = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
+    let mut up_held: Vec<Option<UpHeld>> = vec![None; ups.len()];
+    let mut last_turn: Option<Instant> = None;
+    let mut up_stats = UpStats::new();
+    // A sprite canvas the driver would not show, kept to be freed.
+    let mut retired: Vec<Canvas> = Vec::new();
     let mut heading: Option<(i32, i32)> = None;
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
@@ -331,6 +365,17 @@ fn run(
             }
             (shown != Some(inner.want)).then_some(inner.want)
         };
+        // The sprite plane can be refused at its first commit: from then
+        // on the marker is drawn into the pictures.
+        if sprites.is_some() && !display.has_sprite() {
+            retired.extend(sprites.take().map(Sprites::into_canvas));
+            held.fill(None);
+            up_held.fill(None);
+            shown = None;
+            continue;
+        }
+        // The marker as the pictures hold it: none while it has a plane.
+        let baked = if sprites.is_some() { None } else { position };
         let Some(want) = want else {
             // Nothing new to show: a step towards the canvas ahead.
             if let Some(layout) = ahead
@@ -345,7 +390,7 @@ fn run(
                     &mut held,
                     &recent,
                     &layout,
-                    position,
+                    baked,
                     route.as_deref(),
                 ) {
                     log::debug!(
@@ -360,38 +405,73 @@ fn run(
             continue;
         };
         if let Some(up) = heading {
-            // Heading up: a whole frame, turned, into a free frame buffer.
             ahead = None;
-            let Some(i) = (0..ups.len()).find(|i| !recent_up.contains(&Some(*i))) else {
-                break;
+            let h = unit_up(up);
+            let size = (ups[0].width(), ups[0].height());
+            // A frame turned near enough this way that holds the window,
+            // the one shown first: moving along is a commit, no drawing.
+            // Without the sprite the marker is in the frame: each is new.
+            let placed = if sprites.is_some() {
+                recent_up
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .chain(0..ups.len())
+                    .find_map(|i| up_held[i]?.window(&want, h, size, panel).map(|w| (i, w)))
+            } else {
+                None
             };
-            let started = Instant::now();
-            render_up(
-                &mut tiles,
-                &mut ups[i],
-                &want,
-                up,
-                position,
-                route.as_deref(),
-            );
-            let took = started.elapsed();
-            up_stats.0 += 1;
-            up_stats.1 += took;
-            up_stats.2 = up_stats.2.max(took);
-            if up_stats.3.elapsed() >= UP_STATS_EVERY {
-                log::info!(
-                    "map: {} frames heading up in {} s, {} ms each, {} ms at most",
-                    up_stats.0,
-                    up_stats.3.elapsed().as_secs(),
-                    up_stats.1.as_millis() / u128::from(up_stats.0.max(1)),
-                    up_stats.2.as_millis()
-                );
-                up_stats = (0, Duration::ZERO, Duration::ZERO, Instant::now());
-            }
+            let (i, (x, y)) = match placed {
+                Some(p) => p,
+                None => {
+                    let Some(i) = (0..ups.len()).find(|i| !recent_up.contains(&Some(*i))) else {
+                        break;
+                    };
+                    // The window low in the frame, the road ahead above.
+                    // Turning, the next turn is soon: the panel and a
+                    // little more. Else all the room ahead; without the
+                    // sprite, the panel alone.
+                    let window = (UP_SIDE, size.1 - panel.1 - UP_BACK);
+                    let top = if sprites.is_none() {
+                        window.1
+                    } else if last_turn.is_some_and(|t| t.elapsed() < UP_TURNING) {
+                        window.1 - UP_TURN_ROOM
+                    } else {
+                        0
+                    };
+                    let started = Instant::now();
+                    up_held[i] = Some(render_up(
+                        &mut tiles,
+                        &mut ups[i],
+                        &want,
+                        h,
+                        baked,
+                        route.as_deref(),
+                        anchor_on(panel, window),
+                        top,
+                    ));
+                    last_turn = Some(Instant::now());
+                    up_stats.turned(started.elapsed());
+                    (i, window)
+                }
+            };
+            up_stats.frame();
+            let sprite = match (&mut sprites, position, up_held[i]) {
+                (Some(sp), Some(m), Some(u)) => {
+                    let (at, heading) = parts(m);
+                    let c = u.sixteenth(at);
+                    let on_panel = (
+                        ((c.0 + 8) >> 4) - i64::from(x),
+                        ((c.1 + 8) >> 4) - i64::from(y),
+                    );
+                    Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
+                }
+                _ => None,
+            };
             // A pending flip: the same frame again a moment later.
             let mut tries = 0;
             loop {
-                match display.show_canvas(&ups[i], 0, 0) {
+                match display.show_canvas_with(&ups[i], x, y, sprite) {
                     Show::Shown => {
                         recent_up = [Some(i), recent_up[0]];
                         shared.lock().shown = true;
@@ -426,7 +506,7 @@ fn run(
             .chain(0..canvases.len())
             .find_map(|i| {
                 let h = held[i]?;
-                (h.marker == position).then_some(())?;
+                (h.marker == baked).then_some(())?;
                 h.layout.window(&want, panel).map(|w| (i, w))
             })
             // Else the free canvas, if it holds the window: only the
@@ -445,10 +525,10 @@ fn run(
                         draw_route(canvas.pixels(), pitch, chroma, size, &h.layout, rect, line);
                     }
                 }
-                draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, position);
+                draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, baked);
                 held[i] = Some(Held {
                     layout: h.layout,
-                    marker: position,
+                    marker: baked,
                 });
                 Some((i, w))
             });
@@ -464,7 +544,7 @@ fn run(
                     &mut held,
                     &recent,
                     &layout,
-                    position,
+                    baked,
                     route.as_deref(),
                 ) else {
                     log::error!("map: no canvas free to compose into");
@@ -491,7 +571,16 @@ fn run(
                 }
             }
         };
-        match display.show_canvas(&canvases[index], x, y) {
+        // The marker on its plane over the window.
+        let sprite = match (&mut sprites, position, held[index]) {
+            (Some(sp), Some(m), Some(h)) => {
+                let (at, heading) = parts(m);
+                let c = h.layout.pixel(at);
+                Some(sp.at(heading, (c.0 - i64::from(x), c.1 - i64::from(y))))
+            }
+            _ => None,
+        };
+        match display.show_canvas_with(&canvases[index], x, y, sprite) {
             Show::Shown => {
                 shown = Some(want);
                 if recent[0] != Some(index) {
@@ -512,7 +601,60 @@ fn run(
         }
     }
     canvases.extend(ups);
+    canvases.extend(retired);
+    canvases.extend(sprites.map(Sprites::into_canvas));
     canvases
+}
+
+/// A marker's point, and its heading if it has one.
+fn parts(marker: Marker) -> ((i64, i64), Option<(i64, i64)>) {
+    match marker {
+        Marker::Dot(x, y) => ((x, y), None),
+        Marker::Arrow(x, y, h) => ((x, y), Some((i64::from(h.0), i64::from(h.1)))),
+    }
+}
+
+/// The heading-up frames' cost: frames shown, those turned anew and the
+/// time that took, said every `UP_STATS_EVERY`.
+struct UpStats {
+    frames: u32,
+    turned: u32,
+    took: Duration,
+    most: Duration,
+    since: Instant,
+}
+
+impl UpStats {
+    fn new() -> Self {
+        Self {
+            frames: 0,
+            turned: 0,
+            took: Duration::ZERO,
+            most: Duration::ZERO,
+            since: Instant::now(),
+        }
+    }
+
+    fn turned(&mut self, took: Duration) {
+        self.turned += 1;
+        self.took += took;
+        self.most = self.most.max(took);
+    }
+
+    fn frame(&mut self) {
+        self.frames += 1;
+        if self.since.elapsed() >= UP_STATS_EVERY {
+            log::info!(
+                "map: {} frames heading up in {} s, {} turned, {} ms each, {} ms at most",
+                self.frames,
+                self.since.elapsed().as_secs(),
+                self.turned,
+                self.took.as_millis() / u128::from(self.turned.max(1)),
+                self.most.as_millis()
+            );
+            *self = Self::new();
+        }
+    }
 }
 
 /// The marker on a canvas: the dot, or the arrow along its heading.
@@ -540,44 +682,153 @@ const UP_STATS_EVERY: Duration = Duration::from_secs(30);
 /// middle across, low down, for more road ahead than behind.
 const UP_ANCHOR: (u32, u32) = (50, 69);
 
-/// A heading-up frame of `view` on `out`: the tiles turned so that `up`
-/// points up, the view's point at the anchor; then the route and the
-/// marker, turned the same way.
+/// A heading-up frame is the panel and more: `UP_SIDE` pixels each side,
+/// `UP_ROOM` rows more of which `UP_BACK` are behind the window as drawn,
+/// the rest the road ahead it moves into before the map is turned anew.
+const UP_SIDE: u32 = 32;
+const UP_ROOM: u32 = 160;
+const UP_BACK: u32 = 16;
+/// While it turns (the last turn this recent), only `UP_TURN_ROOM` rows
+/// ahead of the window are drawn: the next turn is soon.
+const UP_TURNING: Duration = Duration::from_secs(1);
+const UP_TURN_ROOM: u32 = 32;
+/// How far the way up may be from a frame's before it is turned anew:
+/// the sine of 0.8 degrees, times 2^32 (two 65536-long ways crossed).
+const UP_TOLERANCE: i64 = 60_000_000;
+
+/// The anchor on a frame whose window is at `window`.
+fn anchor_on(panel: (u32, u32), window: (u32, u32)) -> (i64, i64) {
+    let a = panel_anchor(panel);
+    (a.0 + i64::from(window.0), a.1 + i64::from(window.1))
+}
+
+fn panel_anchor(panel: (u32, u32)) -> (i64, i64) {
+    (
+        i64::from(panel.0 * UP_ANCHOR.0 / 100),
+        i64::from(panel.1 * UP_ANCHOR.1 / 100),
+    )
+}
+
+/// The way up, 65536 long.
+fn unit_up(up: (i32, i32)) -> (i64, i64) {
+    let len = f64::from(up.0).hypot(f64::from(up.1)).max(1.0);
+    (
+        (f64::from(up.0) / len * 65536.0) as i64,
+        (f64::from(up.1) / len * 65536.0) as i64,
+    )
+}
+
+/// A world coordinate (pixels at `WORLD_Z`) in 1/65536 pixels of `zoom`.
+fn fine(zoom: u8, v: i64) -> i64 {
+    let s = i32::from(WORLD_Z - zoom.min(WORLD_Z)) - 16;
+    if s >= 0 { v >> s } else { v << -s }
+}
+
+/// What a heading-up frame holds: the map at `zoom` turned so that `h`
+/// (65536 long) is up, the point `p` (1/65536 pixels) at `anchor` (its
+/// pixels), drawn from row `top` down.
+#[derive(Clone, Copy, Debug)]
+struct UpHeld {
+    zoom: u8,
+    p: (i64, i64),
+    h: (i64, i64),
+    anchor: (i64, i64),
+    top: u32,
+}
+
+impl UpHeld {
+    /// One pixel of the frame right, and down, on the map (1/65536 px).
+    fn across(&self) -> (i64, i64) {
+        (-self.h.1, self.h.0)
+    }
+
+    fn down(&self) -> (i64, i64) {
+        (-self.h.0, -self.h.1)
+    }
+
+    /// A world point on the frame, in 1/16 pixels: from the anchor by its
+    /// distance along each way. In i64: 2^16 by 2^16 a pixel, and a route
+    /// would have to run a million pixels away to overflow.
+    fn sixteenth(&self, (x, y): (i64, i64)) -> (i64, i64) {
+        let (dx, dy) = (fine(self.zoom, x) - self.p.0, fine(self.zoom, y) - self.p.1);
+        let (a, d) = (self.across(), self.down());
+        (
+            self.anchor.0 * 16 + ((dx * a.0 + dy * a.1) >> 28),
+            self.anchor.1 * 16 + ((dx * d.0 + dy * d.1) >> 28),
+        )
+    }
+
+    /// A heading on the map (x right, y down) as it lies on the frame.
+    fn turn(&self, (mx, my): (i64, i64)) -> (i64, i64) {
+        let (a, d) = (self.across(), self.down());
+        ((mx * a.0 + my * a.1) >> 16, (mx * d.0 + my * d.1) >> 16)
+    }
+
+    /// Where the panel's window for `view`, `h` up, sits on this frame
+    /// (`size`): when the frame is turned near enough that way and the
+    /// window lies inside what it has drawn.
+    fn window(
+        &self,
+        view: &View,
+        h: (i64, i64),
+        size: (u32, u32),
+        panel: (u32, u32),
+    ) -> Option<(u32, u32)> {
+        if view.zoom != self.zoom {
+            return None;
+        }
+        let cross = self.h.0 * h.1 - self.h.1 * h.0;
+        let dot = self.h.0 * h.0 + self.h.1 * h.1;
+        if dot <= 0 || cross.abs() > UP_TOLERANCE {
+            return None;
+        }
+        let c = self.sixteenth((view.x, view.y));
+        let a = panel_anchor(panel);
+        let x = ((c.0 + 8) >> 4) - a.0;
+        let y = ((c.1 + 8) >> 4) - a.1;
+        let fits = x >= 0
+            && y >= i64::from(self.top)
+            && x + i64::from(panel.0) <= i64::from(size.0)
+            && y + i64::from(panel.1) <= i64::from(size.1);
+        fits.then_some((x as u32, y as u32))
+    }
+}
+
+/// A heading-up frame of `view` on `out`, rows `top` (made even) down:
+/// the tiles turned so that `h` points up, the view's point at `anchor`;
+/// then the route and the marker (if it is to be drawn in), turned the
+/// same way. What the frame then holds.
+#[allow(clippy::too_many_arguments)]
 fn render_up(
     tiles: &mut Tiles,
     out: &mut Canvas,
     view: &View,
-    up: (i32, i32),
-    position: Option<Marker>,
+    h: (i64, i64),
+    marker: Option<Marker>,
     route: Option<&[(i64, i64)]>,
-) {
+    anchor: (i64, i64),
+    top: u32,
+) -> UpHeld {
     let size = (out.width(), out.height());
     let (pitch, chroma) = (out.pitch(), out.chroma_offset());
-    let anchor = (
-        i64::from(size.0 * UP_ANCHOR.0 / 100),
-        i64::from(size.1 * UP_ANCHOR.1 / 100),
-    );
-    // A world point (WORLD_Z pixels) in 1/65536 pixels of this zoom.
-    let s = i32::from(WORLD_Z - view.zoom.min(WORLD_Z)) - 16;
-    let fine = |v: i64| if s >= 0 { v >> s } else { v << -s };
-    let p = (fine(view.x), fine(view.y));
-    // `up`, and the way right of it, each 65536 long.
-    let len = f64::from(up.0).hypot(f64::from(up.1)).max(1.0);
-    let h = (
-        (f64::from(up.0) / len * 65536.0) as i64,
-        (f64::from(up.1) / len * 65536.0) as i64,
-    );
-    let across = (-h.1, h.0);
-    let down = (-h.0, -h.1);
-    // The panel's corners on the map, for the tiles under them.
+    let top = top & !1;
+    let held = UpHeld {
+        zoom: view.zoom,
+        p: (fine(view.zoom, view.x), fine(view.zoom, view.y)),
+        h,
+        anchor,
+        top,
+    };
+    let (p, across, down) = (held.p, held.across(), held.down());
+    // The drawn part's corners on the map, for the tiles under them.
     let corner = |u: i64, v: i64| {
         (
             p.0 + (u - anchor.0) * across.0 + (v - anchor.1) * down.0,
             p.1 + (u - anchor.0) * across.1 + (v - anchor.1) * down.1,
         )
     };
-    let (w, ht) = (i64::from(size.0), i64::from(size.1));
-    let corners = [corner(0, 0), corner(w, 0), corner(0, ht), corner(w, ht)];
+    let (w, ht, t) = (i64::from(size.0), i64::from(size.1), i64::from(top));
+    let corners = [corner(0, t), corner(w, t), corner(0, ht), corner(w, ht)];
     let tile = TILE << 16;
     let xs = corners.iter().map(|c| c.0);
     let ys = corners.iter().map(|c| c.1);
@@ -589,54 +840,44 @@ fn render_up(
     {
         let grid = tiles.grid(view.zoom, (tx0, ty0), cols, rows);
         let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
+        // From row `top`: its luma, and its chroma's place from there.
+        let skip = top as usize * pitch;
         nv12::rotate(
             &grid,
-            out.pixels(),
+            &mut out.pixels()[skip..],
             pitch,
-            chroma,
-            size,
+            chroma - (top as usize / 2) * pitch,
+            (size.0, size.1 - top),
             origin,
-            anchor,
+            (anchor.0, anchor.1 - t),
             across,
             down,
         );
     }
-    // A map point on the panel, in 1/16 pixels: from the anchor by its
-    // distance along each way.
-    let to_panel = |x: i64, y: i64| {
-        let (dx, dy) = (i128::from(fine(x) - p.0), i128::from(fine(y) - p.1));
-        let a = (dx * i128::from(across.0) + dy * i128::from(across.1)) >> 28;
-        let d = (dx * i128::from(down.0) + dy * i128::from(down.1)) >> 28;
-        (anchor.0 * 16 + a as i64, anchor.1 * 16 + d as i64)
-    };
     if let Some(line) = route {
-        let points: Vec<(i64, i64)> = line.iter().map(|&(x, y)| to_panel(x, y)).collect();
-        nv12::route(out.pixels(), pitch, chroma, size, (0, 0, w, ht), &points);
+        let points: Vec<(i64, i64)> = line.iter().map(|&q| held.sixteenth(q)).collect();
+        nv12::route(out.pixels(), pitch, chroma, size, (0, t, w, ht), &points);
     }
-    match position {
+    match marker {
         Some(Marker::Dot(x, y)) => {
-            let at = to_panel(x, y);
+            let at = held.sixteenth((x, y));
             nv12::dot(out.pixels(), pitch, chroma, size, (at.0 >> 4, at.1 >> 4));
         }
         Some(Marker::Arrow(x, y, m)) => {
-            let at = to_panel(x, y);
-            // Its heading on the panel, along each way as for points.
-            let (mx, my) = (i64::from(m.0), i64::from(m.1));
-            let turned = (
-                ((mx * across.0 + my * across.1) >> 16) as i32,
-                ((mx * down.0 + my * down.1) >> 16) as i32,
-            );
+            let at = held.sixteenth((x, y));
+            let turned = held.turn((i64::from(m.0), i64::from(m.1)));
             nv12::arrow(
                 out.pixels(),
                 pitch,
                 chroma,
                 size,
                 (at.0 >> 4, at.1 >> 4),
-                turned,
+                (turned.0 as i32, turned.1 as i32),
             );
         }
         None => {}
     }
+    held
 }
 
 /// The route on a canvas, only inside `clip` (its pixels).
@@ -690,4 +931,98 @@ fn compose_free(
         marker: position,
     });
     Some(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PANEL: (u32, u32) = (800, 480);
+    const SIZE: (u32, u32) = (PANEL.0 + 2 * UP_SIDE, PANEL.1 + UP_ROOM);
+    const WINDOW: (u32, u32) = (UP_SIDE, SIZE.1 - PANEL.1 - UP_BACK);
+
+    fn frame(view: &View, h: (i64, i64), top: u32) -> UpHeld {
+        UpHeld {
+            zoom: view.zoom,
+            p: (fine(view.zoom, view.x), fine(view.zoom, view.y)),
+            h,
+            anchor: anchor_on(PANEL, WINDOW),
+            top,
+        }
+    }
+
+    /// `view` moved `dx`, `dy` pixels of its zoom.
+    fn moved(view: &View, dx: i64, dy: i64) -> View {
+        let s = WORLD_Z - view.zoom;
+        View {
+            zoom: view.zoom,
+            x: view.x + (dx << s),
+            y: view.y + (dy << s),
+        }
+    }
+
+    fn turned(degrees: f64) -> (i64, i64) {
+        let r = degrees.to_radians();
+        ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64)
+    }
+
+    /// Luxembourg City.
+    const AT: View = View {
+        zoom: 17,
+        x: 555_154_349,
+        y: 365_948_927,
+    };
+
+    #[test]
+    fn a_frame_shows_its_own_view_where_it_was_drawn() {
+        let f = frame(&AT, turned(0.0), 0);
+        assert_eq!(f.window(&AT, turned(0.0), SIZE, PANEL), Some(WINDOW));
+        let c = f.sixteenth((AT.x, AT.y));
+        assert_eq!((c.0 >> 4, c.1 >> 4), anchor_on(PANEL, WINDOW));
+    }
+
+    #[test]
+    fn driving_on_moves_the_window_up_the_frame_until_it_runs_out() {
+        // Heading east, east is up the frame.
+        let east = turned(90.0);
+        let f = frame(&AT, east, 0);
+        let on = moved(&AT, 50, 0);
+        assert_eq!(
+            f.window(&on, east, SIZE, PANEL),
+            Some((WINDOW.0, WINDOW.1 - 50))
+        );
+        // A pixel to the side moves it across by one.
+        let aside = moved(&AT, 50, 1);
+        assert_eq!(
+            f.window(&aside, east, SIZE, PANEL),
+            Some((WINDOW.0 + 1, WINDOW.1 - 50))
+        );
+        // Past the room ahead: a new frame.
+        let far = moved(&AT, i64::from(WINDOW.1) + 2, 0);
+        assert_eq!(f.window(&far, east, SIZE, PANEL), None);
+        // Nor above the rows drawn.
+        let partly = frame(&AT, east, WINDOW.1 - UP_TURN_ROOM);
+        let past = moved(&AT, i64::from(UP_TURN_ROOM) + 2, 0);
+        assert_eq!(partly.window(&past, east, SIZE, PANEL), None);
+    }
+
+    #[test]
+    fn turned_further_than_the_tolerance_is_a_new_frame() {
+        let f = frame(&AT, turned(30.0), 0);
+        assert!(f.window(&AT, turned(30.5), SIZE, PANEL).is_some());
+        assert!(f.window(&AT, turned(29.5), SIZE, PANEL).is_some());
+        assert_eq!(f.window(&AT, turned(31.0), SIZE, PANEL), None);
+        assert_eq!(f.window(&AT, turned(210.0), SIZE, PANEL), None);
+        // Another zoom never shows on it.
+        let out = View { zoom: 16, ..AT };
+        assert_eq!(f.window(&out, turned(30.0), SIZE, PANEL), None);
+    }
+
+    #[test]
+    fn a_heading_turns_with_the_frame() {
+        let f = frame(&AT, turned(90.0), 0);
+        // East is up; south is right.
+        assert_eq!(f.turn((65536, 0)), (0, -65536));
+        assert_eq!(f.turn((0, 65536)), (65536, 0));
+    }
 }
