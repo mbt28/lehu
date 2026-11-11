@@ -660,7 +660,24 @@ impl AppHost {
                 &m.route_dir
             };
             match Router::open(std::path::Path::new(dir)) {
-                Ok(r) => self.map_router = Some(Arc::new(r)),
+                Ok(r) => {
+                    let r = Arc::new(r);
+                    // Checked meanwhile, below the map's own threads.
+                    let early = Arc::clone(&r);
+                    let spawned =
+                        std::thread::Builder::new()
+                            .name("map-check".into())
+                            .spawn(move || {
+                                // SAFETY: nice() changes only this thread's
+                                // priority on Linux; no memory is involved.
+                                unsafe { libc::nice(10) };
+                                early.prepare();
+                            });
+                    if let Err(e) = spawned {
+                        log::warn!("map: no thread to check the roads on: {e}");
+                    }
+                    self.map_router = Some(r);
+                }
                 Err(e) => log::info!("map: no routing: {e}"),
             }
         }

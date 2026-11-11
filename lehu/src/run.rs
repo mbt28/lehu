@@ -352,6 +352,10 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     // An update installs: the phone's sessions stay off until it failed (on
     // success the installer restarts the head unit).
     let mut installing = false;
+    // The screens asked for the map or the camera (or to leave it) after
+    // the loop looked this turn: it looks again at once, not at whatever
+    // wakes it next.
+    let mut again = false;
 
     log::info!("running");
     let mut exit = Exit::Done(ExitCode::SUCCESS);
@@ -360,16 +364,20 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // moments (the volume bar or the navigation card going, the Media
         // page's position line); otherwise the loop sleeps until a
         // descriptor is ready.
-        let timeout = screens.as_ref().and_then(|(osd, _)| {
-            [
-                lehu_ui::next_timer_due(),
-                osd.next_due(),
-                osd.host().map_due(),
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-        });
+        let timeout = if std::mem::take(&mut again) {
+            Some(std::time::Duration::ZERO)
+        } else {
+            screens.as_ref().and_then(|(osd, _)| {
+                [
+                    lehu_ui::next_timer_due(),
+                    osd.next_due(),
+                    osd.host().map_due(),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
+            })
+        };
         match poller.wait(timeout) {
             Ok(_) => {}
             Err(e) => {
@@ -525,10 +533,13 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // The map: on the video plane while its screen is up. Its canvases
         // want video memory the phone's decoder may hold, so the decoder is
         // parked meanwhile, as for the camera.
+        // What the loop sees the screens ask for, this turn.
+        let (mut map_asked, mut camera_asked) = (false, false);
         let mut map_shown = false;
         let mut map_ready = false;
         if let Some((osd, plane)) = &mut screens {
             let wanted = osd.host().map_wanted();
+            map_asked = wanted;
             if !wanted {
                 map_done = false;
             }
@@ -566,6 +577,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         if let Some((osd, plane)) = &mut screens {
             osd.camera_requests(); // the camera key, from any screen or video
             let wanted = osd.host().camera_wanted();
+            camera_asked = wanted;
             if !wanted {
                 camera_done = false;
             }
@@ -702,6 +714,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             }
             let host = osd.host_mut();
             host.tick();
+            again = host.map_wanted() != map_asked || host.camera_wanted() != camera_asked;
             if let (Some(input), Some(on)) = (&input, host.take_learning()) {
                 input.set_learning(on);
             }

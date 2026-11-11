@@ -52,6 +52,14 @@ impl Router {
         }
     }
 
+    /// Check the road network now rather than at the first route, which
+    /// then starts at once; reading it all also brings the file in from
+    /// the card. Meant for a thread of its own: it takes ~0.4 s on the
+    /// board.
+    pub fn prepare(&self) {
+        let _ = self.checked.get_or_init(|| self.graph.check());
+    }
+
     /// There are names to search.
     pub fn can_search(&self) -> bool {
         self.places.as_ref().is_some_and(|p| !p.is_empty())
