@@ -1795,6 +1795,75 @@ fn the_audio_row_opens_the_stream_levels_which_turn_live_in_tens() {
 }
 
 #[test]
+fn the_map_region_steps_through_the_regions_and_keeps_one_that_works() {
+    use crate::host::{MapRegion, RegionState};
+    let region = |dir: &str, name: &str, state| MapRegion {
+        dir: dir.into(),
+        name: name.into(),
+        state,
+        current: false,
+    };
+    let mut host = TestHost::new();
+    host.map_regions = vec![
+        region("/maps/hungary", "Hungary", RegionState::Ready),
+        region("/maps/luxembourg", "Luxembourg", RegionState::Ready),
+        region("/maps/austria", "Austria", RegionState::NeedsNewer),
+    ];
+    host.persist("map.dir", toml::Value::String("/maps/hungary".into()))
+        .unwrap();
+    host.calls.clear();
+    let mut osd = osd(host);
+    goto(&mut osd, SETTINGS);
+    assert_eq!(prop!(osd, get_region_label), "Hungary");
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "English");
+    assert_eq!(prop!(osd, get_map_hint), "");
+    pick_press(&mut osd, 17);
+    assert_eq!(pick(&osd), (17, 0));
+    assert_eq!(prop!(osd, get_pick_value), "Hungary");
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next); // stops at the end
+    assert_eq!(prop!(osd, get_pick_value), "Austria · Needs a newer LEHU");
+    // One for a newer LEHU is not taken: the one shown stays.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(pick(&osd).0, 0);
+    assert!(osd.host().persisted("map.dir").is_none());
+    // Another that works is, the map opening on its own start.
+    pick_press(&mut osd, 17);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.dir"),
+        Some(&toml::Value::String("/maps/luxembourg".into()))
+    );
+    assert_eq!(
+        osd.host().persisted("map.zoom"),
+        Some(&toml::Value::Integer(0))
+    );
+    assert_eq!(prop!(osd, get_region_label), "Luxembourg");
+    // A check that found it damaged: said at once, on its row and on
+    // Settings.
+    osd.host_mut().map_regions[1].state = RegionState::Damaged;
+    osd.host_mut().map_regions_gen += 1;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_region_label), "Luxembourg · Damaged");
+    // No voice, then no region at all: a hint says what to copy.
+    osd.host_mut().map_voice = false;
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Not installed");
+    assert!(prop!(osd, get_map_hint).contains("voice"));
+    osd.host_mut().map_regions.clear();
+    goto(&mut osd, SETTINGS);
+    assert_eq!(prop!(osd, get_region_label), "None");
+    goto(&mut osd, MAP_SETTINGS);
+    assert!(prop!(osd, get_map_hint).contains("LEHU-MAPS"));
+    pick_press(&mut osd, 17);
+    assert_eq!(pick(&osd).0, 0);
+}
+
+#[test]
 fn the_output_steps_through_the_cards_and_is_taken_with_enter() {
     let mut osd = osd(with_outputs());
     // Listed at the first look, for the Settings row.
@@ -2620,19 +2689,23 @@ fn the_card_gives_the_qr_codes_the_screen() {
 }
 
 #[test]
-fn the_menu_is_connection_audio_video_system() {
+fn the_menu_is_connection_audio_video_map_system() {
     use crate::host::UpdateStage;
     let mut osd = osd(TestHost::new());
     goto(&mut osd, SETTINGS);
     // Audio and Video follow each other.
     let mut stops = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         press(&mut osd, OsdKey::Next);
         stops.push(ring(&osd));
     }
-    assert_eq!(stops, ["back", "connection", "audio", "video", "system"]);
+    assert_eq!(
+        stops,
+        ["back", "connection", "audio", "video", "map", "system"]
+    );
     for (screen_at, parent) in [
         (CONNECTION, SETTINGS),
+        (MAP_SETTINGS, SETTINGS),
         (WIRELESS, CONNECTION),
         (SYSTEM, SETTINGS),
         (UPDATE, SYSTEM),

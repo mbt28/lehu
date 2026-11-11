@@ -815,4 +815,65 @@ fn shots() {
     s.osd.st.skew += 3000;
     s.tick();
     s.save("104-map-preview-night-touch");
+
+    // ── Settings > Map: the regions on the card ──
+    let regions = |h: &mut TestHost| {
+        let region = |dir: &str, name: &str, state| crate::host::MapRegion {
+            dir: dir.into(),
+            name: name.into(),
+            state,
+            current: false,
+        };
+        h.map_regions = vec![
+            region("/maps/hungary", "Hungary", crate::host::RegionState::Ready),
+            region(
+                "/maps/luxembourg",
+                "Luxembourg",
+                crate::host::RegionState::Ready,
+            ),
+            region(
+                "/maps/austria",
+                "Austria",
+                crate::host::RegionState::NeedsNewer,
+            ),
+            region(
+                "/maps/slovakia",
+                "Slovakia",
+                crate::host::RegionState::Damaged,
+            ),
+        ];
+        h.persist("map.dir", toml::Value::String("/maps/hungary".into()))
+            .unwrap();
+    };
+    let mut s = Shot::new(phone_host());
+    regions(s.osd.host_mut());
+    s.goto(SETTINGS);
+    s.save("105-settings-map-row");
+    s.goto(MAP_SETTINGS);
+    s.save("106-map-settings");
+    // The knob: Region, Enter, a turn on to Luxembourg, then to a region
+    // that cannot be taken.
+    s.keys(OsdKey::Next, 1);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.save("107-map-region-choosing");
+    s.keys(OsdKey::Next, 2);
+    s.save("108-map-region-damaged");
+    s.key(OsdKey::Ok);
+    s.save("109-map-region-kept");
+    let mut s = Shot::new(night_host());
+    regions(s.osd.host_mut());
+    s.osd.host_mut().map_voice = false;
+    s.goto(MAP_SETTINGS);
+    s.save("110-map-settings-no-voice-night");
+    let mut s = Shot::new(base_host());
+    s.goto(MAP_SETTINGS);
+    s.save("111-map-settings-no-region");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_note = "Map needs a newer LEHU".into();
+    s.goto(MAP);
+    s.save("112-map-needs-newer");
+    s.osd.host_mut().map_note = "Map damaged: copy Hungary again".into();
+    s.tick();
+    s.save("113-map-damaged");
 }

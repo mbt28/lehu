@@ -311,6 +311,58 @@ pub struct RoutePreview {
     pub eta: String,
 }
 
+/// How a map region stands, for Settings > Map.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RegionState {
+    /// On the card and whole (or its full check still to come).
+    #[default]
+    Ready,
+    /// Written for a later LEHU.
+    NeedsNewer,
+    /// A file missing, cut short or changed: copy it again.
+    Damaged,
+    /// Offered for download, not on the card.
+    Available,
+}
+
+impl RegionState {
+    /// The map can be shown with it.
+    pub fn usable(self) -> bool {
+        self == Self::Ready
+    }
+
+    /// What follows the region's name where it is not plain ready.
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Ready => "",
+            Self::NeedsNewer => "Needs a newer LEHU",
+            Self::Damaged => "Damaged",
+            Self::Available => "Not on the card",
+        }
+    }
+}
+
+/// A map region, as Settings > Map > Region lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapRegion {
+    /// The folder the setting names (`map.dir`).
+    pub dir: String,
+    pub name: String,
+    pub state: RegionState,
+    /// The one the map shows.
+    pub current: bool,
+}
+
+impl MapRegion {
+    /// "Hungary", "Hungary · Damaged".
+    pub fn label(&self) -> String {
+        match self.state.note() {
+            "" => self.name.clone(),
+            note => format!("{} · {note}", self.name),
+        }
+    }
+}
+
 /// Where finding the route to a destination is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RouteStage {
@@ -628,6 +680,20 @@ pub trait Host {
     /// when there is no route of ours.
     fn map_reroute(&mut self) -> bool {
         false
+    }
+    /// The map regions on the card (and on offer), read afresh: Settings >
+    /// Map lists them. One is `current`: the one the map shows.
+    fn map_regions(&mut self) -> Vec<MapRegion> {
+        Vec::new()
+    }
+    /// Changes when a region's state may have (its check in the
+    /// background ended): the list is read again.
+    fn map_regions_generation(&self) -> u32 {
+        0
+    }
+    /// The spoken prompts' clips are on the card.
+    fn map_voice_installed(&self) -> bool {
+        true
     }
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);

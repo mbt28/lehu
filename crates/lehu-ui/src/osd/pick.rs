@@ -18,7 +18,7 @@ use toml::Value;
 
 use super::{
     ACCESS_POINT, AUDIO, Ask, BUFFER_SAVE_MS, BUFFER_STEP_MS, Bridge, DEVICES, FAST_DETENT_MS,
-    FAST_PERCENT, Host, SETTINGS, SYSTEM, State, VIDEO,
+    FAST_PERCENT, Host, MAP_SETTINGS, SETTINGS, SYSTEM, State, VIDEO,
 };
 use crate::host::UpdateStage;
 use crate::keys::OsdKey;
@@ -42,6 +42,8 @@ pub(super) enum Pick {
     Country,
     /// The phone's frame rate (Video).
     Fps,
+    /// The map's region (Settings > Map).
+    Region,
 }
 
 impl Pick {
@@ -58,6 +60,7 @@ impl Pick {
             14 => Pick::Channel,
             15 => Pick::Country,
             16 => Pick::Fps,
+            17 => Pick::Region,
             _ => Pick::None,
         }
     }
@@ -77,6 +80,7 @@ impl Pick {
             Pick::Channel => 14,
             Pick::Country => 15,
             Pick::Fps => 16,
+            Pick::Region => 17,
         }
     }
 
@@ -91,12 +95,16 @@ impl Pick {
                 | Pick::Output
                 | Pick::Channel
                 | Pick::Country
+                | Pick::Region
         )
     }
 
     /// Stepped through a list (`State::pick_list`).
     fn listed(self) -> bool {
-        matches!(self, Pick::Output | Pick::Channel | Pick::Country)
+        matches!(
+            self,
+            Pick::Output | Pick::Channel | Pick::Country | Pick::Region
+        )
     }
 
     /// A level from 0 to 100 %: turned fast, it moves further a detent.
@@ -165,6 +173,7 @@ impl<H: Host> State<H> {
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
             Pick::Night | Pick::Fps => VIDEO,
             Pick::Power => SYSTEM,
+            Pick::Region => MAP_SETTINGS,
             _ => SETTINGS,
         }
     }
@@ -205,6 +214,7 @@ impl<H: Host> State<H> {
             // could not be read, has nothing to pick: said, not started.
             let start = match row {
                 Pick::Output => self.output_start(),
+                Pick::Region => self.region_start(),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => self.ap_start(row),
                 Pick::Night => Some(night_index(night)),
                 Pick::Fps => Some(i32::from(self.host.settings().android_auto.fps >= 60)),
@@ -253,6 +263,7 @@ impl<H: Host> State<H> {
                 }
                 Pick::Buffer => self.save_buffer(),
                 Pick::Output => self.output_take(taken),
+                Pick::Region => self.region_take(bridge, taken),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => {
                     self.ap_take(row, taken)
                 }

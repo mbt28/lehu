@@ -174,6 +174,7 @@ impl<H: Host> State<H> {
         }
         self.pump_audio(&bridge);
         self.pump_output(&bridge);
+        self.pump_regions(&bridge);
 
         // A row picking in place stops off its screen, under a dialog, or
         // left alone.

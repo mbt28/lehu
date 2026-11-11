@@ -110,6 +110,12 @@ pub struct TestHost {
     pub map_preview: Option<crate::host::RoutePreview>,
     /// The map was moved off where we are.
     pub map_away: bool,
+    /// The regions on the card; the one `map.dir` names is current.
+    pub map_regions: Vec<crate::host::MapRegion>,
+    pub map_regions_gen: u32,
+    pub map_voice: bool,
+    /// Over the map while there is no picture.
+    pub map_note: String,
     pub learned_key: Option<u32>,
 
     pub bt_available: bool,
@@ -196,6 +202,10 @@ impl TestHost {
             map_on_route: false,
             map_preview: None,
             map_away: false,
+            map_regions: Vec::new(),
+            map_regions_gen: 0,
+            map_voice: true,
+            map_note: String::new(),
             learned_key: None,
             bt_available: true,
             bt_gen: 1,
@@ -476,6 +486,25 @@ impl Host for TestHost {
         self.map_away
     }
 
+    fn map_regions(&mut self) -> Vec<crate::host::MapRegion> {
+        let dir = self.settings.map.dir.clone();
+        self.map_regions
+            .iter()
+            .map(|r| crate::host::MapRegion {
+                current: r.dir == dir,
+                ..r.clone()
+            })
+            .collect()
+    }
+
+    fn map_regions_generation(&self) -> u32 {
+        self.map_regions_gen
+    }
+
+    fn map_voice_installed(&self) -> bool {
+        self.map_voice
+    }
+
     fn map_guidance(&self) -> Option<&NavCard> {
         self.map_guide.as_ref()
     }
@@ -491,6 +520,10 @@ impl Host for TestHost {
 
     fn map_label(&self) -> &str {
         "Test  -  zoom 12"
+    }
+
+    fn map_note(&self) -> &str {
+        &self.map_note
     }
 
     fn map_can_search(&self) -> bool {

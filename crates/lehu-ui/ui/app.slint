@@ -96,6 +96,12 @@ export global Bridge {
     in property <int> alert-level;
     in property <int> call-level;
     in property <string> output-label;
+    // Settings > Map: the region shown ("Hungary", "Hungary · Damaged"),
+    // the voice ("English", "Not installed"), and a hint when something
+    // is missing.
+    in property <string> region-label;
+    in property <string> voice-label;
+    in property <string> map-hint;
     in property <bool> volume-bar;            // up for a moment after a change
     // How the phone is connected right now (the bar's icons).
     in property <bool> link-usb;
@@ -1683,11 +1689,43 @@ component ScreenSettings inherits ListPage {
         clicked => { Bridge.screen = 8; }
     }
     NavRow {
+        ring-key: "map";
+        icon: "map";
+        label: "Map";
+        value: Bridge.region-label;
+        clicked => { Bridge.screen = 21; }
+    }
+    NavRow {
         ring-key: "system";
         icon: "system";
         label: "System";
         value: Bridge.update-attention;
         clicked => { Bridge.screen = 17; }
+    }
+}
+
+// The map's data on the card: the region shown, stepped through those
+// there and taken with Enter (one damaged or for a newer LEHU says so and
+// is not taken), and whether the spoken prompts' voice is there.
+component ScreenMapSettings inherits ListPage {
+    title: "Map";
+    LevelRow {
+        ring-key: "region";
+        icon: "map";
+        label: "Region";
+        value: Bridge.region-label;
+        edit-text: Bridge.pick-value;
+        value-width: 400px;
+        long-value: true;
+        editing: Bridge.pick == 17;
+        clicked => { Bridge.pick-press(17); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
+    InfoLine { icon: "navigation"; label: "Voice"; value: Bridge.voice-label; }
+    if Bridge.map-hint != "": HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        Caption { text: Bridge.map-hint; }
     }
 }
 
@@ -3332,6 +3370,7 @@ export component AppWindow inherits Window {
     if Bridge.screen == 18 && !root.modal: ScreenInfo     { y: root.top; height: root.height - root.top; }
     if Bridge.screen == 19 && !root.modal: ScreenMap      { }
     if Bridge.screen == 20 && !root.modal: ScreenDest     { y: root.top; height: root.height - root.top; }
+    if Bridge.screen == 21 && !root.modal: ScreenMapSettings { y: root.top; height: root.height - root.top; }
     if Bridge.nav-card: NavCardView {}
     if Bridge.prompt-kind != 0: Prompt {}
     if Bridge.prompt-kind == 0 && Bridge.editing >= 0: Editor {}

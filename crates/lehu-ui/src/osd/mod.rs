@@ -48,6 +48,7 @@ mod map;
 mod media;
 mod pick;
 mod pump;
+mod region;
 mod rows;
 #[cfg(test)]
 mod shots;
@@ -97,8 +98,9 @@ const SYSTEM: i32 = 17;
 const INFO: i32 = 18;
 const MAP: i32 = 19;
 const DEST: i32 = 20;
+const MAP_SETTINGS: i32 = 21;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 21;
+const SCREENS: usize = 22;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -466,8 +468,19 @@ struct State<H> {
     output_now: Option<usize>,
     output_dirty: bool,
     p_output_label: Last,
-    /// The list a row steps through (Output, Channel, Country), as shown.
+    /// The list a row steps through (Output, Channel, Country, Region),
+    /// as shown.
     pick_list: Vec<String>,
+
+    // ── Settings > Map ──────────────────────────────────────────────────
+    /// The regions as listed when Settings or its Map screen last opened.
+    regions: Vec<crate::host::MapRegion>,
+    regions_gen: Option<u32>,
+    /// The screen the last pump saw, to read the regions again on opening.
+    regions_screen: i32,
+    p_region_label: Last,
+    p_voice_label: Last,
+    p_map_hint: Last,
 
     // ── the access point and the link ───────────────────────────────────
     /// hostapd's radio, read when its page (or Link speed) opened.
@@ -660,6 +673,12 @@ impl<H: Host> State<H> {
             output_dirty: false,
             p_output_label: Last::default(),
             pick_list: Vec::new(),
+            regions: Vec::new(),
+            regions_gen: None,
+            regions_screen: -1,
+            p_region_label: Last::default(),
+            p_voice_label: Last::default(),
+            p_map_hint: Last::default(),
             ap: None,
             ap_status: String::new(),
             p_ap_status: Last::default(),
