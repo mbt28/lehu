@@ -710,11 +710,20 @@ fn shots() {
         h.map_nearby = vec![
             (Nearby::Fuel, d("Aral Bertrange", "Aral · 1.2 km")),
             (Nearby::Fuel, d("Shell Strassen", "Shell · 2.4 km")),
-            (Nearby::Fuel, d("Station Total Helfent", "TotalEnergies · 3.0 km")),
+            (
+                Nearby::Fuel,
+                d("Station Total Helfent", "TotalEnergies · 3.0 km"),
+            ),
             (Nearby::Fuel, d("Q8 Route d'Arlon", "Q8 · 3.8 km")),
             (Nearby::Fuel, d("Esso Mamer", "Esso · 6.1 km")),
-            (Nearby::Parking, d("Parking Knuedler", "Underground, 400 spaces · 350 m")),
-            (Nearby::Charging, d("Chargy Gare", "4 points, 22 kW · 900 m")),
+            (
+                Nearby::Parking,
+                d("Parking Knuedler", "Underground, 400 spaces · 350 m"),
+            ),
+            (
+                Nearby::Charging,
+                d("Chargy Gare", "4 points, 22 kW · 900 m"),
+            ),
             (Nearby::Charging, d("Charging station", "2 points · 1.4 km")),
         ];
     };

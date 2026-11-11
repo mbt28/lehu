@@ -3043,7 +3043,10 @@ fn go_to_lists_the_nearest_fuel_parking_or_charging() {
     host.map_nearby = vec![
         (Nearby::Fuel, dest("Aral Bertrange", "Aral · 1.2 km")),
         (Nearby::Fuel, dest("Shell Strassen", "Shell · 2.4 km")),
-        (Nearby::Charging, dest("Chargy Gare", "4 points, 22 kW · 900 m")),
+        (
+            Nearby::Charging,
+            dest("Chargy Gare", "4 points, 22 kW · 900 m"),
+        ),
     ];
     let mut osd = osd(host);
     goto(&mut osd, MAP);
@@ -3178,7 +3181,10 @@ fn the_knob_starts_or_cancels_the_route_shown_whole() {
     press(&mut osd, OsdKey::Ok);
     assert!(osd.host().has(&Call::MapPreviewStart));
     assert!(!br(&osd).get_map_preview());
-    assert!(!br(&osd).get_map_menu_open(), "the click did not open the menu");
+    assert!(
+        !br(&osd).get_map_menu_open(),
+        "the click did not open the menu"
+    );
     // A turn moves the ring to Cancel, and waits again; a click cancels.
     let mut osd = previewing();
     advance(&mut osd, 5000);
@@ -3303,7 +3309,13 @@ fn the_knob_opens_the_map_menu_walks_it_and_backs_out() {
     }
     assert_eq!(
         seen,
-        ["menu-home", "menu-work", "menu-route", "menu-voice", "menu-goto"]
+        [
+            "menu-home",
+            "menu-work",
+            "menu-route",
+            "menu-voice",
+            "menu-goto"
+        ]
     );
     assert!(!osd.host().has(&Call::MapZoom(1)), "turns do not zoom");
     press(&mut osd, OsdKey::Prev);
@@ -3535,7 +3547,12 @@ fn route_chooses_fastest_or_shortest_and_motorways_and_finds_ours_anew() {
     }
     assert_eq!(
         stops,
-        ["route-shortest", "route-motorways", "route-cameras", "route-fastest"]
+        [
+            "route-shortest",
+            "route-motorways",
+            "route-cameras",
+            "route-fastest"
+        ]
     );
     // Shortest, then motorways avoided: kept, said, the menu stays.
     press(&mut osd, OsdKey::Next);
@@ -3660,7 +3677,11 @@ fn seven_menu_rows_fit_above_the_bar() {
     let bar = osd.ui.global::<MapBar<'_>>();
     assert_eq!(menu.get_rows(), 7);
     let rows = 7.0 * menu.get_row_h() + 6.0 * menu.get_spacing() + 2.0 * bar.get_pad();
-    assert!(rows <= bar.get_y(), "{rows} over the bar at {}", bar.get_y());
+    assert!(
+        rows <= bar.get_y(),
+        "{rows} over the bar at {}",
+        bar.get_y()
+    );
     assert!(menu.get_row_h() >= 50.0, "still a finger's height");
     // Fewer: as tall as they were.
     osd.host_mut().map_away = false;

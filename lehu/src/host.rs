@@ -982,7 +982,6 @@ impl AppHost {
         }
     }
 
-
     /// Once a minute: day or night by the sun, where we are (the drive's
     /// position, the map's, map.fake-position, else where the map was
     /// left), once the clock is set. The map turns to its night tiles or
@@ -1520,7 +1519,8 @@ impl Host for AppHost {
 
     fn map_pan(&mut self, dx: i32, dy: i32) {
         // A route shown whole is looked at round itself.
-        if let (Some(p), Some(set), Some(viewer)) = (&mut self.map_preview, &self.map_set, &self.map)
+        if let (Some(p), Some(set), Some(viewer)) =
+            (&mut self.map_preview, &self.map_set, &self.map)
         {
             p.view.pan(dx, dy, &set.bounds);
             viewer.set_view(p.view);

@@ -128,7 +128,10 @@ fn a_route_is_fitted_above_what_covers_the_map() {
     // Two points 1000 x 200 pixels apart at zoom 14 (a pixel there is 256
     // world pixels), on an 800 x 480 panel with a bar of 100 at its foot.
     let s = 1i64 << (WORLD_Z - 14);
-    let points = [(1_000_000, 2_000_000), (1_000_000 + 1000 * s, 2_000_000 + 200 * s)];
+    let points = [
+        (1_000_000, 2_000_000),
+        (1_000_000 + 1000 * s, 2_000_000 + 200 * s),
+    ];
     let v = View::fitting(&points, (800, 480), [20, 20, 20, 100], 8, 16).unwrap();
     // 1000 does not fit 760 at 14; at 13 it is 500, which does.
     assert_eq!(v.zoom, 13);
@@ -142,7 +145,10 @@ fn a_route_is_fitted_above_what_covers_the_map() {
     assert_eq!((v.zoom, v.x, v.y), (16, 1_000_000, 2_000_000));
     // Too long for any zoom: the set's first.
     let far = [(0, 0), (1 << 40, 0)];
-    assert_eq!(View::fitting(&far, (800, 480), [0; 4], 8, 16).unwrap().zoom, 8);
+    assert_eq!(
+        View::fitting(&far, (800, 480), [0; 4], 8, 16).unwrap().zoom,
+        8
+    );
     assert!(View::fitting(&[], (800, 480), [0; 4], 8, 16).is_none());
 }
 
