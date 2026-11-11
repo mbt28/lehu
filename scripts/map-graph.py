@@ -13,9 +13,12 @@ default). The roads are the ones scripts/route-gpx.py drives, timed the
 same way (its road classes, maxspeed, one-way streets and roundabouts), so
 both find the same routes.
 
-roads.bin is the road network as junctions and the roads between them;
-places.bin the street names, each with a point on the street and the town
-or village it is in, and the places' own names. Both files are little
+roads.bin is the road network as junctions and the roads between them,
+the motorways marked (so routes can avoid them), with the speed cameras on
+it; places.bin the street names, each with a point on the street and the
+town or village it is in, the places' own names, and the filling
+stations, public car parks and charging stations (found nearest, not by
+name). Both files are little
 endian and made of 32-bit words, so the board maps them and reads them in
 place; the layout is written out in docs/map.md and in
 crates/lehu-map/src/graph.rs and search.rs. Luxembourg makes about 7 MB and
@@ -67,11 +70,29 @@ KIND_STREET, KIND_PLACE = 0, 1
 ROADS_MAGIC = b"LEHUROAD"
 PLACES_MAGIC = b"LEHUFIND"
 ROADS_VERSION = 2
-PLACES_VERSION = 1
+PLACES_VERSION = 2
 # The classes a route avoiding motorways keeps off.
 MOTORWAY = ("motorway", "motorway_link")
 # A speed camera further than this from any road is left out, metres.
 CAMERA_SNAP_M = 50
+# The points of interest found nearest (Map > Go to): their categories in
+# places.bin, by amenity.
+POI_CATEGORY = {"fuel": 1, "parking": 2, "charging_station": 3}
+POI_UNNAMED = {1: "Fuel station", 2: "Parking", 3: "Charging station"}
+# Access that keeps a point of interest out: not for anyone driving by.
+POI_CLOSED = {"private", "no", "permit", "residents", "employees", "delivery", "agricultural",
+              "forestry"}
+# A car park counts when anyone may use it (not only a shop's customers),
+# it is not just the side of a street, and it has a name or room for at
+# least PARKING_MIN cars.
+PARKING_CLOSED = POI_CLOSED | {"customers"}
+PARKING_MIN = 10
+PARKING_STREET = {"street_side", "lane", "layby", "on_kerb", "half_on_kerb", "shoulder"}
+PARKING_KIND = {"underground": "Underground", "multi-storey": "Multi-storey",
+                "rooftop": "Rooftop"}
+# Two of a category this close with the same name (or one with none) are
+# one, mapped twice (a node and an area).
+POI_SAME_M = 60
 
 
 def world(lat, lon):
@@ -126,9 +147,12 @@ class Extract(osmium.SimpleHandler):
         self.ends = set()  # the nodes a road starts or ends at
         self.places = []  # (name, kind, lat, lon)
         self.cameras = []  # (node id, lat, lon, direction tag, speed limit or None)
+        self.pois = []  # (category, name, detail, lat, lon, named)
         self.enforcements = []  # (device node id, from node id, to node id, limit)
 
     def node(self, n):
+        if n.tags.get("amenity") in POI_CATEGORY and n.location.valid():
+            self.poi(n.tags, n.location.lat, n.location.lon)
         if n.tags.get("highway") == "speed_camera" and n.location.valid():
             self.cameras.append((n.id, n.location.lat, n.location.lon,
                                  n.tags.get("direction", ""), rg.limit(n.tags)))
@@ -137,7 +161,19 @@ class Extract(osmium.SimpleHandler):
         if kind in PLACE_RANK and name and n.location.valid():
             self.places.append((name, kind, n.location.lat, n.location.lon))
 
+    def poi(self, tags, lat, lon):
+        p = poi(tags)
+        if p is not None:
+            self.pois.append((*p[:3], lat, lon, p[3]))
+
     def way(self, w):
+        if w.tags.get("amenity") in POI_CATEGORY:
+            # An area: at the middle of its outline.
+            pts = [(n.lat, n.lon) for n in w.nodes if n.location.valid()]
+            if pts and len(pts) == len(w.nodes):
+                if len(pts) > 1 and pts[0] == pts[-1]:
+                    pts = pts[:-1]
+                self.poi(w.tags, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
         r = rg.road(w.tags)
         if r is None:
             return
@@ -169,6 +205,70 @@ class Extract(osmium.SimpleHandler):
         if "device" in role:
             self.enforcements.append((role["device"], role.get("from"), role.get("to"),
                                       rg.limit(r.tags)))
+
+
+def number(text):
+    """The leading number of a tag's value, or None: "22 kW" is 22."""
+    digits = ""
+    for c in text.strip():
+        if c.isdigit() or (c == "." and digits and "." not in digits):
+            digits += c
+        else:
+            break
+    try:
+        return float(digits)
+    except ValueError:
+        return None
+
+
+def poi(tags):
+    """A point of interest as (category, name, detail, named), or None for
+    one that is not for anyone driving by."""
+    category = POI_CATEGORY[tags.get("amenity")]
+    access = tags.get("access", "")
+    name = tags.get("name", "").strip()
+    brand = tags.get("brand", "").strip()
+    operator = tags.get("operator", "").strip()
+    named = bool(name)
+    capacity = number(tags.get("capacity", "")) or 0
+    if category == 1:
+        if access in POI_CLOSED:
+            return None
+        name = name or brand or operator
+        detail = next((b for b in (brand, operator) if b and b != name), "")
+    elif category == 2:
+        if access in PARKING_CLOSED or tags.get("parking") in PARKING_STREET:
+            return None
+        if not name and capacity < PARKING_MIN:
+            return None
+        parts = []
+        if tags.get("parking") in PARKING_KIND:
+            parts.append(PARKING_KIND[tags["parking"]])
+        if tags.get("park_ride") not in (None, "no"):
+            parts.append("Park and ride")
+        if capacity > 0:
+            parts.append(f"{capacity:.0f} spaces")
+        detail = ", ".join(parts)
+    else:
+        if access in POI_CLOSED or tags.get("motorcar") == "no":
+            return None
+        name = name or operator or brand
+        parts = []
+        if capacity > 0:
+            parts.append(f"{capacity:.0f} point{'s' if capacity != 1 else ''}")
+        kw = 0.0
+        for tag in tags:
+            k, v = tag.k, tag.v
+            if k.startswith("socket:") and k.endswith(":output"):
+                for part in v.replace(",", ";").split(";"):
+                    n = number(part)
+                    if n is not None and "kw" in part.lower().replace(" ", ""):
+                        kw = max(kw, n)
+        if kw > 0:
+            parts.append(f"{kw:.0f} kW")
+        detail = ", ".join(parts)
+    name = name or POI_UNNAMED[category]
+    return category, name[:120], detail[:120], named
 
 
 def split(ex):
@@ -555,16 +655,28 @@ def write_places(path, ex, keep_nodes):
     entry_words = []
     for x, y, name, town, kind, rank in entries:
         entry_words += [x, y, text.add(name), text.add(fold(name)), town | (kind << 16) | (rank << 24)]
-    header = PLACES_MAGIC + u32s([PLACES_VERSION, len(entries), len(towns), len(text.blob)])
-    assert len(header) == 24
+    # The points of interest, by category, near ones near in the file.
+    pois = []
+    for category, name, detail, lat, lon, _ in same_pois(ex.pois):
+        x, y = world(lat, lon)
+        pois.append((category, morton(x, y), x, y, name, detail, locality(x, y)))
+    pois.sort()
+    poi_words = []
+    for category, _, x, y, name, detail, town in pois:
+        poi_words += [x, y, text.add(name), text.add(detail), town | (category << 16)]
+    header = PLACES_MAGIC + u32s([PLACES_VERSION, len(entries), len(towns), len(text.blob),
+                                  len(pois)])
+    assert len(header) == 28
     with open(path + ".tmp", "wb") as f:
         f.write(header)
         f.write(u32s(town_words))
         f.write(u32s(entry_words))
+        f.write(u32s(poi_words))
         f.write(text.padded())
     os.replace(path + ".tmp", path)
     streets_n = sum(1 for e in entries if e[4] == KIND_STREET)
-    return streets_n, len(entries) - streets_n, len(towns)
+    counts = [sum(1 for p in pois if p[0] == c) for c in (1, 2, 3)]
+    return streets_n, len(entries) - streets_n, len(towns), counts
 
 
 def main():
@@ -594,9 +706,10 @@ def main():
         if a_ in keep and b_ in keep:
             on_network.update(between)
     places = os.path.join(a.out, "places.bin")
-    st, pl, towns = write_places(places, ex, on_network)
-    print(f"{places}: {st} streets, {pl} places, {towns} towns; "
-          f"{os.path.getsize(places) / 1e6:.1f} MB in {time.time() - t0:.0f} s", flush=True)
+    st, pl, towns, (fuel, parking, charging) = write_places(places, ex, on_network)
+    print(f"{places}: {st} streets, {pl} places, {towns} towns, {fuel} fuel, {parking} parking, "
+          f"{charging} charging; {os.path.getsize(places) / 1e6:.1f} MB in {time.time() - t0:.0f} s",
+          flush=True)
 
 
 if __name__ == "__main__":

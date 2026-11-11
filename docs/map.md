@@ -1,8 +1,9 @@
 # The offline map
 
 Home > Map shows an OpenStreetMap map from the SD card, with no phone and
-no internet. It scrolls and zooms, finds a destination by name and the
-fastest route there, and guides along it. There is no GPS yet: the
+no internet. It scrolls and zooms, finds a destination by name (or the
+nearest fuel, parking or charging) and the fastest or shortest route
+there, and guides along it. There is no GPS yet: the
 position is a stand-in (see "Where we are"), and a route found is driven
 by itself from there, as a replayed drive is.
 
@@ -157,6 +158,25 @@ there avoiding them changes nothing. The screens change the options by
 persisting these two keys; `AppHost::map_route_options` is what a route
 is found with.
 
+### Fuel, parking and charging
+
+Besides names, `places.bin` has the filling stations, the public car
+parks and the charging stations of the extract (version 2; one written
+before has none). `AppHost::map_nearest(kind, limit)` fills Go to's list
+with the nearest of a kind to where we are (`FoundKind::Fuel`, `Parking`
+or `Charging`), the nearest first, each with its category, a detail and
+how far: "Fuel · Aral · 1.2 km", "Parking · Multi-storey, 400 spaces ·
+350 m", "Charging · 4 points, 22 kW · 2.1 km". A tap drives there as for
+any destination. `AppHost::map_can_find(kind)` says whether there are
+any. They are not searched by name.
+
+A car park is one anyone may use (not private, nor only a shop's
+customers), not the side of a street, with a name or room for ten cars
+or more; a charging station one for cars, not private. Each is at the
+middle of its outline when it is mapped as an area, and one mapped twice
+(a point and an area, within 60 m with the same name) is one. Luxembourg
+has 237 filling stations, 403 car parks and 531 charging stations.
+
 ### Speed cameras
 
 With `map.speed-cameras = true`, LEHU says "Speed camera ahead" once
@@ -187,9 +207,10 @@ same extract as the tiles, into two files: `roads.bin` and `places.bin`.
 v/bin/python scripts/map-graph.py luxembourg-latest.osm.pbf maps
 ```
 
-Luxembourg makes a 6.6 MB `roads.bin` (63,000 junctions, 75,000 roads)
-and a 0.5 MB `places.bin` (10,000 streets, 2,200 places) in half a
-minute. Copy them into the map's directory, beside `map.toml`, or into
+Luxembourg makes a 6.6 MB `roads.bin` (63,000 junctions, 75,000 roads,
+39 speed cameras) and a 0.5 MB `places.bin` (10,000 streets, 2,200
+places, 1,200 filling stations, car parks and charging stations) in
+under a minute. Copy them into the map's directory, beside `map.toml`, or into
 another directory named by `map.route-dir`. The roads and their speeds
 are the ones `scripts/route-gpx.py` drives, so both find the same routes;
 only the part of the network where every junction can be reached from
@@ -227,12 +248,16 @@ junction's arcs are the ways a car may leave it, up to the next
 junction's first arc; a road's shape is the points between its a and its
 b, up to the next road's first.
 
-`places.bin` starts with 6 words: "LEHUFIND", the version (1), the
-numbers of names and towns, and the text's bytes. Then the towns, 2 words
-each (the name and its folded key, byte offsets into the text); the
-names, 5 words each (x, y, the name, its folded key, and the town's index
-+ the kind × 2^16 (0 a street, 1 a place) + the rank × 2^24, lower more
-important); then the text, each string a length byte and UTF-8. A key is
+`places.bin` starts with 7 words: "LEHUFIND", the version (2), the
+numbers of names and towns, the text's bytes and the number of points of
+interest. Then the towns, 2 words each (the name and its folded key, byte
+offsets into the text); the names, 5 words each (x, y, the name, its
+folded key, and the town's index + the kind × 2^16 (0 a street, 1 a
+place) + the rank × 2^24, lower more important); the points of interest,
+5 words each (x, y, the name, a detail, and the town's index + the
+category × 2^16: 1 fuel, 2 parking, 3 charging), in the order of their
+categories; then the text, each string a length byte and UTF-8. Version
+1 (still read) has the first 6 words and no points of interest. A key is
 the name folded: lower case, without accents, its words split by single
 spaces. A street is in the city, town or village nearest it (a city
 counts from three times as far, a town twice); it has one name for each
@@ -254,7 +279,8 @@ U-turn's half minute. The turns are found as `scripts/route-gpx.py`
 finds them: at a junction, a turn of 45 degrees or more or a road with
 another name; into a roundabout, the exit to take. On a PC the sample
 drive above (Gare to Kirchberg) takes about 2 ms; across Luxembourg, Schengen to
-Troisvierges (112 km), 15 to 45 ms; a search, 1 ms. The board is some
+Troisvierges (112 km), 15 to 45 ms; a search, 1 ms; the nearest of a
+kind, a tenth of that. The board is some
 tens of times slower: the test `routing_cost` in
 `crates/lehu-map/src/routing_tests.rs` times both there.
 

@@ -876,6 +876,27 @@ impl AppHost {
         track.camera_ahead(ms, within).map(|(_, metres)| metres)
     }
 
+    /// Go to's list filled with the `limit` nearest points of interest of
+    /// a category (FoundKind::Fuel, Parking or Charging) to where we are,
+    /// the nearest first, as map_search fills it: the screens show them
+    /// with map_destinations and drive to one with map_go. Empty when
+    /// where we are is not known or the data has none.
+    #[allow(dead_code)] // for the screens, which do not ask yet
+    pub fn map_nearest(&mut self, kind: FoundKind, limit: usize) {
+        let near = self.map_here().0;
+        self.map_found = match (&self.map_router, near) {
+            (Some(r), Some(near)) => r.nearest(kind, near, limit),
+            _ => Vec::new(),
+        };
+        self.map_dests = self.map_found.iter().map(destination).collect();
+    }
+
+    /// There are points of interest of this category to find.
+    #[allow(dead_code)] // for the screens, which do not ask yet
+    pub fn map_can_find(&self, kind: FoundKind) -> bool {
+        self.map_router.as_ref().is_some_and(|r| r.count(kind) > 0)
+    }
+
     /// How Go to's routes are chosen, from the settings (map.route-by,
     /// map.avoid-motorways): the screens change them by persisting those
     /// keys.
@@ -1323,6 +1344,7 @@ impl Host for AppHost {
                         x,
                         y,
                         metres: near.map(|n| lehu_map::metres_between(n, (x, y))),
+                        detail: String::new(),
                     })
                 })
                 .collect()
@@ -1710,8 +1732,23 @@ fn guidance(a: &Ahead<'_>, time_of_day: Option<u64>) -> NavCard {
 }
 
 /// A destination as Go to shows it: the name, and under it the town (when
-/// it is not the name itself) and how far.
+/// it is not the name itself) and how far; a point of interest its
+/// category, its detail and how far ("Fuel · Aral · 1.2 km").
 fn destination(f: &Found) -> Destination {
+    if !f.kind.label().is_empty() {
+        let mut parts = vec![f.kind.label().to_string()];
+        if !f.detail.is_empty() && f.detail != f.name {
+            parts.push(f.detail.clone());
+        }
+        if let Some(m) = f.metres {
+            parts.push(if m < 10 { "here".into() } else { distance(m) });
+        }
+        return Destination {
+            name: f.name.clone(),
+            detail: parts.join(" · "),
+            place: false,
+        };
+    }
     let mut detail = String::new();
     if !f.town.is_empty() && f.town != f.name {
         detail.push_str(&f.town);
@@ -1773,6 +1810,7 @@ mod guidance_tests {
             x: 0,
             y: 0,
             metres,
+            detail: String::new(),
         };
         let d = destination(&found("Rue de la Gare", "Ettelbruck", Some(24_600)));
         assert_eq!((d.detail.as_str(), d.place), ("Ettelbruck, 25 km", false));
@@ -1785,6 +1823,22 @@ mod guidance_tests {
             destination(&found("Gare", "Luxembourg", None)).detail,
             "Luxembourg"
         );
+        // A point of interest: its category, its detail, how far.
+        let fuel = lehu_map::Found {
+            kind: lehu_map::FoundKind::Fuel,
+            detail: "Aral".into(),
+            ..found("Station Aral Bertrange", "Bertrange", Some(1240))
+        };
+        let d = destination(&fuel);
+        assert_eq!(
+            (d.detail.as_str(), d.place),
+            ("Fuel · Aral · 1.2 km", false)
+        );
+        let parking = lehu_map::Found {
+            kind: lehu_map::FoundKind::Parking,
+            ..found("Parking", "Luxembourg", Some(300))
+        };
+        assert_eq!(destination(&parking).detail, "Parking · 300 m");
     }
 
     #[test]

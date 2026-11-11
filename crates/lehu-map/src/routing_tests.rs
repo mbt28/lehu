@@ -541,13 +541,85 @@ fn search_ranks_whole_names_then_words_then_the_nearest() {
 }
 
 #[test]
+fn the_nearest_fuel_parking_and_charging_are_found() {
+    let here = at(0.0, 0.0);
+    let p = |east: f64| at(east, 0.0);
+    let pois = [
+        // (name, detail, town, category, x, y): fuel, parking, charging.
+        ("Aral", "", 0, 1, p(3000.0).0, p(3000.0).1),
+        ("Shell", "", 1, 1, p(800.0).0, p(800.0).1),
+        ("Q8", "", 0, 1, p(-1500.0).0, p(-1500.0).1),
+        (
+            "Parking Glacis",
+            "Multi-storey, 400 spaces",
+            0,
+            2,
+            p(200.0).0,
+            p(200.0).1,
+        ),
+        ("Chargy", "4 points, 22 kW", 0, 3, p(5000.0).0, p(5000.0).1),
+    ];
+    let bytes = crate::search::build::write_with(
+        &[("Rue A", 0, 0, 12, here.0, here.1)],
+        &pois,
+        &["Luxembourg", "Strassen"],
+        2,
+    );
+    let places = Places::from_bytes(&bytes).unwrap();
+    assert_eq!(places.count(FoundKind::Fuel), 3);
+    assert_eq!(places.count(FoundKind::Parking), 1);
+    assert_eq!(places.count(FoundKind::Charging), 1);
+    assert_eq!(places.count(FoundKind::Street), 0);
+    let fuel = places.nearest(FoundKind::Fuel, here, 2);
+    let names: Vec<_> = fuel
+        .iter()
+        .map(|f| (f.name.as_str(), f.town.as_str()))
+        .collect();
+    assert_eq!(names, [("Shell", "Strassen"), ("Q8", "Luxembourg")]);
+    assert_eq!(fuel[0].kind, FoundKind::Fuel);
+    assert!((795..805).contains(&fuel[0].metres.unwrap()), "{fuel:?}");
+    let park = places.nearest(FoundKind::Parking, here, 5);
+    assert_eq!(park.len(), 1);
+    assert_eq!(
+        (park[0].kind, park[0].detail.as_str()),
+        (FoundKind::Parking, "Multi-storey, 400 spaces")
+    );
+    assert_eq!(
+        places.nearest(FoundKind::Charging, here, 5)[0].name,
+        "Chargy"
+    );
+    assert!(places.nearest(FoundKind::Street, here, 5).is_empty());
+    // Not found by name: the search is the streets' and places'.
+    assert!(places.search("shell", Some(here), 5).is_empty());
+    // Out of the order of their categories: refused.
+    let mut mixed = pois;
+    mixed.swap(0, 4);
+    let bytes = crate::search::build::write_with(&[], &mixed, &["Luxembourg", "Strassen"], 2);
+    assert!(Places::from_bytes(&bytes).is_err());
+}
+
+#[test]
+fn a_version_1_index_still_searches() {
+    let bytes = crate::search::build::write_with(
+        &[("Rue A", 0, 0, 12, 1, 1)],
+        &[("Aral", "", 0, 1, 1, 1)],
+        &["T"],
+        1,
+    );
+    let places = Places::from_bytes(&bytes).unwrap();
+    assert_eq!(places.search("rue", None, 5).len(), 1);
+    assert_eq!(places.count(FoundKind::Fuel), 0);
+    assert!(places.nearest(FoundKind::Fuel, (1, 1), 5).is_empty());
+}
+
+#[test]
 fn a_broken_index_is_refused() {
     let index = crate::search::build::write(&[("A", 0, 0, 12, 1, 1)], &["T"]);
     assert!(Places::from_bytes(&index).is_ok());
     assert!(Places::from_bytes(&index[..index.len() - 4]).is_err());
     let mut bad = index.clone();
     // The entry's town: one that is not there.
-    let at = 6 * 4 + 2 * 4 + 4 * 4;
+    let at = 7 * 4 + 2 * 4 + 4 * 4;
     bad[at..at + 4].copy_from_slice(&7u32.to_le_bytes());
     assert!(Places::from_bytes(&bad).is_err());
 }
@@ -660,6 +732,25 @@ fn routing_cost() {
                 );
             }
         }
+    }
+    for kind in [FoundKind::Fuel, FoundKind::Parking, FoundKind::Charging] {
+        let began = Instant::now();
+        let found = r.nearest(kind, deg(49.6116, 6.1300), 20);
+        let ms = began.elapsed().as_secs_f64() * 1000.0;
+        let first = found.first().map_or(String::new(), |f| {
+            format!(
+                "{}, {} ({}) {} m",
+                f.name,
+                f.town,
+                f.detail,
+                f.metres.unwrap_or(0)
+            )
+        });
+        println!(
+            "nearest {kind:?}: {} of {} in {ms:.2} ms; first {first}",
+            found.len(),
+            r.count(kind)
+        );
     }
     let here = Some(deg(49.6116, 6.1300));
     for q in [

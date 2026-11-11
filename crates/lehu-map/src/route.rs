@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use crate::graph::{Graph, RoadPath, RouteBy, RouteOptions, Work};
-use crate::search::{Found as Place, Places};
+use crate::search::{Found as Place, FoundKind, Places};
 use crate::track::{Leg, LegCamera, LegStep, Track, Turn, metres_per_px};
 
 /// The turn at a junction is measured over this much road either side.
@@ -35,10 +35,14 @@ impl Router {
             }
         };
         log::info!(
-            "map: {} junctions and {} roads to route over, {} names",
+            "map: {} junctions and {} roads to route over, {} speed cameras, {} names, {} fuel, {} parking, {} charging",
             graph.nodes(),
             graph.edges(),
-            places.as_ref().map_or(0, Places::len)
+            graph.cameras(),
+            places.as_ref().map_or(0, Places::len),
+            places.as_ref().map_or(0, |p| p.count(FoundKind::Fuel)),
+            places.as_ref().map_or(0, |p| p.count(FoundKind::Parking)),
+            places.as_ref().map_or(0, |p| p.count(FoundKind::Charging)),
         );
         Ok(Self::new(graph, places))
     }
@@ -71,6 +75,20 @@ impl Router {
         self.places
             .as_ref()
             .map_or_else(Vec::new, |p| p.search(query, near, limit))
+    }
+
+    /// How many points of interest of a category there are to find (fuel,
+    /// parking, charging): none without them in places.bin.
+    pub fn count(&self, kind: FoundKind) -> usize {
+        self.places.as_ref().map_or(0, |p| p.count(kind))
+    }
+
+    /// Up to `limit` points of interest of a category, the nearest `near`
+    /// first (see [`Places::nearest`]).
+    pub fn nearest(&self, kind: FoundKind, near: (i64, i64), limit: usize) -> Vec<Place> {
+        self.places
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.nearest(kind, near, limit))
     }
 
     /// The fastest route from `from` to `to` (world pixels at zoom 22),
