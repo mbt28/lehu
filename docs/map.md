@@ -304,7 +304,9 @@ levels (zoom 8 to 14 is 26 MB), so mind the space on the card: the system
 updater needs room of its own there.
 
 At night (Settings, Night) the map shows night tiles, dark with light
-names, when the map has them: a second set in `night/` under the map's
+names, when the map has them. With Night set to Auto, night is when the
+sun is down where the head unit is ([below](#night-by-the-sun)). The
+night tiles are a second set in `night/` under the map's
 directory, drawn with `--night` over the same area and zooms. The night
 set of the Luxembourg example is about 30 MB.
 
@@ -405,6 +407,27 @@ tick of the bar (five times a second), in integer arithmetic on the
 metres to the turn and the speed. A phrase's clips are joined with a short
 pause into one segment and handed to the mixer's third input, which plays
 LEHU's own prompts beside the phone's music and voice.
+
+## Night by the sun
+
+With Night (`display.night-mode`) set to Auto, LEHU follows the sun:
+night from when it is 2 degrees below the horizon, about ten minutes
+after sunset in Luxembourg (a quarter of an hour in midsummer), when the
+street lights come on and a bright screen starts to dazzle, until as long
+before sunrise. Sunset itself is still broad daylight; civil twilight's
+end, 6 degrees down, would be too late. There is half a degree to cross
+each way (night at -2.5, day at -1.5), so it never flaps. The sun's place
+is reckoned once a minute from the clock and where the head unit is: the
+drive's position, the map's, `map.fake-position`, else the middle of the
+map where it was left (a country's width is a few minutes of sunset).
+While the clock is not set, or there is no position, Auto is day, as
+before. The map's night tiles follow it, and `AppHost::night_now` says it
+for the screens' palette.
+
+The phones do not tell the head unit day or night: CarPlay is asked to
+darken by itself (it follows the phone's clock and place, so it agrees
+with LEHU within minutes), and Android Auto is told day with Auto, as
+before, while its session runs.
 
 ## Licence
 

@@ -19,7 +19,11 @@ video-path = "auto"
 # first and H.265 after it when both decode. A forced codec the hardware
 # cannot decode is refused at start with a warning and auto used instead.
 codec = "auto"
-# day, night, or auto (the phone decides by the time of day).
+# day, night, or auto. Auto follows the sun where the head unit is (the
+# map's position: a drive, map.fake-position, else where the map was left)
+# once the clock is set: night from about ten minutes after sunset (the
+# sun 2 degrees down) to as long before sunrise, day while the position or
+# the clock is not known. CarPlay darkens by itself by the phone's clock.
 night-mode = "auto"
 left-hand-drive = true
 

@@ -241,6 +241,10 @@ pub struct AppHost {
     /// last such route ended, the position from then on.
     map_routed: bool,
     map_left_at: Option<(i64, i64)>,
+    /// Night by the sun (Night set to Auto): what it says, and when it
+    /// was last asked (once a minute).
+    sun: lehu_core::sun::Dusk,
+    sun_checked_at: Option<u64>,
 }
 
 impl AppHost {
@@ -338,6 +342,8 @@ impl AppHost {
             map_route_note: String::new(),
             map_routed: false,
             map_left_at: None,
+            sun: lehu_core::sun::Dusk::new(),
+            sun_checked_at: None,
         }
     }
 
@@ -383,6 +389,7 @@ impl AppHost {
     /// Every loop turn: the debounced save of the user's file, the camera's
     /// column kept current.
     pub fn tick(&mut self) {
+        self.sun_tick();
         self.sync_camera_levels();
         self.sync_bluetooth();
         if let Some(level) = self.audio.volume.tick() {
@@ -766,7 +773,7 @@ impl AppHost {
         };
         match Viewer::start(display, set.clone(), night, view) {
             Ok(viewer) => {
-                viewer.set_night(self.settings.display.night_mode == settings::NightMode::Night);
+                viewer.set_night(self.night_now());
                 viewer.set_position(self.map_marker);
                 viewer.set_route(self.map_route.clone());
                 // A replayed drive: the map moves along it by itself.
@@ -895,6 +902,74 @@ impl AppHost {
     #[allow(dead_code)] // for the screens, which do not ask yet
     pub fn map_can_find(&self, kind: FoundKind) -> bool {
         self.map_router.as_ref().is_some_and(|r| r.count(kind) > 0)
+    }
+
+    /// Night now: with Night set, always; with Day, never; with Auto, when
+    /// the sun at the head unit's position is down (see sun_tick), and day
+    /// while the position or the clock is not known. The map's tiles
+    /// follow it; the screens' palette should too (Host::night_now).
+    pub fn night_now(&self) -> bool {
+        match self.settings.display.night_mode {
+            settings::NightMode::Day => false,
+            settings::NightMode::Night => true,
+            settings::NightMode::Auto => self.sun.night() == Some(true),
+        }
+    }
+
+    /// Once a minute: day or night by the sun, where we are (the drive's
+    /// position, the map's, map.fake-position, else where the map was
+    /// left), once the clock is set. The map turns to its night tiles or
+    /// back when Auto changes its mind.
+    fn sun_tick(&mut self) {
+        const EVERY_MS: u64 = 60_000;
+        let now = clock::now_ms();
+        if self
+            .sun_checked_at
+            .is_some_and(|at| now.saturating_sub(at) < EVERY_MS)
+        {
+            return;
+        }
+        self.sun_checked_at = Some(now);
+        let before = self.night_now();
+        let unix_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        match self.sun_position() {
+            Some((x, y)) if unix_s >= CLOCK_SET_S => {
+                let (lat, lon) = lehu_map::degrees_from_world(x, y);
+                let elevation = lehu_core::sun::elevation(unix_s as i64, lat, lon);
+                let was = self.sun.night();
+                let night = self.sun.update(elevation);
+                if was != Some(night) {
+                    log::info!(
+                        "night by the sun: {} (the sun {elevation:.1} degrees up at {lat:.3}, {lon:.3})",
+                        if night { "night" } else { "day" }
+                    );
+                }
+            }
+            // Not known: Auto is day, as it was before the sun.
+            _ => self.sun = lehu_core::sun::Dusk::new(),
+        }
+        if self.night_now() != before
+            && let Some(viewer) = &self.map
+        {
+            viewer.set_night(self.night_now());
+        }
+    }
+
+    /// Where we are for the sun: the drive's position, the map's, where a
+    /// route ended, map.fake-position, else the middle of the map where it
+    /// was left. A country's width is a few minutes of sunset.
+    fn sun_position(&self) -> Option<(i64, i64)> {
+        if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
+            let fix = track.at(clock::now_ms().saturating_sub(start));
+            return Some((fix.x, fix.y));
+        }
+        let m = &self.settings.map;
+        self.map_position
+            .or(self.map_left_at)
+            .or_else(|| lehu_map::parse_position(&m.fake_position).ok().flatten())
+            .or((m.zoom != 0).then_some((m.x, m.y)))
     }
 
     /// How Go to's routes are chosen, from the settings (map.route-by,
@@ -1185,7 +1260,7 @@ impl Host for AppHost {
 
     fn night_mode_changed(&mut self) {
         if let Some(viewer) = &self.map {
-            viewer.set_night(self.settings.display.night_mode == settings::NightMode::Night);
+            viewer.set_night(self.night_now());
         }
     }
 
