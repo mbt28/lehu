@@ -44,6 +44,8 @@ const STEP_Y: i32 = 120;
 pub(super) const MENU_MS: u64 = 8000;
 /// A note in the bar ("Home set") stays this long.
 pub(super) const FLASH_MS: u64 = 4000;
+/// The bar while the route is found anew by itself.
+const REROUTING: &str = "Finding the route";
 /// A route Go to found is shown whole this long, after the last input,
 /// then driven: a driver never has to touch it.
 pub(super) const PREVIEW_MS: u64 = 8000;
@@ -409,6 +411,17 @@ impl<H: Host> State<H> {
         }
         if self.map_menu && now >= self.menu_until {
             self.map_menu_show(bridge, false);
+        }
+        // Found anew by itself, off the route: said on the bar meanwhile
+        // (not over a search the screens asked for).
+        let rerouting = self.host.map_rerouting();
+        if rerouting != self.p_rerouting {
+            self.p_rerouting = rerouting;
+            if rerouting && !self.dest_busy {
+                self.map_flash(REROUTING, u64::MAX);
+            } else if !rerouting && self.flash == REROUTING {
+                self.map_flash("", 0);
+            }
         }
         if self.flash_until != 0 && now >= self.flash_until {
             self.flash_until = 0;

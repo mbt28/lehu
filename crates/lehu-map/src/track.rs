@@ -26,6 +26,19 @@ pub struct Fix {
     pub limit: Option<u16>,
 }
 
+/// A position placed on a track: the step it is on (the track point it
+/// heads for), the milliseconds into the drive there, how far off the track
+/// it is and how far along it, metres, and the way the track goes there
+/// (as [`Fix::heading`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Located {
+    pub step: usize,
+    pub ms: u64,
+    pub off_m: f64,
+    pub metres: f64,
+    pub way: (i32, i32),
+}
+
 /// What to do at a turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Turn {
@@ -436,6 +449,62 @@ impl Track {
             kmh,
             limit: self.limits[i - 1],
         }
+    }
+
+    /// Where on the track `pos` is: the nearest point of its steps from
+    /// point `from` to `to` (clamped to the track), a step going against
+    /// `heading` by more than a right angle left out (the other side of a
+    /// road, or driving the wrong way). None when no step is left.
+    pub fn locate(
+        &self,
+        pos: (i64, i64),
+        heading: Option<(i32, i32)>,
+        from: usize,
+        to: usize,
+    ) -> Option<Located> {
+        let last = self.points.len() - 1;
+        let (from, to) = (from.clamp(1, last.max(1)), to.min(last));
+        let mut best: Option<(f64, usize, f64)> = None;
+        for i in from..=to {
+            let (ax, ay, _) = self.points[i - 1];
+            let (bx, by, _) = self.points[i];
+            let (dx, dy) = ((bx - ax) as f64, (by - ay) as f64);
+            let len2 = dx * dx + dy * dy;
+            if let Some((hx, hy)) = heading
+                && len2 > 0.0
+                && dx * f64::from(hx) + dy * f64::from(hy) < 0.0
+            {
+                continue;
+            }
+            let f = if len2 > 0.0 {
+                (((pos.0 - ax) as f64 * dx + (pos.1 - ay) as f64 * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let near = (ax + (dx * f) as i64, ay + (dy * f) as i64);
+            let off = ground_px(pos, near);
+            if best.is_none_or(|b| off < b.0) {
+                best = Some((off, i, f));
+            }
+        }
+        let (off, i, f) = best?;
+        let (at, bt) = (self.points[i - 1].2, self.points[i].2);
+        Some(Located {
+            step: i,
+            ms: at + ((bt - at) as f64 * f) as u64,
+            off_m: off,
+            metres: self.metres[i - 1] + (self.metres[i] - self.metres[i - 1]) * f,
+            way: self.heading(i),
+        })
+    }
+
+    /// The number of points.
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
     }
 
     /// The way the step ending at point `i` goes; a step that does not move

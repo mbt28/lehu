@@ -678,6 +678,11 @@ pub trait Host {
     fn map_reroute(&mut self) -> bool {
         false
     }
+    /// The route of ours is being found anew by itself, the driver having
+    /// left it: the bar says so meanwhile.
+    fn map_rerouting(&self) -> bool {
+        false
+    }
     /// The map regions on the card, read afresh: Settings >
     /// Map lists them. One is `current`: the one the map shows.
     fn map_regions(&mut self) -> Vec<MapRegion> {

@@ -3430,6 +3430,25 @@ fn the_map_menu_closes_when_left_alone() {
 }
 
 #[test]
+fn the_bar_says_while_the_route_is_found_anew_by_itself() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    osd.host_mut().map_on_route = true;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+    // Off the route: said until the new one is there.
+    osd.host_mut().map_rerouting = true;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    advance(&mut osd, 10_000);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    osd.host_mut().map_rerouting = false;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+}
+
+#[test]
 fn the_map_menu_by_touch() {
     let mut osd = osd(with_names());
     goto(&mut osd, MAP);

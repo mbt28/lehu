@@ -106,6 +106,7 @@ pub struct TestHost {
     pub map_stages: std::collections::VecDeque<RouteStage>,
     pub map_route_note: String,
     pub map_on_route: bool,
+    pub map_rerouting: bool,
     /// A route shown whole (RouteStage::Preview).
     pub map_preview: Option<crate::host::RoutePreview>,
     /// The map was moved off where we are.
@@ -200,6 +201,7 @@ impl TestHost {
             map_stages: std::collections::VecDeque::new(),
             map_route_note: String::new(),
             map_on_route: false,
+            map_rerouting: false,
             map_preview: None,
             map_away: false,
             map_regions: Vec::new(),
@@ -594,6 +596,9 @@ impl Host for TestHost {
 
     fn map_on_route(&self) -> bool {
         self.map_on_route
+    }
+    fn map_rerouting(&self) -> bool {
+        self.map_rerouting
     }
 
     fn map_end_route(&mut self) {

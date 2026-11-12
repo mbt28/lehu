@@ -4,11 +4,12 @@
 //! one (scripts/map-graph.py's) when one is given.
 
 use crate::cameras::Cameras;
+use crate::follow::{Follow, Following, OFF_MS, WRONG_WAY_MS};
 use crate::graph::build::{CameraWords, M_PER_PX, Road, road, write, write_with};
 use crate::graph::{Graph, RouteBy, RouteOptions};
 use crate::route::Router;
 use crate::search::{FoundKind, Places, fold};
-use crate::track::{Leg, LegStep, Track, Turn};
+use crate::track::{Fix, Leg, LegStep, Track, Turn};
 
 /// A point `east`, `south` metres from a corner in Luxembourg.
 fn at(east: f64, south: f64) -> (i64, i64) {
@@ -883,6 +884,188 @@ fn a_broken_index_is_refused() {
     let at = 9 * 4 + 2 * 4 + 4 * 4;
     bad[at..at + 4].copy_from_slice(&7u32.to_le_bytes());
     assert!(Places::from_bytes(&bad).is_err());
+}
+
+/// A route 1 km east, then 1 km south, at 36 km/h.
+fn corner_route() -> Track {
+    let step = LegStep {
+        cm_s: 1000,
+        limit: Some(50),
+    };
+    Track::from_route(&Leg {
+        points: vec![at(0.0, 0.0), at(1000.0, 0.0), at(1000.0, 1000.0)],
+        steps: vec![step; 2],
+        turns: vec![
+            (1, Turn::Right, "South Road".into()),
+            (2, Turn::Arrive, String::new()),
+        ],
+        cameras: Vec::new(),
+    })
+    .unwrap()
+}
+
+/// A position `east`, `south` metres from the route's start, going
+/// `heading` at `kmh`.
+fn fix(east: f64, south: f64, heading: (i32, i32), kmh: u32) -> Fix {
+    let (x, y) = at(east, south);
+    Fix {
+        x,
+        y,
+        heading,
+        step: 0,
+        kmh,
+        limit: None,
+    }
+}
+
+const EAST: (i32, i32) = (1024, 0);
+const WEST: (i32, i32) = (-1024, 0);
+const SOUTH: (i32, i32) = (0, 1024);
+
+#[test]
+fn a_position_on_the_route_is_followed_along_it() {
+    let route = corner_route();
+    let mut f = Follow::new();
+    let left = |f: &Follow| route.ahead(f.ms()).unwrap().left_metres;
+    // 10 m beside the road, 300 m along: the turn 700 m ahead.
+    assert_eq!(
+        f.update(&route, &fix(300.0, 10.0, EAST, 36), 0),
+        Following::On
+    );
+    assert!((9.0..11.0).contains(&f.off_m()), "{}", f.off_m());
+    let a = route.ahead(f.ms()).unwrap();
+    assert!((690..710).contains(&a.metres), "{a:?}");
+    assert_eq!(a.maneuver.road, "South Road");
+    // Round the corner: on the second leg, 600 m left.
+    assert_eq!(
+        f.update(&route, &fix(1000.0, 400.0, SOUTH, 36), 1000),
+        Following::On
+    );
+    assert!((590..610).contains(&left(&f)), "{}", left(&f));
+    // A little behind, standing: not going back.
+    assert_eq!(
+        f.update(&route, &fix(1000.0, 380.0, SOUTH, 0), 2000),
+        Following::On
+    );
+    assert!((590..610).contains(&left(&f)), "{}", left(&f));
+}
+
+#[test]
+fn off_the_route_while_moving_finds_it_anew() {
+    let route = corner_route();
+    let mut f = Follow::new();
+    assert_eq!(
+        f.update(&route, &fix(300.0, 0.0, EAST, 36), 0),
+        Following::On
+    );
+    // 100 m off, moving: found anew once it has lasted OFF_MS.
+    let mut t = 1000;
+    while t < 1000 + OFF_MS {
+        assert_eq!(
+            f.update(&route, &fix(400.0, 100.0, EAST, 36), t),
+            Following::On,
+            "{t}"
+        );
+        t += 1000;
+    }
+    assert_eq!(
+        f.update(&route, &fix(500.0, 100.0, EAST, 36), t),
+        Following::Off
+    );
+    // Off for a moment only: not.
+    let mut f = Follow::new();
+    for (t, south) in [
+        (0, 0.0),
+        (1000, 80.0),
+        (2000, 80.0),
+        (3000, 80.0),
+        (4000, 5.0),
+        (5000, 80.0),
+        (6000, 80.0),
+        (7000, 80.0),
+        (8000, 0.0),
+    ] {
+        assert_eq!(
+            f.update(&route, &fix(100.0 + t as f64 / 100.0, south, EAST, 36), t),
+            Following::On,
+            "{t}"
+        );
+    }
+    // Standing off it, however long: a position drifts at a stop.
+    let mut f = Follow::new();
+    for t in (0..60_000).step_by(1000) {
+        assert_eq!(
+            f.update(&route, &fix(300.0, 200.0, (0, 0), 0), t),
+            Following::On
+        );
+    }
+}
+
+#[test]
+fn the_wrong_way_along_the_route_finds_it_anew_when_it_lasts() {
+    let route = corner_route();
+    let mut f = Follow::new();
+    assert_eq!(
+        f.update(&route, &fix(500.0, 0.0, EAST, 36), 0),
+        Following::On
+    );
+    // Turned round on the road itself: on it, but going against it.
+    let mut t = 1000;
+    while t < 1000 + WRONG_WAY_MS {
+        assert_eq!(
+            f.update(&route, &fix(490.0, 0.0, WEST, 36), t),
+            Following::On,
+            "{t}"
+        );
+        t += 1000;
+    }
+    assert_eq!(
+        f.update(&route, &fix(480.0, 0.0, WEST, 36), t),
+        Following::Off
+    );
+}
+
+#[test]
+fn the_destination_is_reached_from_any_side() {
+    let route = corner_route();
+    // Along the route, near its end.
+    let mut f = Follow::new();
+    assert_eq!(
+        f.update(&route, &fix(1000.0, 980.0, SOUTH, 20), 0),
+        Following::Arrived
+    );
+    // From another street, 40 m beside the destination: arrived too.
+    let goal = at(1000.0, 1000.0);
+    let mut f = Follow::to(goal);
+    assert_eq!(
+        f.update(&route, &fix(1040.0, 1000.0, WEST, 20), 0),
+        Following::Arrived
+    );
+    // Off the route near it: the last streets are the driver's.
+    let mut f = Follow::to(goal);
+    for t in (0..20_000).step_by(1000) {
+        assert_eq!(
+            f.update(&route, &fix(1100.0, 950.0, WEST, 20), t),
+            Following::On
+        );
+    }
+}
+
+#[test]
+fn a_gap_in_the_position_picks_the_route_up_further_on() {
+    let route = corner_route();
+    let mut f = Follow::new();
+    assert_eq!(
+        f.update(&route, &fix(100.0, 0.0, EAST, 36), 0),
+        Following::On
+    );
+    // A tunnel: next seen far ahead, beyond the steps looked at first.
+    assert_eq!(
+        f.update(&route, &fix(1000.0, 800.0, SOUTH, 36), 60_000),
+        Following::On
+    );
+    let left = route.ahead(f.ms()).unwrap().left_metres;
+    assert!((190..210).contains(&left), "{left}");
 }
 
 #[test]

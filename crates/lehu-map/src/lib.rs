@@ -31,6 +31,7 @@
 mod blob;
 mod cameras;
 mod drive;
+mod follow;
 mod glyphs;
 mod graph;
 mod hw;
@@ -50,12 +51,14 @@ pub mod voice;
 
 pub use cameras::{CAMERAS_FILE, Camera, Cameras};
 pub use drive::Drive;
+pub use follow::{ARRIVE_M, ARRIVE_NEAR_M, Follow, Following, OFF_M, OFF_MS, WRONG_WAY_MS};
 pub use graph::{Graph, NEAR_M, ROADS_FILE, RouteBy, RouteOptions, Snap};
 pub use route::Router;
 pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
 pub use tileset::TileSet;
 pub use track::{
-    Ahead, Fix, Leg, LegCamera, LegStep, Maneuver, RouteCamera, Track, Turn, metres_between,
+    Ahead, Fix, Leg, LegCamera, LegStep, Located, Maneuver, RouteCamera, Track, Turn,
+    metres_between,
 };
 pub use view::{View, WORLD_Z, degrees_from_world, parse_position, world_from_degrees};
 pub use viewer::{Marker, Route, Viewer};

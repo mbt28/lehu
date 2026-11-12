@@ -430,6 +430,8 @@ struct State<H> {
     flash: String,
     flash_until: u64,
     p_map_flash: Last,
+    /// The route was being found anew by itself, last tick.
+    p_rerouting: bool,
     /// The route being found is to Home or Work, asked from the menu.
     menu_routing: bool,
     /// A route shown whole: it starts by itself then (0: none shown); the
@@ -650,6 +652,7 @@ impl<H: Host> State<H> {
             flash: String::new(),
             flash_until: 0,
             p_map_flash: Last::default(),
+            p_rerouting: false,
             menu_routing: false,
             preview_until: 0,
             preview_ring: 0,

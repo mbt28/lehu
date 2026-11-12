@@ -190,11 +190,13 @@ the nearest road to the destination: the fastest by car (or as the
 [route options](#route-options) say), keeping to one-way streets and
 roundabouts, timed at each road's speed. The screen says "Finding the
 route" meanwhile, then goes back to the map, which shows the route whole
-first ([below](#the-whole-route-first)), then drives it at the roads'
-speeds (slowing for sharp turns), as it
-replays a drive: the route line with the part driven grey, the next turn
-on the bar, closer in near turns, the speed limit and the time of
-arrival. It replaces a replayed drive. Leaving the map and coming back
+first ([below](#the-whole-route-first)), then guides along it: the route
+line with the part driven grey, the next turn on the bar, closer in near
+turns, the speed limit and the time of arrival. With a position from
+elsewhere (a replayed drive, `map.fake-track`, until the phone's), the
+route follows it ([below](#off-the-route)); without one, the route is
+driven by itself at the roads' speeds (slowing for sharp turns), as a
+drive is replayed. Leaving the map and coming back
 keeps it, driven on meanwhile, with its prompts, and the navigation card
 of the other screens (Home, Now playing, Settings) shows its next turn
 while the phone is not guiding. The menu's Stop route ends it, and so does
@@ -206,6 +208,36 @@ When there is no route, the screen says why.
 When the turn after the next one comes within 300 m of it, the bar and
 the card show it beside the next one, small, under "then", so both can be
 prepared for at once.
+
+### Off the route
+
+A route followed by a position from elsewhere places each position on it:
+on the road nearest it, near where the last one was (a few steps behind it
+to about two minutes ahead), else anywhere on the route (after a tunnel).
+The guidance, the prompts, the speed cameras and the speed limit are then
+the route's at that place.
+
+A position more than 40 m from the route for 5 seconds while moving is
+off it: the driver took another road. The route is then found anew from
+there, going the way the position goes (so not by turning round), on a
+thread of its own; the bar says "Finding the route" meanwhile, the route
+left still shown, and the new one is guided at once. Going the wrong way
+along the route, near it, counts once it has lasted 8 seconds (a heading
+from positions alone swings at a crawl). Standing never counts: a position
+drifts at a stop. Within 150 m of the destination nothing is found anew,
+the last streets being the driver's choice, and within 50 m of it (or of
+the route's end), from any side, the destination is reached.
+
+`cargo run --release -p lehu-map --example follow REGION DRIVE.gpx "LAT,
+LON"` replays a drive against a route to a destination faster than real
+time, as LEHU follows it, and prints each route found anew; a drive that
+leaves the fastest route is made with `scripts/route-gpx.py --via`. On
+Hungary, on a 14 km drive through a city and onto a motorway, a driver
+keeping to the route is never taken off it, with positions scattered by
+up to 20 m (σ, every second, as a phone in a city at its worst); one
+going straight on at a turn, or missing a motorway exit, is off it 5
+seconds later (about 110 m on), and the route found anew is driven to
+the end. A route found anew takes 0.3 to 0.5 s on the board.
 
 ### The whole route first
 

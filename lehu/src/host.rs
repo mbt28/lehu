@@ -58,6 +58,9 @@ const MAP_RECENT: usize = 5;
 
 /// A route being found on its thread, and where to.
 type Finding = (std::sync::mpsc::Receiver<Result<Track, String>>, Found);
+/// A route being found anew by itself: the answer to come, where to, and
+/// when it was asked.
+type Rerouting = (std::sync::mpsc::Receiver<Result<Track, String>>, Found, u64);
 
 /// A point, world pixels at zoom 22, and the way we go there (x right,
 /// y down) while we move.
@@ -280,6 +283,16 @@ pub struct AppHost {
     /// last such route ended, the position from then on.
     map_routed: bool,
     map_left_at: Option<(i64, i64)>,
+    /// The position from elsewhere (the replayed drive, map.fake-track),
+    /// and when it started: with it a route of ours is followed by where
+    /// it is, not driven by itself. Where on the route it was last placed,
+    /// and that it reached the end.
+    map_drive: Option<(Arc<Track>, u64)>,
+    map_on: Option<lehu_map::Follow>,
+    map_reached: bool,
+    /// The route being found anew, the driver having left it: its answer
+    /// to come, where to, and when it was asked.
+    map_rerouting: Option<Rerouting>,
     /// Night by the sun (Night set to Auto): what it says, and when it
     /// was last asked (once a minute).
     sun: lehu_core::sun::Dusk,
@@ -396,6 +409,10 @@ impl AppHost {
             map_route_note: String::new(),
             map_routed: false,
             map_left_at: None,
+            map_drive: None,
+            map_on: None,
+            map_reached: false,
+            map_rerouting: None,
             sun: lehu_core::sun::Dusk::new(),
             sun_checked_at: None,
             map_to: (String::new(), String::new()),
@@ -802,25 +819,28 @@ impl AppHost {
                         m.fake_track,
                         track.duration() / 1000
                     );
-                    self.map_track_start
+                    let start = *self
+                        .map_track_start
                         .get_or_insert_with(lehu_core::clock::now_ms);
-                    self.map_track = Some(Arc::new(track));
+                    let track = Arc::new(track);
+                    self.map_drive = Some((Arc::clone(&track), start));
+                    self.map_track = Some(track);
                 }
                 Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
             }
         } else {
             self.map_track = None;
         }
-        if let (Some(track), Some(start)) = (self.map_track.clone(), self.map_track_start) {
-            let now = lehu_core::clock::now_ms();
-            let fix = track.at(now - start);
+        if let (Some(track), Some(fix), Some(ms)) =
+            (self.map_track.clone(), self.map_fix(), self.map_track_ms())
+        {
             self.map_position = Some((fix.x, fix.y));
             self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
             self.map_route = Some(Route::from(track.line()));
             self.map_guide = track
-                .ahead(now - start)
+                .ahead(ms)
                 .map(|a| guidance(&a, then_of(&track, &a), local_time_ms(self.zone_min)));
-            self.map_speed = Some((fix.kmh, fix.limit));
+            self.map_speed = Some(self.map_speed_at(&fix));
         }
         let m = &self.settings.map;
         self.map_follow = true;
@@ -1023,8 +1043,8 @@ impl AppHost {
         }
         viewer.set_position(self.map_marker);
         viewer.set_route(self.map_route.clone());
-        match (&self.map_track, self.map_track_start) {
-            (Some(track), Some(start)) => {
+        match self.map_mover() {
+            Some((track, start)) => {
                 let ago = lehu_core::clock::now_ms().saturating_sub(start);
                 let now = std::time::Instant::now();
                 viewer.set_drive(Some(Drive {
@@ -1059,7 +1079,9 @@ impl AppHost {
         } else {
             MAP_CLOSED_STEP_MS
         };
-        let drive = (self.map_track.is_some() && self.map_track_start.is_some())
+        let drive = self
+            .map_mover()
+            .is_some()
             .then_some(self.map_track_shown + step);
         [arrival, drive]
             .into_iter()
@@ -1082,9 +1104,10 @@ impl AppHost {
         {
             self.map_arrival = None;
         }
-        let Some(start) = self.map_track_start else {
+        self.map_reroute_poll();
+        if self.map_mover().is_none() {
             return;
-        };
+        }
         let step = if self.map.is_some() {
             MAP_TRACK_STEP_MS
         } else {
@@ -1093,11 +1116,24 @@ impl AppHost {
         if now < self.map_track_shown + step {
             return;
         }
-        let Some(track) = &self.map_track else {
+        let Some(fix) = self.map_fix() else {
             return;
         };
-        let fix = track.at(now - start);
-        let ahead = track.ahead(now - start);
+        // Followed: where the position is on the route of ours, and
+        // whether it left it.
+        if self.map_following()
+            && let (Some(route), Some(on)) = (self.map_track.clone(), self.map_on.as_mut())
+        {
+            match on.update(&route, &fix, now) {
+                lehu_map::Following::On => {}
+                lehu_map::Following::Off => self.map_reroute_off(&fix),
+                lehu_map::Following::Arrived => self.map_reached = true,
+            }
+        }
+        let (Some(track), Some(ms)) = (&self.map_track, self.map_track_ms()) else {
+            return;
+        };
+        let ahead = track.ahead(ms);
         self.map_guide = ahead
             .as_ref()
             .map(|a| guidance(a, then_of(track, a), local_time_ms(self.zone_min)));
@@ -1116,7 +1152,8 @@ impl AppHost {
         } else {
             self.map_voice = None;
         }
-        if self.map_speeding.tick(now, fix.kmh, fix.limit) && m.speed_warning {
+        let (kmh, limit) = self.map_speed_at(&fix);
+        if self.map_speeding.tick(now, kmh, limit) && m.speed_warning {
             if self.map_chime.is_empty() {
                 self.map_chime = chime::samples();
             }
@@ -1125,9 +1162,114 @@ impl AppHost {
         }
         self.map_track_shown = now;
         self.map_position = Some((fix.x, fix.y));
-        self.map_speed = Some((fix.kmh, fix.limit));
-        self.map_camera_tick(now - start, fix.kmh);
+        self.map_speed = Some((kmh, limit));
+        self.map_camera_tick(ms, kmh);
         self.map_arrived();
+    }
+
+    /// Following a route of ours by a position from elsewhere, not
+    /// driving it by itself.
+    fn map_following(&self) -> bool {
+        self.map_routed && self.map_drive.is_some()
+    }
+
+    /// What moves the position, and when it started: the position from
+    /// elsewhere, else the route of ours or the replayed drive.
+    fn map_mover(&self) -> Option<(&Arc<Track>, u64)> {
+        match &self.map_drive {
+            Some((drive, start)) => Some((drive, *start)),
+            None => Some((self.map_track.as_ref()?, self.map_track_start?)),
+        }
+    }
+
+    /// Where we are now, on what moves the position.
+    fn map_fix(&self) -> Option<lehu_map::Fix> {
+        let (track, start) = self.map_mover()?;
+        Some(track.at(lehu_core::clock::now_ms().saturating_sub(start)))
+    }
+
+    /// Milliseconds into the track the guidance is on: where the position
+    /// was last placed on the route followed, else the time it has gone.
+    fn map_track_ms(&self) -> Option<u64> {
+        if self.map_following() {
+            return self.map_on.as_ref().map(lehu_map::Follow::ms);
+        }
+        Some(lehu_core::clock::now_ms().saturating_sub(self.map_track_start?))
+    }
+
+    /// The speed, and the speed limit where we are: on a route followed,
+    /// the route's limit at the place the position is on it.
+    fn map_speed_at(&self, fix: &lehu_map::Fix) -> (u32, Option<u16>) {
+        match (&self.map_track, self.map_track_ms()) {
+            (Some(route), Some(ms)) if self.map_following() => (fix.kmh, route.at(ms).limit),
+            _ => (fix.kmh, fix.limit),
+        }
+    }
+
+    /// The position left the route of ours: found anew from where it is,
+    /// going its way, on a thread of its own; the route left is shown
+    /// meanwhile. One at a time.
+    fn map_reroute_off(&mut self, fix: &lehu_map::Fix) {
+        if self.map_rerouting.is_some() {
+            return;
+        }
+        let (Some(router), Some(to)) = (self.map_router.clone(), self.map_dest.clone()) else {
+            return;
+        };
+        let off = self
+            .map_on
+            .as_ref()
+            .map_or(f64::INFINITY, lehu_map::Follow::off_m);
+        log::info!(
+            "map: off the route ({off:.0} m from it at {} km/h): finding it anew",
+            fix.kmh
+        );
+        let from = (fix.x, fix.y);
+        let heading = (fix.kmh > 0 && fix.heading != (0, 0)).then_some(fix.heading);
+        let goal = (to.x, to.y);
+        let options = self.map_route_options();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("map-reroute".into())
+            .spawn(move || {
+                let _ = tx.send(router.route_with(from, heading, goal, &options));
+            });
+        if let Err(e) = spawned {
+            log::warn!("map: no thread to route on: {e}");
+            return;
+        }
+        self.map_rerouting = Some((rx, to, lehu_core::clock::now_ms()));
+    }
+
+    /// The route found anew: driven from here on. None found: the next
+    /// time the position is off the route asks again.
+    fn map_reroute_poll(&mut self) {
+        let Some((rx, _, asked)) = &self.map_rerouting else {
+            return;
+        };
+        let answer = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Ok(answer) => answer,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("no answer".into()),
+        };
+        let took = lehu_core::clock::now_ms().saturating_sub(*asked);
+        let Some((_, to, _)) = self.map_rerouting.take() else {
+            return;
+        };
+        match answer {
+            // Ended meanwhile (arrived, or stopped): kept ended.
+            Ok(_) if !self.map_routed => {}
+            Ok(track) => {
+                log::info!(
+                    "map: the route anew: {:.1} km, {} min, {} turns, in {took} ms",
+                    f64::from(track.metres()) / 1000.0,
+                    track.duration().div_ceil(60_000),
+                    track.maneuvers().len()
+                );
+                self.map_take_route(track, &to);
+            }
+            Err(e) => log::info!("map: no route anew to {}: {e}", to.name),
+        }
     }
 
     /// "Speed camera ahead", once a camera on the route, when it is asked
@@ -1189,8 +1331,7 @@ impl AppHost {
     /// route ended, map.fake-position, else the middle of the map where it
     /// was left. A country's width is a few minutes of sunset.
     fn sun_position(&self) -> Option<(i64, i64)> {
-        if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
-            let fix = track.at(clock::now_ms().saturating_sub(start));
+        if let Some(fix) = self.map_fix() {
             return Some((fix.x, fix.y));
         }
         let m = &self.settings.map;
@@ -1225,10 +1366,15 @@ impl AppHost {
     /// in the guidance's place for a while.
     fn map_arrived(&mut self) {
         let now = lehu_core::clock::now_ms();
-        if let (true, Some(track), Some(start)) =
-            (self.map_routed, &self.map_track, self.map_track_start)
-            && now.saturating_sub(start) >= track.duration()
-        {
+        let done = if self.map_following() {
+            self.map_reached
+        } else {
+            matches!(
+                (&self.map_track, self.map_track_start),
+                (Some(track), Some(start)) if now.saturating_sub(start) >= track.duration()
+            )
+        };
+        if self.map_routed && done {
             log::info!("map: arrived at {}", self.map_to.0);
             let card = arrival(&self.map_to.0, &self.map_to.1);
             self.map_end_route();
@@ -1241,8 +1387,7 @@ impl AppHost {
     /// goes, while it moves); else the position shown; else the middle of
     /// the map.
     fn map_here(&self) -> Here {
-        if let (Some(track), Some(start)) = (&self.map_track, self.map_track_start) {
-            let fix = track.at(lehu_core::clock::now_ms().saturating_sub(start));
+        if let Some(fix) = self.map_fix() {
             let heading = (fix.kmh > 0 && fix.heading != (0, 0)).then_some(fix.heading);
             return (Some((fix.x, fix.y)), heading);
         }
@@ -1258,8 +1403,12 @@ impl AppHost {
     /// the recent ones.
     fn map_take_route(&mut self, track: Track, to: &Found) {
         // From its start, on the map at once when it is open (a route to
-        // Home from the menu, one found anew).
-        let fix = track.at(0);
+        // Home from the menu, one found anew); followed, from where the
+        // position is.
+        let fix = match &self.map_drive {
+            Some((drive, start)) => drive.at(lehu_core::clock::now_ms().saturating_sub(*start)),
+            None => track.at(0),
+        };
         self.map_position = Some((fix.x, fix.y));
         self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
         self.map_route = Some(Route::from(track.line()));
@@ -1271,6 +1420,11 @@ impl AppHost {
         self.map_track_shown = 0;
         self.map_routed = true;
         self.map_left_at = None;
+        self.map_on = self
+            .map_drive
+            .is_some()
+            .then(|| lehu_map::Follow::to((to.x, to.y)));
+        self.map_reached = false;
         self.map_follow = true;
         self.map_arrival = None;
         self.map_to = (to.name.clone(), to.town.clone());
@@ -1751,8 +1905,7 @@ impl Host for AppHost {
         if !self.settings.map.speed_cameras {
             return None;
         }
-        let (track, start) = (self.map_track.as_ref()?, self.map_track_start?);
-        let ms = lehu_core::clock::now_ms().saturating_sub(start);
+        let (track, ms) = (self.map_track.as_ref()?, self.map_track_ms()?);
         track.camera_ahead(ms, within).map(|(_, metres)| metres)
     }
 
@@ -1992,6 +2145,10 @@ impl Host for AppHost {
         true
     }
 
+    fn map_rerouting(&self) -> bool {
+        self.map_rerouting.is_some()
+    }
+
     fn map_end_route(&mut self) {
         if !self.map_routed {
             return;
@@ -1999,6 +2156,20 @@ impl Host for AppHost {
         let here = self.map_here().0;
         self.map_view = self.map_view_now();
         self.map_routed = false;
+        self.map_on = None;
+        self.map_reached = false;
+        self.map_rerouting = None;
+        self.map_quiet();
+        // A position from elsewhere goes on: it is the replayed drive
+        // again.
+        if let Some((drive, start)) = self.map_drive.clone() {
+            self.map_track = Some(Arc::clone(&drive));
+            self.map_track_start = Some(start);
+            self.map_route = Some(Route::from(drive.line()));
+            self.map_guide = None;
+            self.map_show();
+            return;
+        }
         self.map_track = None;
         self.map_track_start = None;
         self.map_route = None;
@@ -2006,7 +2177,6 @@ impl Host for AppHost {
         self.map_speed = None;
         self.map_left_at = here;
         self.map_position = here;
-        self.map_quiet();
         self.map_marker = here.map(|(x, y)| Marker::Dot(x, y));
         self.map_show();
     }
