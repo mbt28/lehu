@@ -852,7 +852,11 @@ moving, up to 8 degrees off and with its driven part up to 48 pixels
 behind. On the board, on a city drive with many bends, the map then shows
 about 59 pictures a second and misses 1 to 12 in 30 s; before, it showed
 29 and missed up to 154, each turn a hitch of a refresh or more. A change
-of zoom (near a turn) still waits for its first frame, about 0.1 to 0.2 s. The arrow is on a display plane of its
+of zoom is shown by the display's scaler: closer, the frame shown is
+enlarged smoothly to twice its size about the arrow over a quarter of a
+second while the new one is drawn, which then takes its place; further
+out, the frame shown moves on as it is until the new one is drawn, which
+then comes in at twice its size and shrinks to its own. The arrow is on a display plane of its
 own above the map, so the map moves under it without being redrawn; on a
 display without such a plane it is drawn into the map instead. The phone's decoder makes way while the map is shown,
 since both need video memory.

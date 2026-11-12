@@ -614,6 +614,8 @@ fn run(
     let mut retired: Vec<Canvas> = Vec::new();
     let mut heading: Option<(i32, i32)> = None;
     let mut heading_soon: Option<(i32, i32)>;
+    // A change of zoom shown as a frame scaled smoothly, while it lasts.
+    let mut zoom_anim: Option<ZoomAnim> = None;
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
     // may still be reading after an early flip event).
@@ -685,7 +687,8 @@ fn run(
                     position = inner.position;
                     shown = None;
                 }
-                if inner.stop || shown != Some(inner.want) || ahead.is_some() {
+                if inner.stop || shown != Some(inner.want) || ahead.is_some() || zoom_anim.is_some()
+                {
                     break;
                 }
                 inner = shared
@@ -696,7 +699,7 @@ fn run(
             if inner.stop {
                 break;
             }
-            (shown != Some(inner.want)).then_some(inner.want)
+            (shown != Some(inner.want) || zoom_anim.is_some()).then_some(inner.want)
         };
         // The sprite plane can be refused at its first commit: from then
         // on the marker is drawn into the pictures.
@@ -744,6 +747,52 @@ fn run(
             ahead = None;
             let h = unit_up(up);
             let size = (ups[0].width(), ups[0].height());
+            // A change of zoom being shown: the frame scaled on, while it
+            // lasts and serves the zoom wanted.
+            if let Some(a) = zoom_anim {
+                let now = Instant::now();
+                let ok = want.zoom == a.zoom
+                    && sprites.is_some()
+                    && up_held[a.frame].is_some_and(|u| {
+                        fresh_within(
+                            u.progress,
+                            progress,
+                            route.is_some(),
+                            u.zoom,
+                            ROUTE_LAG_LOOSE,
+                        )
+                    });
+                match a.scale(now) {
+                    Some(sc) if ok => {
+                        let u = up_held[a.frame].expect("checked");
+                        let at = View {
+                            zoom: u.zoom,
+                            ..want
+                        };
+                        if let Some(w) = u.window_within(&at, h, size, panel, UP_LOOSE) {
+                            up_stats.frame();
+                            if show_up_scaled(
+                                display,
+                                &mut sprites,
+                                &ups[a.frame],
+                                &u,
+                                w,
+                                sc,
+                                panel,
+                                position,
+                            ) {
+                                up_stats.shown();
+                                recent_up = [Some(a.frame), recent_up[0].filter(|&r| r != a.frame)];
+                                shared.lock().shown = true;
+                            }
+                            shown = Some(want);
+                            continue;
+                        }
+                        zoom_anim = None;
+                    }
+                    _ => zoom_anim = None,
+                }
+            }
             // A frame turned near enough this way that holds the window,
             // the one shown first: moving along is a commit, no drawing.
             // Without the sprite the marker is in the frame: each is new.
@@ -795,6 +844,19 @@ fn run(
                         anchor: anchor_on(panel, window),
                         top,
                     };
+                    // Closer: the frame shown is enlarged towards the new
+                    // zoom while the new frame is drawn.
+                    if let Some((j, u)) = meanwhile
+                        && job.view.zoom == u.zoom + 1
+                    {
+                        zoom_anim = Some(ZoomAnim {
+                            frame: j,
+                            zoom: job.view.zoom,
+                            s0: 1.0,
+                            s1: 2.0,
+                            start: Instant::now(),
+                        });
+                    }
                     let drawn = match meanwhile {
                         Some((j, u)) => {
                             let (to, on) = pair_mut(&mut ups, i, j);
@@ -809,6 +871,7 @@ fn run(
                                 panel,
                                 last: Some(want),
                                 any: false,
+                                zoom: zoom_anim.filter(|a| a.frame == j),
                             };
                             thread::scope(|scope| {
                                 let names = names.as_mut();
@@ -886,6 +949,19 @@ fn run(
                     up_held[i] = Some(drawn);
                     last_turn = Some(Instant::now());
                     up_stats.turned(started.elapsed(), cost);
+                    // Further out: the new frame shown at the old scale,
+                    // shrinking to its own.
+                    if meanwhile.is_some_and(|(_, u)| drawn.zoom + 1 == u.zoom) {
+                        zoom_anim = Some(ZoomAnim {
+                            frame: i,
+                            zoom: drawn.zoom,
+                            s0: 2.0,
+                            s1: 1.0,
+                            start: Instant::now(),
+                        });
+                        shown = None;
+                        continue;
+                    }
                     // Shown at once where the view is now, unless it went
                     // on further than the frame reaches: then the loop
                     // again, with what is wanted now.
@@ -1105,6 +1181,8 @@ struct Moving<'a> {
     last: Option<View>,
     /// Something was shown on it.
     any: bool,
+    /// Its change of zoom, when it is being enlarged towards a closer one.
+    zoom: Option<ZoomAnim>,
 }
 
 impl Moving<'_> {
@@ -1123,7 +1201,8 @@ impl Moving<'_> {
             }
             (inner.want, inner.heading, inner.position, inner.progress)
         };
-        if self.last == Some(want) {
+        let scaling = self.zoom.filter(|a| want.zoom == a.zoom);
+        if self.last == Some(want) && scaling.is_none() {
             return false;
         }
         let Some(h) = heading.map(unit_up) else {
@@ -1133,11 +1212,31 @@ impl Moving<'_> {
         if !fresh_within(u.progress, progress, self.route, u.zoom, ROUTE_LAG_LOOSE) {
             return false;
         }
-        let Some(w) = u.window_within(&want, h, self.size, self.panel, UP_LOOSE) else {
+        // At another zoom: enlarged towards a closer one, else (further
+        // out, a level) as it is until the new frame shrinks in.
+        let scale = match scaling {
+            Some(a) => a.scale(Instant::now()).unwrap_or(a.s1),
+            None if want.zoom + 1 == u.zoom || want.zoom == u.zoom => 1.0,
+            None => return false,
+        };
+        let at = View {
+            zoom: u.zoom,
+            ..want
+        };
+        let Some(w) = u.window_within(&at, h, self.size, self.panel, UP_LOOSE) else {
             return false;
         };
         stats.frame();
-        if show_up(self.display, self.sprites, self.canvas, &u, w, position) {
+        if show_up_scaled(
+            self.display,
+            self.sprites,
+            self.canvas,
+            &u,
+            w,
+            scale,
+            self.panel,
+            position,
+        ) {
             stats.shown();
             self.last = Some(want);
             self.any = true;
@@ -1145,6 +1244,87 @@ impl Moving<'_> {
             return true;
         }
         false
+    }
+}
+
+/// A change of zoom shown as a frame scaled smoothly: the frame, the zoom
+/// it stands in for, its scale at the start and at the end (the panel's
+/// pixels to one of the frame's), and when it started.
+#[derive(Clone, Copy, Debug)]
+struct ZoomAnim {
+    frame: usize,
+    zoom: u8,
+    s0: f32,
+    s1: f32,
+    start: Instant,
+}
+
+/// How long a change of zoom is shown taking.
+const ZOOM_MS: f32 = 250.0;
+
+impl ZoomAnim {
+    /// The scale at `now`, eased in and out and even in its ratio; None
+    /// once it is over.
+    fn scale(&self, now: Instant) -> Option<f32> {
+        let t = now.saturating_duration_since(self.start).as_secs_f32() * 1000.0 / ZOOM_MS;
+        if t >= 1.0 {
+            return None;
+        }
+        let e = t * t * (3.0 - 2.0 * t);
+        Some(self.s0 * (self.s1 / self.s0).powf(e))
+    }
+}
+
+/// As `show_up`, the frame scaled by `scale` about the view's point on
+/// the panel (2: twice the size); 1 as it is.
+#[allow(clippy::too_many_arguments)]
+fn show_up_scaled(
+    display: &Display,
+    sprites: &mut Option<Sprites>,
+    canvas: &Canvas,
+    u: &UpHeld,
+    (x, y): (u32, u32),
+    scale: f32,
+    panel: (u32, u32),
+    position: Option<Marker>,
+) -> bool {
+    if (scale - 1.0).abs() < 1e-3 {
+        return show_up(display, sprites, canvas, u, (x, y), position);
+    }
+    let a = panel_anchor(panel);
+    let (ax, ay) = (a.0 as f32, a.1 as f32);
+    // The part of the frame the panel shows: the view's point stays where
+    // it is on the panel.
+    let sx = x as f32 + ax * (1.0 - 1.0 / scale);
+    let sy = y as f32 + ay * (1.0 - 1.0 / scale);
+    let (sw, sh) = (panel.0 as f32 / scale, panel.1 as f32 / scale);
+    if sx < 0.0 || sy < 0.0 || sx + sw > canvas.width() as f32 || sy + sh > canvas.height() as f32 {
+        return show_up(display, sprites, canvas, u, (x, y), position);
+    }
+    let fixed = |v: f32| (v * 65536.0) as u32;
+    let src = [fixed(sx), fixed(sy), fixed(sw), fixed(sh)];
+    let sprite = match (sprites.as_mut(), position) {
+        (Some(sp), Some(m)) => {
+            let (at, heading) = parts(m);
+            let c = u.sixteenth(at);
+            let on_panel = (
+                ((c.0 as f32 / 16.0 - sx) * scale).round() as i64,
+                ((c.1 as f32 / 16.0 - sy) * scale).round() as i64,
+            );
+            Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
+        }
+        _ => None,
+    };
+    let mut tries = 0;
+    loop {
+        match display.show_canvas_scaled(canvas, src, sprite) {
+            Show::Shown => return true,
+            Show::Busy if tries < 50 => {
+                tries += 1;
+                thread::sleep(BUSY_WAIT);
+            }
+            Show::Busy | Show::Failed => return false,
+        }
     }
 }
 

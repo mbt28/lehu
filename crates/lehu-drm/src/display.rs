@@ -1396,12 +1396,30 @@ impl Display {
         y: u32,
         sprite: Option<Sprite<'_>>,
     ) -> Show {
-        let shown = self.show_canvas_once(canvas, x, y, sprite.as_ref());
+        let src = [x << 16, y << 16, self.width << 16, self.height << 16];
+        self.show_canvas_src(canvas, src, sprite)
+    }
+
+    /// As `show_canvas_with`, the part of `canvas` at `src` (x, y, width,
+    /// height, in 1/65536 pixels) scaled to the panel by the display's
+    /// scaler: a picture enlarged or shrunk smoothly, as when the map
+    /// changes zoom.
+    pub fn show_canvas_scaled(
+        &self,
+        canvas: &Canvas,
+        src: [u32; 4],
+        sprite: Option<Sprite<'_>>,
+    ) -> Show {
+        self.show_canvas_src(canvas, src, sprite)
+    }
+
+    fn show_canvas_src(&self, canvas: &Canvas, src: [u32; 4], sprite: Option<Sprite<'_>>) -> Show {
+        let shown = self.show_canvas_once(canvas, src, sprite.as_ref());
         if shown != Show::Failed || sprite.is_none() {
             return shown;
         }
         // Without it, then: if that is shown, the sprite was the trouble.
-        let again = self.show_canvas_once(canvas, x, y, None);
+        let again = self.show_canvas_once(canvas, src, None);
         if again == Show::Shown {
             self.lock().sprite_refused = true;
             log::warn!("the sprite plane was refused; the map draws its marker itself");
@@ -1412,12 +1430,14 @@ impl Display {
     fn show_canvas_once(
         &self,
         canvas: &Canvas,
-        x: u32,
-        y: u32,
+        src: [u32; 4],
         sprite: Option<&Sprite<'_>>,
     ) -> Show {
-        if x.saturating_add(self.width) > canvas.width
-            || y.saturating_add(self.height) > canvas.height
+        let [x, y, w, h] = src.map(u64::from);
+        if w == 0
+            || h == 0
+            || x + w > u64::from(canvas.width) << 16
+            || y + h > u64::from(canvas.height) << 16
         {
             return Show::Failed;
         }
@@ -1429,10 +1449,10 @@ impl Display {
         let req = &mut st.request;
         req.add(plane, p.fb, u64::from(u32::from(canvas.dumb.fb)));
         req.add(plane, p.crtc, u64::from(self.crtc));
-        req.add(plane, p.src_x, u64::from(x) << 16);
-        req.add(plane, p.src_y, u64::from(y) << 16);
-        req.add(plane, p.src_w, u64::from(self.width) << 16);
-        req.add(plane, p.src_h, u64::from(self.height) << 16);
+        req.add(plane, p.src_x, x);
+        req.add(plane, p.src_y, y);
+        req.add(plane, p.src_w, w);
+        req.add(plane, p.src_h, h);
         req.add(plane, p.crtc_x, 0);
         req.add(plane, p.crtc_y, 0);
         req.add(plane, p.crtc_w, u64::from(self.width));
