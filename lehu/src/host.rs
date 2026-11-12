@@ -288,6 +288,9 @@ pub struct AppHost {
     /// it is, not driven by itself. Where on the route it was last placed,
     /// and that it reached the end.
     map_drive: Option<(Arc<Track>, u64)>,
+    /// A route of ours ended with it: from then on it is only where we
+    /// are, without guidance of its own.
+    map_drive_only: bool,
     map_on: Option<lehu_map::Follow>,
     map_reached: bool,
     /// The route being found anew, the driver having left it: its answer
@@ -410,6 +413,7 @@ impl AppHost {
             map_routed: false,
             map_left_at: None,
             map_drive: None,
+            map_drive_only: false,
             map_on: None,
             map_reached: false,
             map_rerouting: None,
@@ -819,12 +823,18 @@ impl AppHost {
                         m.fake_track,
                         track.duration() / 1000
                     );
-                    let start = *self
-                        .map_track_start
-                        .get_or_insert_with(lehu_core::clock::now_ms);
+                    let start = self
+                        .map_drive
+                        .as_ref()
+                        .map(|d| d.1)
+                        .or(self.map_track_start)
+                        .unwrap_or_else(lehu_core::clock::now_ms);
                     let track = Arc::new(track);
                     self.map_drive = Some((Arc::clone(&track), start));
-                    self.map_track = Some(track);
+                    if !self.map_drive_only {
+                        self.map_track = Some(track);
+                        self.map_track_start = Some(start);
+                    }
                 }
                 Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
             }
@@ -841,6 +851,11 @@ impl AppHost {
                 .ahead(ms)
                 .map(|a| guidance(&a, then_of(&track, &a), local_time_ms(self.zone_min)));
             self.map_speed = Some(self.map_speed_at(&fix));
+        } else if let Some(fix) = self.map_fix() {
+            // Only where we are.
+            self.map_position = Some((fix.x, fix.y));
+            self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+            self.map_speed = Some((fix.kmh, fix.limit));
         }
         let m = &self.settings.map;
         self.map_follow = true;
@@ -1131,6 +1146,10 @@ impl AppHost {
             }
         }
         let (Some(track), Some(ms)) = (&self.map_track, self.map_track_ms()) else {
+            // Only where we are: no guidance.
+            self.map_track_shown = now;
+            self.map_position = Some((fix.x, fix.y));
+            self.map_speed = Some((fix.kmh, fix.limit));
             return;
         };
         let ahead = track.ahead(ms);
@@ -1539,7 +1558,7 @@ impl AppHost {
         match &self.map {
             // A route shown whole is not where the map was.
             Some(viewer)
-                if self.map_follow && self.map_track.is_some() && self.map_preview.is_none() =>
+                if self.map_follow && self.map_mover().is_some() && self.map_preview.is_none() =>
             {
                 // Its zoom is the one asked for, not one closer near a turn.
                 View {
@@ -1869,7 +1888,7 @@ impl Host for AppHost {
             return;
         }
         self.map_view.zoom_by(step, set.min_zoom, set.top_zoom());
-        if self.map_follow && self.map_track.is_some() {
+        if self.map_follow && self.map_mover().is_some() {
             viewer.follow(Some(self.map_view.zoom));
         } else {
             viewer.set_view(self.map_view);
@@ -1886,7 +1905,7 @@ impl Host for AppHost {
         self.map_view.clamp(&set.bounds);
         viewer.set_view(self.map_view);
         self.map_follow = true;
-        if self.map_track.is_some() {
+        if self.map_mover().is_some() {
             viewer.follow(Some(self.map_view.zoom));
         }
     }
@@ -2160,12 +2179,13 @@ impl Host for AppHost {
         self.map_reached = false;
         self.map_rerouting = None;
         self.map_quiet();
-        // A position from elsewhere goes on: it is the replayed drive
-        // again.
-        if let Some((drive, start)) = self.map_drive.clone() {
-            self.map_track = Some(Arc::clone(&drive));
-            self.map_track_start = Some(start);
-            self.map_route = Some(Route::from(drive.line()));
+        // A position from elsewhere goes on, only as where we are: its own
+        // turns are not guided along now.
+        if self.map_drive.is_some() {
+            self.map_drive_only = true;
+            self.map_track = None;
+            self.map_track_start = None;
+            self.map_route = None;
             self.map_guide = None;
             self.map_show();
             return;
