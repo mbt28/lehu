@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Mehmet Tekbas
 //! A drive the map follows by itself, in step with the panel: where it is
 //! is worked out for each picture shown, not handed over by the loop, so
-//! the map moves the same distance every two refreshes.
+//! the map moves the same distance every refresh while it moves.
 
 use std::sync::Arc;
 use std::time::Instant;

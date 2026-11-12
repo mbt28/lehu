@@ -9,6 +9,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use drm::buffer::{DrmFourcc, DrmModifier, Handle as GemHandle, PlanarBuffer};
 use drm::control::{
@@ -1341,6 +1342,24 @@ impl Display {
             None => (RELATIVE, 1),
         };
         drm_ffi::wait_vblank(self.card.as_fd(), kind, n, 0).map(|r| r.sequence)
+    }
+
+    /// As `wait_vblank`, with the refresh's time on the monotonic clock
+    /// (as the kernel took it at the refresh, not when this thread woke).
+    pub fn wait_vblank_time(&self, sequence: Option<u32>) -> io::Result<(u32, Duration)> {
+        const ABSOLUTE: u32 = 0;
+        const RELATIVE: u32 = 1;
+        const NEXT_ON_MISS: u32 = 0x1000_0000;
+        let (kind, n) = match sequence {
+            Some(n) => (ABSOLUTE | NEXT_ON_MISS, n),
+            None => (RELATIVE, 1),
+        };
+        let r = drm_ffi::wait_vblank(self.card.as_fd(), kind, n, 0)?;
+        let at = Duration::new(
+            u64::try_from(r.tval_sec).unwrap_or(0),
+            u32::try_from(r.tval_usec).unwrap_or(0).min(999_999) * 1000,
+        );
+        Ok((r.sequence, at))
     }
 
     /// Take the sprite down, waiting for the flip.

@@ -78,6 +78,9 @@ struct Inner {
     /// Heading-up: the way that is up on the panel (x right, y down),
     /// the view's point at the anchor; None for north-up.
     heading: Option<(i32, i32)>,
+    /// The way up `SOON_MS` from now, while the map turns by itself: a
+    /// frame turned now is drawn for it, being shown about then.
+    heading_soon: Option<(i32, i32)>,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -175,6 +178,7 @@ impl Viewer {
                 route: None,
                 cameras: None,
                 heading: None,
+                heading_soon: None,
                 stop: false,
                 shown: false,
             }),
@@ -404,6 +408,21 @@ const ROUTE_LAG: i64 = 12;
 /// A picture's grey part, drawn to `drawn`, still meets the marker at
 /// `now`: within `ROUTE_LAG` pixels at `zoom`. Always, without a route.
 fn fresh(drawn: Option<Progress>, now: Option<Progress>, route: bool, zoom: u8) -> bool {
+    fresh_within(drawn, now, route, zoom, ROUTE_LAG)
+}
+
+/// While a frame is drawn anew, the one shown may lag this many pixels:
+/// a little of the route behind the arrow still blue, for a moment.
+const ROUTE_LAG_LOOSE: i64 = 4 * ROUTE_LAG;
+
+/// As `fresh`, within `lag` pixels.
+fn fresh_within(
+    drawn: Option<Progress>,
+    now: Option<Progress>,
+    route: bool,
+    zoom: u8,
+    lag: i64,
+) -> bool {
     if !route {
         return true;
     }
@@ -411,7 +430,7 @@ fn fresh(drawn: Option<Progress>, now: Option<Progress>, route: bool, zoom: u8) 
         (None, None) => true,
         (Some(a), Some(b)) => {
             let s = WORLD_Z - zoom.min(WORLD_Z);
-            ((a.at.0 - b.at.0).abs() >> s) + ((a.at.1 - b.at.1).abs() >> s) <= ROUTE_LAG
+            ((a.at.0 - b.at.0).abs() >> s) + ((a.at.1 - b.at.1).abs() >> s) <= lag
         }
         _ => false,
     }
@@ -431,8 +450,16 @@ fn drive(shared: &Shared, display: &Display) {
         libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param);
     }
     let mut steer = Steer::default();
+    // When the last picture worked out was to be shown.
     let mut last: Option<Instant> = None;
     let mut next: Option<u32> = None;
+    // The last refresh seen (its number, its time), and the time between
+    // two: a picture is worked out for the refresh it will be shown at.
+    let mut seen: Option<(u32, Duration)> = None;
+    let mut period = Duration::from_micros(16_667);
+    // Refreshes to the next look: one while the map moves (as fast as the
+    // panel shows), a few while it stands still.
+    let mut every = 1;
     loop {
         let drive = {
             let mut inner = shared.lock();
@@ -443,27 +470,52 @@ fn drive(shared: &Shared, display: &Display) {
                 if let Some(d) = &inner.drive {
                     break d.clone();
                 }
-                (last, next) = (None, None);
+                (last, next, seen) = (None, None, None);
                 inner = shared
                     .drive_wake
                     .wait(inner)
                     .unwrap_or_else(PoisonError::into_inner);
             }
         };
-        match display.wait_vblank(next) {
-            Ok(n) => next = Some(n.wrapping_add(2)),
-            Err(_) => {
-                // No refresh count: a thirtieth of a second, roughly.
-                thread::sleep(Duration::from_millis(33));
-                next = None;
+        // When the picture worked out now will be on the panel: the next
+        // refresh, by the refreshes' own times, so that each moves the map
+        // the same way however late this thread woke.
+        let now = match display.wait_vblank_time(next) {
+            Ok((n, at)) => {
+                next = Some(n.wrapping_add(every));
+                if let Some((pn, pat)) = seen
+                    && n.wrapping_sub(pn) > 0
+                    && n.wrapping_sub(pn) < 8
+                    && at > pat
+                {
+                    let p = (at - pat) / n.wrapping_sub(pn);
+                    // A panel between 30 and 120 Hz.
+                    if (Duration::from_millis(8)..Duration::from_millis(34)).contains(&p) {
+                        period = p;
+                    }
+                }
+                seen = Some((n, at));
+                let woke = Instant::now();
+                let ahead = (at + period).checked_sub(monotonic()).unwrap_or_default();
+                woke + ahead
             }
-        }
-        let now = Instant::now();
+            Err(_) => {
+                // No refresh count: a sixtieth of a second, roughly.
+                thread::sleep(Duration::from_millis(16 * u64::from(every)));
+                next = None;
+                Instant::now()
+            }
+        };
         let ms = now.saturating_duration_since(drive.start).as_millis() as u64;
         let fix = drive.track.at(ms);
-        let since = last.map_or(0, |l| now.duration_since(l).as_millis() as u64);
+        let since = last.map_or(0, |l| now.saturating_duration_since(l).as_millis() as u64);
         last = Some(now);
         let heading = steer.step(fix.heading, since);
+        // Where the way up will be once a frame turned now is shown.
+        let soon = {
+            let mut ahead = steer;
+            ahead.step(fix.heading, SOON_MS)
+        };
         let marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
         let progress = Some(Progress {
             step: fix.step,
@@ -475,7 +527,7 @@ fn drive(shared: &Shared, display: &Display) {
             .is_some_and(|a| a.metres < NEAR_TURN_M);
         let mut inner = shared.lock();
         // Following, as it is now: the loop may just have stopped it.
-        let (want, up) = match inner.follow {
+        let (want, up, up_soon) = match inner.follow {
             Some(base) => {
                 let zoom = if near {
                     base.saturating_add(1).min(drive.top_zoom.max(base))
@@ -488,18 +540,36 @@ fn drive(shared: &Shared, display: &Display) {
                     y: fix.y,
                 };
                 v.clamp(&drive.bounds);
-                (v, heading)
+                (v, heading, soon)
             }
-            None => (inner.want, None),
+            None => (inner.want, None, None),
         };
+        inner.heading_soon = up_soon;
         if (inner.want, inner.position, inner.heading, inner.progress)
             != (want, marker, up, progress)
         {
             (inner.want, inner.position, inner.heading, inner.progress) =
                 (want, marker, up, progress);
             shared.wake.notify_one();
+            every = 1;
+        } else {
+            every = STILL_EVERY;
         }
     }
+}
+
+/// The monotonic clock, as the kernel stamps refreshes with it.
+fn monotonic() -> Duration {
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime fills the timespec it is given.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
+    Duration::new(
+        u64::try_from(t.tv_sec).unwrap_or(0),
+        u32::try_from(t.tv_nsec).unwrap_or(0),
+    )
 }
 
 /// The thread's pictures: the north-up canvases, the heading-up frames,
@@ -534,6 +604,7 @@ fn run(
     // A sprite canvas the driver would not show, kept to be freed.
     let mut retired: Vec<Canvas> = Vec::new();
     let mut heading: Option<(i32, i32)> = None;
+    let mut heading_soon: Option<(i32, i32)>;
     // What each canvas holds, and the last two shown, newest first: those
     // are never written (the one on scanout, and the one the sun4i CRTC
     // may still be reading after an early flip event).
@@ -580,6 +651,7 @@ fn run(
                     ahead = None;
                     shown = None;
                 }
+                heading_soon = inner.heading_soon;
                 if inner.heading != heading {
                     heading = inner.heading.filter(|_| !ups.is_empty());
                     shown = None;
@@ -628,7 +700,7 @@ fn run(
         }
         // The marker as the pictures hold it: none while it has a plane.
         let baked = if sprites.is_some() { None } else { position };
-        let Some(want) = want else {
+        let Some(mut want) = want else {
             // Nothing new to show: a step towards the canvas ahead.
             if let Some(layout) = ahead
                 && !tiles.prepare(&layout)
@@ -699,53 +771,142 @@ fn run(
                         0
                     };
                     let started = Instant::now();
-                    up_held[i] = Some(render_up(
-                        &mut tiles,
-                        names.as_mut(),
-                        &mut surface(&mut ups[i]),
-                        &want,
-                        h,
-                        baked,
-                        route.as_deref(),
-                        cameras.as_deref(),
+                    let mut cost = UpCost::default();
+                    // The frame shown, moved along meanwhile: with the
+                    // marker on its sprite, the pictures need not change.
+                    let meanwhile = recent_up[0]
+                        .filter(|_| sprites.is_some())
+                        .and_then(|j| up_held[j].map(|u| (j, u)));
+                    let job = UpJob {
+                        view: want,
+                        // Drawn for the way up when it will be shown.
+                        h: heading_soon.map_or(h, unit_up),
+                        marker: baked,
                         progress,
-                        anchor_on(panel, window),
+                        anchor: anchor_on(panel, window),
                         top,
-                    ));
+                    };
+                    let drawn = match meanwhile {
+                        Some((j, u)) => {
+                            let (to, on) = pair_mut(&mut ups, i, j);
+                            let mut moving = Moving {
+                                shared,
+                                display,
+                                sprites: &mut sprites,
+                                canvas: on,
+                                held: u,
+                                route: route.is_some(),
+                                size,
+                                panel,
+                                last: Some(want),
+                                any: false,
+                            };
+                            thread::scope(|scope| {
+                                let names = names.as_mut();
+                                let tiles = &mut tiles;
+                                let (route, cameras) = (route.as_deref(), cameras.as_deref());
+                                let cost = &mut cost;
+                                let turner = thread::Builder::new()
+                                    .name("map-turn".into())
+                                    .spawn_scoped(scope, move || {
+                                        // Below the frames shown.
+                                        // SAFETY: nice() changes only this
+                                        // thread's priority on Linux.
+                                        unsafe { libc::nice(5) };
+                                        let held = render_up(
+                                            tiles,
+                                            names,
+                                            &mut surface(to),
+                                            &job.view,
+                                            job.h,
+                                            job.marker,
+                                            route,
+                                            cameras,
+                                            job.progress,
+                                            job.anchor,
+                                            job.top,
+                                            cost,
+                                        );
+                                        shared.wake.notify_one();
+                                        held
+                                    });
+                                match turner {
+                                    Ok(t) => {
+                                        while !t.is_finished() {
+                                            if moving.step(&mut up_stats) {
+                                                recent_up =
+                                                    [Some(j), recent_up[0].filter(|&r| r != j)];
+                                            }
+                                        }
+                                        if !moving.any {
+                                            up_stats.blind += 1;
+                                            if u.zoom != job.view.zoom {
+                                                up_stats.blind_zoom += 1;
+                                            }
+                                        }
+                                        t.join().ok()
+                                    }
+                                    Err(e) => {
+                                        log::warn!("map: no thread to turn the map on: {e}");
+                                        None
+                                    }
+                                }
+                            })
+                        }
+                        None => Some({
+                            up_stats.blind += 1;
+                            render_up(
+                                &mut tiles,
+                                names.as_mut(),
+                                &mut surface(&mut ups[i]),
+                                &job.view,
+                                job.h,
+                                job.marker,
+                                route.as_deref(),
+                                cameras.as_deref(),
+                                job.progress,
+                                job.anchor,
+                                job.top,
+                                &mut cost,
+                            )
+                        }),
+                    };
+                    let Some(drawn) = drawn else {
+                        break;
+                    };
+                    up_held[i] = Some(drawn);
                     last_turn = Some(Instant::now());
-                    up_stats.turned(started.elapsed());
-                    (i, window)
+                    up_stats.turned(started.elapsed(), cost);
+                    // Shown at once where the view is now, unless it went
+                    // on further than the frame reaches: then the loop
+                    // again, with what is wanted now.
+                    let now = {
+                        let inner = shared.lock();
+                        (inner.want, inner.heading, inner.position, inner.progress)
+                    };
+                    let h_now = now.1.map_or(h, unit_up);
+                    match drawn.window_within(&now.0, h_now, size, panel, UP_LOOSE) {
+                        Some(w) => {
+                            want = now.0;
+                            position = now.2;
+                            progress = now.3;
+                            (i, w)
+                        }
+                        None => {
+                            shown = None;
+                            continue;
+                        }
+                    }
                 }
             };
             up_stats.frame();
-            let sprite = match (&mut sprites, position, up_held[i]) {
-                (Some(sp), Some(m), Some(u)) => {
-                    let (at, heading) = parts(m);
-                    let c = u.sixteenth(at);
-                    let on_panel = (
-                        ((c.0 + 8) >> 4) - i64::from(x),
-                        ((c.1 + 8) >> 4) - i64::from(y),
-                    );
-                    Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
-                }
-                _ => None,
-            };
-            // A pending flip: the same frame again a moment later.
-            let mut tries = 0;
-            loop {
-                match display.show_canvas_with(&ups[i], x, y, sprite) {
-                    Show::Shown => {
-                        recent_up = [Some(i), recent_up[0]];
-                        shared.lock().shown = true;
-                    }
-                    Show::Busy if tries < 50 => {
-                        tries += 1;
-                        thread::sleep(BUSY_WAIT);
-                        continue;
-                    }
-                    Show::Busy | Show::Failed => {}
-                }
-                break;
+            let held_i = up_held[i];
+            if let Some(u) = held_i
+                && show_up(display, &mut sprites, &ups[i], &u, (x, y), position)
+            {
+                up_stats.shown();
+                recent_up = [Some(i), recent_up[0].filter(|&r| r != i)];
+                shared.lock().shown = true;
             }
             shown = Some(want);
             continue;
@@ -895,6 +1056,125 @@ fn run(
     canvases
 }
 
+/// A heading-up frame to turn: the view, the way up, the marker drawn in
+/// (none with the sprite), how far along the route, where the view's
+/// point goes and the first row drawn.
+#[derive(Clone, Copy)]
+struct UpJob {
+    view: View,
+    h: (i64, i64),
+    marker: Option<Marker>,
+    progress: Option<Progress>,
+    anchor: (i64, i64),
+    top: u32,
+}
+
+/// Two canvases of `all`, the first to draw on and the second to show.
+fn pair_mut(all: &mut [Canvas], draw: usize, show: usize) -> (&mut Canvas, &Canvas) {
+    assert_ne!(draw, show, "a canvas drawn on is not shown");
+    if draw < show {
+        let (a, b) = all.split_at_mut(show);
+        (&mut a[draw], &b[0])
+    } else {
+        let (a, b) = all.split_at_mut(draw);
+        (&mut b[0], &a[show])
+    }
+}
+
+/// The frame shown, moved along while another is turned: each view the
+/// drive wants shown on it while it holds the window and is turned
+/// within `UP_LOOSE` of the way up.
+struct Moving<'a> {
+    shared: &'a Shared,
+    display: &'a Display,
+    sprites: &'a mut Option<Sprites>,
+    canvas: &'a Canvas,
+    held: UpHeld,
+    route: bool,
+    size: (u32, u32),
+    panel: (u32, u32),
+    last: Option<View>,
+    /// Something was shown on it.
+    any: bool,
+}
+
+impl Moving<'_> {
+    /// Waits for the next view (or the turn's end, or a while), and shows
+    /// it when this frame can. True when a picture was shown.
+    fn step(&mut self, stats: &mut UpStats) -> bool {
+        let (want, heading, position, progress) = {
+            let inner = self.shared.lock();
+            let (inner, _) = self
+                .shared
+                .wake
+                .wait_timeout(inner, Duration::from_millis(40))
+                .unwrap_or_else(PoisonError::into_inner);
+            if inner.stop {
+                return false;
+            }
+            (inner.want, inner.heading, inner.position, inner.progress)
+        };
+        if self.last == Some(want) {
+            return false;
+        }
+        let Some(h) = heading.map(unit_up) else {
+            return false;
+        };
+        let u = self.held;
+        if !fresh_within(u.progress, progress, self.route, u.zoom, ROUTE_LAG_LOOSE) {
+            return false;
+        }
+        let Some(w) = u.window_within(&want, h, self.size, self.panel, UP_LOOSE) else {
+            return false;
+        };
+        stats.frame();
+        if show_up(self.display, self.sprites, self.canvas, &u, w, position) {
+            stats.shown();
+            self.last = Some(want);
+            self.any = true;
+            self.shared.lock().shown = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Show the heading-up frame `canvas` (holding `u`) with its window at
+/// `(x, y)`, the marker on its sprite; a pending flip tried again a
+/// moment later. True when shown.
+fn show_up(
+    display: &Display,
+    sprites: &mut Option<Sprites>,
+    canvas: &Canvas,
+    u: &UpHeld,
+    (x, y): (u32, u32),
+    position: Option<Marker>,
+) -> bool {
+    let sprite = match (sprites.as_mut(), position) {
+        (Some(sp), Some(m)) => {
+            let (at, heading) = parts(m);
+            let c = u.sixteenth(at);
+            let on_panel = (
+                ((c.0 + 8) >> 4) - i64::from(x),
+                ((c.1 + 8) >> 4) - i64::from(y),
+            );
+            Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
+        }
+        _ => None,
+    };
+    let mut tries = 0;
+    loop {
+        match display.show_canvas_with(canvas, x, y, sprite) {
+            Show::Shown => return true,
+            Show::Busy if tries < 50 => {
+                tries += 1;
+                thread::sleep(BUSY_WAIT);
+            }
+            Show::Busy | Show::Failed => return false,
+        }
+    }
+}
+
 /// A marker's point, and its heading if it has one.
 fn parts(marker: Marker) -> ((i64, i64), Option<(i64, i64)>) {
     match marker {
@@ -910,7 +1190,26 @@ struct UpStats {
     turned: u32,
     took: Duration,
     most: Duration,
+    /// Of the turns: the tiles found (decoded when not kept), turned, and
+    /// the route, names and signs drawn over them.
+    cost: UpCost,
+    /// Between two pictures shown: the longest, and how many were longer
+    /// than `LATE_MS` (a picture missed).
+    gap_most: Duration,
+    late: u32,
+    /// Turns with nothing shown meanwhile, and of those, at another zoom.
+    blind: u32,
+    blind_zoom: u32,
+    last_shown: Option<Instant>,
     since: Instant,
+}
+
+/// What a turned frame cost, by part.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UpCost {
+    pub tiles: Duration,
+    pub rotate: Duration,
+    pub draw: Duration,
 }
 
 impl UpStats {
@@ -920,28 +1219,60 @@ impl UpStats {
             turned: 0,
             took: Duration::ZERO,
             most: Duration::ZERO,
+            cost: UpCost::default(),
+            gap_most: Duration::ZERO,
+            late: 0,
+            blind: 0,
+            blind_zoom: 0,
+            last_shown: None,
             since: Instant::now(),
         }
     }
 
-    fn turned(&mut self, took: Duration) {
+    fn turned(&mut self, took: Duration, cost: UpCost) {
         self.turned += 1;
         self.took += took;
         self.most = self.most.max(took);
+        self.cost.tiles += cost.tiles;
+        self.cost.rotate += cost.rotate;
+        self.cost.draw += cost.draw;
+    }
+
+    /// A picture reached the panel.
+    fn shown(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.last_shown {
+            let gap = now - last;
+            self.gap_most = self.gap_most.max(gap);
+            if gap > Duration::from_millis(LATE_MS) {
+                self.late += 1;
+            }
+        }
+        self.last_shown = Some(now);
     }
 
     fn frame(&mut self) {
         self.frames += 1;
         if self.since.elapsed() >= UP_STATS_EVERY {
+            let each = |d: Duration| d.as_millis() / u128::from(self.turned.max(1));
             log::info!(
-                "map: {} frames heading up in {} s, {} turned, {} ms each, {} ms at most",
+                "map: {} frames heading up in {} s, {} turned, {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
                 self.frames,
                 self.since.elapsed().as_secs(),
                 self.turned,
-                self.took.as_millis() / u128::from(self.turned.max(1)),
-                self.most.as_millis()
+                each(self.took),
+                each(self.cost.tiles),
+                each(self.cost.rotate),
+                each(self.cost.draw),
+                self.most.as_millis(),
+                self.late,
+                self.gap_most.as_millis(),
+                self.blind,
+                self.blind_zoom
             );
+            let last = self.last_shown;
             *self = Self::new();
+            self.last_shown = last;
         }
     }
 }
@@ -964,6 +1295,9 @@ fn draw_marker(
     }
 }
 
+/// Two pictures further apart than this, a refresh and a half at 60 Hz,
+/// missed one.
+const LATE_MS: u64 = 25;
 /// How often the cost of the heading-up frames is logged.
 const UP_STATS_EVERY: Duration = Duration::from_secs(30);
 
@@ -984,6 +1318,15 @@ const UP_TURN_ROOM: u32 = 32;
 /// How far the way up may be from a frame's before it is turned anew:
 /// the sine of 0.8 degrees, times 2^32 (two 65536-long ways crossed).
 const UP_TOLERANCE: i64 = 60_000_000;
+/// While a frame is turned anew, the one shown may be this far from the
+/// way up and is moved along still: the sine of 8 degrees, times 2^32.
+const UP_LOOSE: i64 = 597_000_000;
+/// Standing still, the drive is looked at every this many refreshes: a
+/// start is seen within a fifteenth of a second at 60 Hz.
+const STILL_EVERY: u32 = 4;
+/// A frame is turned for the way up this many milliseconds on: what
+/// turning one takes on the board, and the refresh it waits for.
+const SOON_MS: u64 = 60;
 
 /// The anchor on a frame whose window is at `window`.
 fn anchor_on(panel: (u32, u32), window: (u32, u32)) -> (i64, i64) {
@@ -1064,12 +1407,27 @@ impl UpHeld {
         size: (u32, u32),
         panel: (u32, u32),
     ) -> Option<(u32, u32)> {
-        if view.zoom != self.zoom {
-            return None;
-        }
+        self.window_within(view, h, size, panel, UP_TOLERANCE)
+    }
+
+    /// How far its way up is from `h`: the sine of the angle, times 2^32;
+    /// None when it is a right angle or more.
+    fn off(&self, h: (i64, i64)) -> Option<i64> {
         let cross = self.h.0 * h.1 - self.h.1 * h.0;
         let dot = self.h.0 * h.0 + self.h.1 * h.1;
-        if dot <= 0 || cross.abs() > UP_TOLERANCE {
+        (dot > 0).then_some(cross.abs())
+    }
+
+    /// As `window`, for a frame turned up to `tolerance` from `h`.
+    fn window_within(
+        &self,
+        view: &View,
+        h: (i64, i64),
+        size: (u32, u32),
+        panel: (u32, u32),
+        tolerance: i64,
+    ) -> Option<(u32, u32)> {
+        if view.zoom != self.zoom || self.off(h).is_none_or(|o| o > tolerance) {
             return None;
         }
         let c = self.sixteenth((view.x, view.y));
@@ -1112,6 +1470,7 @@ pub(crate) fn render_up(
     progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
+    cost: &mut UpCost,
 ) -> UpHeld {
     let size = out.size;
     let (pitch, chroma) = (out.pitch, out.chroma);
@@ -1143,7 +1502,10 @@ pub(crate) fn render_up(
     let ty1 = ys.max().unwrap_or(0).div_euclid(tile);
     let (cols, rows) = ((tx1 - tx0 + 1) as usize, (ty1 - ty0 + 1) as usize);
     {
+        let clock = Instant::now();
         let grid = tiles.grid(view.zoom, (tx0, ty0), cols, rows);
+        cost.tiles = clock.elapsed();
+        let clock = Instant::now();
         let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
         // From row `top`: its luma, and its chroma's place from there.
         let skip = top as usize * pitch;
@@ -1158,7 +1520,9 @@ pub(crate) fn render_up(
             across,
             down,
         );
+        cost.rotate = clock.elapsed();
     }
+    let drawing = Instant::now();
     if let Some(line) = route {
         let points: Vec<(i64, i64)> = line.iter().map(|&q| held.sixteenth(q)).collect();
         let split = progress.map(|q| (q.step, held.sixteenth(q.at)));
@@ -1220,6 +1584,7 @@ pub(crate) fn render_up(
         }
         None => {}
     }
+    cost.draw = drawing.elapsed();
     held
 }
 

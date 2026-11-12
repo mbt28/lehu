@@ -827,13 +827,27 @@ Everything runs on a thread of its own, so the screens and the input never
 wait for a decode.
 
 A drive moves the map by itself, from a thread of its own that wakes at
-every second refresh of the panel, so the map moves in even steps, thirty
-times a second.
+each refresh of the panel while the map moves (every fourth while it
+stands still, and nothing new is shown then). Each picture is placed
+where the drive will be when the panel shows it, the next refresh, by the
+refreshes' own times as the kernel stamps them, not by when the thread
+woke: the map moves in even steps at the panel's rate, sixty a second.
+The window moves in whole pixels, so at a slow speed far out it creeps a
+pixel at a time (at zoom 16 and 50 km/h in Budapest, about nine pixels a
+second).
 
 Heading up, the map is turned on the CPU into a picture a little larger
 than the panel, with some road ahead; driving on moves the window over it,
-and the map is turned anew only when the heading has changed by most of a
-degree or the road ahead runs out. The arrow is on a display plane of its
+and the map is turned anew when the heading has changed by most of a
+degree, the road ahead runs out, or the route's driven part falls behind
+the arrow. Turning one takes 40 to 70 ms on the F1C200s, longer than a
+refresh, so it is done on a thread of its own, below the pictures shown,
+for the heading expected 60 ms on: meanwhile the frame shown keeps
+moving, up to 8 degrees off and with its driven part up to 48 pixels
+behind. On the board, on a city drive with many bends, the map then shows
+about 59 pictures a second and misses 1 to 12 in 30 s; before, it showed
+29 and missed up to 154, each turn a hitch of a refresh or more. A change
+of zoom (near a turn) still waits for its first frame, about 0.1 to 0.2 s. The arrow is on a display plane of its
 own above the map, so the map moves under it without being redrawn; on a
 display without such a plane it is drawn into the map instead. The phone's decoder makes way while the map is shown,
 since both need video memory.

@@ -1404,6 +1404,7 @@ fn labelled_shot() {
                         None,
                         UP_ANCHOR,
                         0,
+                        &mut Default::default(),
                     );
                     let rgb = nv12_rgb(&buf, pitch, chroma, UP_WINDOW, (800, 480));
                     let file = shots.join(format!("names-{shades}-{place}-z{zoom}-{name}.png"));
@@ -1576,6 +1577,7 @@ fn labels_cost() {
                     None,
                     UP_ANCHOR,
                     0,
+                    &mut Default::default(),
                 );
             };
             // The tiles decoded and the names laid out first.
