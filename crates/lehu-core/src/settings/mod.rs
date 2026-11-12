@@ -312,6 +312,10 @@ pub struct Map {
     pub work: Option<MapPlace>,
     /// A short chime when the speed stays over the road's limit.
     pub speed_warning: bool,
+    /// Following a drive: 0, the map moves with the arrow; else it holds
+    /// still while the arrow moves on it, until the arrow is this many
+    /// pixels from its place (or the road turned), then catches up.
+    pub pointer_lead: u32,
 }
 
 /// A destination Map > Go to drove to: its name, the town it is in, and
@@ -509,6 +513,7 @@ impl Default for Map {
             home: None,
             work: None,
             speed_warning: true,
+            pointer_lead: 0,
         }
     }
 }

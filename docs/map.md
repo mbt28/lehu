@@ -841,6 +841,16 @@ chosen; a change waits for the speed to stay 5 km/h past the boundary for
 3 s. Near a turn it is a level closer than chosen, as town already is, so
 a town's turns change nothing. The - and + keys change the zoom chosen.
 
+Following a drive, the map's view is the drive's position and way up
+smoothed, each following it like a critically damped spring (a quarter
+of a second for the position, over half a second for the way up): a
+position from a GPS is a straight piece a second and its heading jumps at
+each fix, and the picture should not. The arrow keeps the drive's own
+position and way, so in a bend it may sit a little off its place and turn
+before the map. With `map.pointer-lead` set (pixels), the map holds still
+while the arrow moves on it, until the arrow is that far from its place
+or the road has turned 6 degrees, then glides after it in 0.4 s.
+
 Heading up, the map is turned on the CPU into a picture a little larger
 than the panel, with some road ahead; driving on moves the window over it,
 and the map is turned anew when the heading has changed by most of a
@@ -849,7 +859,11 @@ the arrow. Turning one takes 40 to 70 ms on the F1C200s, longer than a
 refresh, so it is done on a thread of its own, below the pictures shown,
 for the heading expected 60 ms on: meanwhile the frame shown keeps
 moving, up to 8 degrees off and with its driven part up to 48 pixels
-behind. On the board, on a city drive with many bends, the map then shows
+behind. While steering (a frame turned in the last 0.3 s), frames are
+turned at half the resolution from the next zoom out's tiles, a quarter
+of the pixels, and shown scaled twice by the display, so the map turns in
+small steps many times a second; without the names, which would be twice
+their size. Once the steering stops, a whole frame takes their place. On the board, on a city drive with many bends, the map then shows
 about 59 pictures a second and misses 1 to 12 in 30 s; before, it showed
 29 and missed up to 154, each turn a hitch of a refresh or more. A change
 of zoom is shown by the display's scaler: closer, the frame shown is

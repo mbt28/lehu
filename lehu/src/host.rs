@@ -1127,6 +1127,9 @@ impl AppHost {
     pub fn map_tick(&mut self) {
         self.map_check_poll();
         self.map_marks_show();
+        if let Some(viewer) = &self.map {
+            viewer.set_pointer_lead(self.settings.map.pointer_lead);
+        }
         let now = lehu_core::clock::now_ms();
         if self
             .map_arrival

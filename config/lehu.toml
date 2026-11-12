@@ -227,6 +227,11 @@ speed-cameras = false
 # A short soft chime when the speed stays more than 5 km/h over the road's
 # limit for 2 seconds; once, until the speed is back under it.
 speed-warning = true
+# Following a drive: 0, the map moves with the arrow all the time; else
+# the map holds still while the arrow moves on it, until the arrow is this
+# many pixels from its place or the road has turned 6 degrees, then glides
+# after it (in 0.4 s).
+pointer-lead = 0
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

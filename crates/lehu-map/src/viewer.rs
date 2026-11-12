@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use lehu_drm::{Canvas, Display, Show};
 
-use crate::drive::{Drive, NEAR_TURN_M, SpeedZoom, Steer};
+use crate::drive::{Camera, Drive, Hold, NEAR_TURN_M, SpeedZoom, Steer};
 use crate::hw::HwJpeg;
 use crate::labels::Names;
 use crate::nv12::{self, Surface};
@@ -81,6 +81,9 @@ struct Inner {
     /// The way up `SOON_MS` from now, while the map turns by itself: a
     /// frame turned now is drawn for it, being shown about then.
     heading_soon: Option<(i32, i32)>,
+    /// Following: 0, the map moves with the arrow; else held still until
+    /// the arrow is this many pixels from its place (`Hold`).
+    lead: u32,
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
@@ -179,6 +182,7 @@ impl Viewer {
                 cameras: None,
                 heading: None,
                 heading_soon: None,
+                lead: 0,
                 stop: false,
                 shown: false,
             }),
@@ -271,6 +275,16 @@ impl Viewer {
     }
 
     /// Draw this route (or none) under the marker.
+    /// Following a drive: 0, the map moves with the arrow; else it holds
+    /// still while the arrow moves this many pixels, then glides after it.
+    pub fn set_pointer_lead(&self, lead: u32) {
+        let mut inner = self.shared.lock();
+        if inner.lead != lead {
+            inner.lead = lead;
+            self.shared.drive_wake.notify_one();
+        }
+    }
+
     /// The speed cameras to draw (from [`CAMERA_ZOOM`] in), or none.
     pub fn set_cameras(&self, cameras: Option<CameraMarks>) {
         let mut inner = self.shared.lock();
@@ -450,7 +464,9 @@ fn drive(shared: &Shared, display: &Display) {
         libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param);
     }
     let mut steer = Steer::default();
+    let mut camera = Camera::default();
     let mut speed_zoom = SpeedZoom::default();
+    let mut hold = Hold::default();
     // When the last picture worked out was to be shown.
     let mut last: Option<Instant> = None;
     let mut next: Option<u32> = None;
@@ -473,6 +489,8 @@ fn drive(shared: &Shared, display: &Display) {
                 }
                 (last, next, seen) = (None, None, None);
                 speed_zoom = SpeedZoom::default();
+                hold = Hold::default();
+                camera = Camera::default();
                 inner = shared
                     .drive_wake
                     .wait(inner)
@@ -512,11 +530,14 @@ fn drive(shared: &Shared, display: &Display) {
         let fix = drive.track.at(ms);
         let since = last.map_or(0, |l| now.saturating_duration_since(l).as_millis() as u64);
         last = Some(now);
+        // The arrow: the drive's own way, lightly smoothed.
         let heading = steer.step(fix.heading, since);
+        // The map: the drive's position and way, smoothed (`Camera`).
+        let (view_at, view_up) = camera.step((fix.x, fix.y), fix.heading, since);
         // Where the way up will be once a frame turned now is shown.
         let soon = {
-            let mut ahead = steer;
-            ahead.step(fix.heading, SOON_MS)
+            let mut ahead = camera;
+            ahead.step((fix.x, fix.y), fix.heading, SOON_MS).1
         };
         let marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
         let progress = Some(Progress {
@@ -545,11 +566,14 @@ fn drive(shared: &Shared, display: &Display) {
                 };
                 let mut v = View {
                     zoom,
-                    x: fix.x,
-                    y: fix.y,
+                    x: view_at.0,
+                    y: view_at.1,
                 };
                 v.clamp(&drive.bounds);
-                (v, heading, soon)
+                // Held still while the arrow moves on it, when asked.
+                let lead = inner.lead;
+                let (v, up) = hold.step(v, view_up, lead, ms);
+                (v, up, if lead > 0 { up } else { soon })
             }
             None => (inner.want, None, None),
         };
@@ -769,15 +793,14 @@ fn run(
                             zoom: u.zoom,
                             ..want
                         };
-                        if let Some(w) = u.window_within(&at, h, size, panel, UP_LOOSE) {
+                        if let Some(src) = place_up(&u, &at, h, size, panel, UP_LOOSE) {
                             up_stats.frame();
-                            if show_up_scaled(
+                            if show_up_src(
                                 display,
                                 &mut sprites,
                                 &ups[a.frame],
                                 &u,
-                                w,
-                                sc,
+                                scaled_src(src, sc, panel),
                                 panel,
                                 position,
                             ) {
@@ -796,37 +819,31 @@ fn run(
             // A frame turned near enough this way that holds the window,
             // the one shown first: moving along is a commit, no drawing.
             // Without the sprite the marker is in the frame: each is new.
+            // A half frame only while steering: then a whole one.
+            let steering = last_turn.is_some_and(|t| t.elapsed() < STEER_MS);
             let placed = if sprites.is_some() {
-                recent_up
-                    .iter()
-                    .flatten()
-                    .copied()
-                    .chain(0..ups.len())
-                    .find_map(|i| {
-                        let u = up_held[i]?;
-                        fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
-                        u.window(&want, h, size, panel).map(|w| (i, w))
-                    })
+                let find = |halves: bool| {
+                    recent_up
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .chain(0..ups.len())
+                        .find_map(|i| {
+                            let u = up_held[i]?;
+                            (u.half == halves).then_some(())?;
+                            fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
+                            place_up(&u, &want, h, size, panel, UP_TOLERANCE).map(|src| (i, src))
+                        })
+                };
+                find(false).or_else(|| if steering { find(true) } else { None })
             } else {
                 None
             };
-            let (i, (x, y)) = match placed {
+            let (i, src) = match placed {
                 Some(p) => p,
                 None => {
                     let Some(i) = (0..ups.len()).find(|i| !recent_up.contains(&Some(*i))) else {
                         break;
-                    };
-                    // The window low in the frame, the road ahead above.
-                    // Turning, the next turn is soon: the panel and a
-                    // little more. Else all the room ahead; without the
-                    // sprite, the panel alone.
-                    let window = (UP_SIDE, size.1 - panel.1 - UP_BACK);
-                    let top = if sprites.is_none() {
-                        window.1
-                    } else if last_turn.is_some_and(|t| t.elapsed() < UP_TURNING) {
-                        window.1 - UP_TURN_ROOM
-                    } else {
-                        0
                     };
                     let started = Instant::now();
                     let mut cost = UpCost::default();
@@ -835,23 +852,57 @@ fn run(
                     let meanwhile = recent_up[0]
                         .filter(|_| sprites.is_some())
                         .and_then(|j| up_held[j].map(|u| (j, u)));
+                    // Steering, at the zoom shown: turned at half the
+                    // resolution, four times as quick, scaled up; a whole
+                    // frame once the steering stops.
+                    let half = steering
+                        && want.zoom > 1
+                        && meanwhile.is_some_and(|(_, u)| {
+                            u.zoom == want.zoom || (u.half && u.zoom + 1 == want.zoom)
+                        });
+                    let (frame_size, frame_panel) = if half {
+                        (halved(size), halved(panel))
+                    } else {
+                        (size, panel)
+                    };
+                    // The window low in the frame, the road ahead above.
+                    // Turning, the next turn is soon: the panel and a
+                    // little more. Else all the room ahead; without the
+                    // sprite, the panel alone.
+                    let d = if half { 2 } else { 1 };
+                    let window = (UP_SIDE / d, frame_size.1 - frame_panel.1 - UP_BACK / d);
+                    let top = if sprites.is_none() {
+                        window.1
+                    } else if last_turn.is_some_and(|t| t.elapsed() < UP_TURNING) {
+                        (window.1 - UP_TURN_ROOM / d) & !1
+                    } else {
+                        0
+                    };
                     let job = UpJob {
-                        view: want,
+                        view: if half {
+                            View {
+                                zoom: want.zoom - 1,
+                                ..want
+                            }
+                        } else {
+                            want
+                        },
                         // Drawn for the way up when it will be shown.
                         h: heading_soon.map_or(h, unit_up),
                         marker: baked,
                         progress,
-                        anchor: anchor_on(panel, window),
+                        anchor: anchor_on(frame_panel, window),
                         top,
                     };
                     // Closer: the frame shown is enlarged towards the new
                     // zoom while the new frame is drawn.
                     if let Some((j, u)) = meanwhile
-                        && job.view.zoom == u.zoom + 1
+                        && !u.half
+                        && want.zoom == u.zoom + 1
                     {
                         zoom_anim = Some(ZoomAnim {
                             frame: j,
-                            zoom: job.view.zoom,
+                            zoom: want.zoom,
                             s0: 1.0,
                             s1: 2.0,
                             start: Instant::now(),
@@ -874,7 +925,9 @@ fn run(
                                 zoom: zoom_anim.filter(|a| a.frame == j),
                             };
                             thread::scope(|scope| {
-                                let names = names.as_mut();
+                                // A half frame without the names: they
+                                // would be twice their size.
+                                let names = names.as_mut().filter(|_| !half);
                                 let tiles = &mut tiles;
                                 let (route, cameras) = (route.as_deref(), cameras.as_deref());
                                 let cost = &mut cost;
@@ -885,10 +938,12 @@ fn run(
                                         // SAFETY: nice() changes only this
                                         // thread's priority on Linux.
                                         unsafe { libc::nice(5) };
-                                        let held = render_up(
+                                        let mut out = surface(to);
+                                        out.size = frame_size;
+                                        let mut held = render_up(
                                             tiles,
                                             names,
-                                            &mut surface(to),
+                                            &mut out,
                                             &job.view,
                                             job.h,
                                             job.marker,
@@ -899,6 +954,7 @@ fn run(
                                             job.top,
                                             cost,
                                         );
+                                        held.half = half;
                                         shared.wake.notify_one();
                                         held
                                     });
@@ -912,7 +968,7 @@ fn run(
                                         }
                                         if !moving.any {
                                             up_stats.blind += 1;
-                                            if u.zoom != job.view.zoom {
+                                            if u.zoom != want.zoom && !u.half {
                                                 up_stats.blind_zoom += 1;
                                             }
                                         }
@@ -949,9 +1005,14 @@ fn run(
                     up_held[i] = Some(drawn);
                     last_turn = Some(Instant::now());
                     up_stats.turned(started.elapsed(), cost);
+                    if drawn.half {
+                        up_stats.halves += 1;
+                    }
                     // Further out: the new frame shown at the old scale,
                     // shrinking to its own.
-                    if meanwhile.is_some_and(|(_, u)| drawn.zoom + 1 == u.zoom) {
+                    if !drawn.half
+                        && meanwhile.is_some_and(|(_, u)| !u.half && drawn.zoom + 1 == u.zoom)
+                    {
                         zoom_anim = Some(ZoomAnim {
                             frame: i,
                             zoom: drawn.zoom,
@@ -970,12 +1031,12 @@ fn run(
                         (inner.want, inner.heading, inner.position, inner.progress)
                     };
                     let h_now = now.1.map_or(h, unit_up);
-                    match drawn.window_within(&now.0, h_now, size, panel, UP_LOOSE) {
-                        Some(w) => {
+                    match place_up(&drawn, &now.0, h_now, size, panel, UP_LOOSE) {
+                        Some(src) => {
                             want = now.0;
                             position = now.2;
                             progress = now.3;
-                            (i, w)
+                            (i, src)
                         }
                         None => {
                             shown = None;
@@ -987,7 +1048,7 @@ fn run(
             up_stats.frame();
             let held_i = up_held[i];
             if let Some(u) = held_i
-                && show_up(display, &mut sprites, &ups[i], &u, (x, y), position)
+                && show_up_src(display, &mut sprites, &ups[i], &u, src, panel, position)
             {
                 up_stats.shown();
                 recent_up = [Some(i), recent_up[0].filter(|&r| r != i)];
@@ -1212,28 +1273,35 @@ impl Moving<'_> {
         if !fresh_within(u.progress, progress, self.route, u.zoom, ROUTE_LAG_LOOSE) {
             return false;
         }
-        // At another zoom: enlarged towards a closer one, else (further
-        // out, a level) as it is until the new frame shrinks in.
-        let scale = match scaling {
-            Some(a) => a.scale(Instant::now()).unwrap_or(a.s1),
-            None if want.zoom + 1 == u.zoom || want.zoom == u.zoom => 1.0,
-            None => return false,
+        // A half frame serves the zoom past its own. A whole one at
+        // another zoom: enlarged towards a closer one, else (further out,
+        // a level) as it is until the new frame shrinks in.
+        let (at, scale) = if u.half {
+            (want, 1.0)
+        } else {
+            let scale = match scaling {
+                Some(a) => a.scale(Instant::now()).unwrap_or(a.s1),
+                None if want.zoom + 1 == u.zoom || want.zoom == u.zoom => 1.0,
+                None => return false,
+            };
+            (
+                View {
+                    zoom: u.zoom,
+                    ..want
+                },
+                scale,
+            )
         };
-        let at = View {
-            zoom: u.zoom,
-            ..want
-        };
-        let Some(w) = u.window_within(&at, h, self.size, self.panel, UP_LOOSE) else {
+        let Some(src) = place_up(&u, &at, h, self.size, self.panel, UP_LOOSE) else {
             return false;
         };
         stats.frame();
-        if show_up_scaled(
+        if show_up_src(
             self.display,
             self.sprites,
             self.canvas,
             &u,
-            w,
-            scale,
+            scaled_src(src, scale, self.panel),
             self.panel,
             position,
         ) {
@@ -1259,6 +1327,10 @@ struct ZoomAnim {
     start: Instant,
 }
 
+/// A turn this recent means the map is steering: frames are turned at
+/// half the resolution (quick) until it stops.
+const STEER_MS: Duration = Duration::from_millis(300);
+
 /// How long a change of zoom is shown taking.
 const ZOOM_MS: f32 = 250.0;
 
@@ -1275,85 +1347,101 @@ impl ZoomAnim {
     }
 }
 
-/// As `show_up`, the frame scaled by `scale` about the view's point on
-/// the panel (2: twice the size); 1 as it is.
-#[allow(clippy::too_many_arguments)]
-fn show_up_scaled(
+/// A frame or panel size halved, kept even.
+fn halved((w, h): (u32, u32)) -> (u32, u32) {
+    ((w / 2) & !1, (h / 2) & !1)
+}
+
+/// Where `view`, `h` up, lies on frame `u` (of `size`): the part of it the
+/// panel shows (x, y, width, height, the frame's pixels). A window the
+/// panel's size; on a half frame (a zoom further out, for the zoom past
+/// it) one half the size, shown scaled twice.
+fn place_up(
+    u: &UpHeld,
+    view: &View,
+    h: (i64, i64),
+    size: (u32, u32),
+    panel: (u32, u32),
+    tolerance: i64,
+) -> Option<[f32; 4]> {
+    let (at, size, panel) = if u.half {
+        if u.zoom + 1 != view.zoom {
+            return None;
+        }
+        (
+            View {
+                zoom: u.zoom,
+                ..*view
+            },
+            halved(size),
+            halved(panel),
+        )
+    } else {
+        (*view, size, panel)
+    };
+    let (x, y) = u.window_within(&at, h, size, panel, tolerance)?;
+    Some([x as f32, y as f32, panel.0 as f32, panel.1 as f32])
+}
+
+/// The part `src` scaled by `scale` about the view's point on the panel (2:
+/// twice the size); 1 as it is.
+fn scaled_src(src: [f32; 4], scale: f32, panel: (u32, u32)) -> [f32; 4] {
+    if (scale - 1.0).abs() < 1e-3 {
+        return src;
+    }
+    let a = panel_anchor(panel);
+    // The view's point in the part's own pixels.
+    let (ax, ay) = (
+        a.0 as f32 * src[2] / panel.0 as f32,
+        a.1 as f32 * src[3] / panel.1 as f32,
+    );
+    [
+        src[0] + ax * (1.0 - 1.0 / scale),
+        src[1] + ay * (1.0 - 1.0 / scale),
+        src[2] / scale,
+        src[3] / scale,
+    ]
+}
+
+/// Show the part `src` of the heading-up frame `canvas` (holding `u`) on
+/// the whole panel, scaled when it is not the panel's size, the marker on
+/// its sprite; a pending flip tried again a moment later. True when shown.
+fn show_up_src(
     display: &Display,
     sprites: &mut Option<Sprites>,
     canvas: &Canvas,
     u: &UpHeld,
-    (x, y): (u32, u32),
-    scale: f32,
+    src: [f32; 4],
     panel: (u32, u32),
     position: Option<Marker>,
 ) -> bool {
-    if (scale - 1.0).abs() < 1e-3 {
-        return show_up(display, sprites, canvas, u, (x, y), position);
+    let [sx, sy, sw, sh] = src;
+    if sx < 0.0
+        || sy < 0.0
+        || sw <= 0.0
+        || sx + sw > canvas.width() as f32
+        || sy + sh > canvas.height() as f32
+    {
+        return false;
     }
-    let a = panel_anchor(panel);
-    let (ax, ay) = (a.0 as f32, a.1 as f32);
-    // The part of the frame the panel shows: the view's point stays where
-    // it is on the panel.
-    let sx = x as f32 + ax * (1.0 - 1.0 / scale);
-    let sy = y as f32 + ay * (1.0 - 1.0 / scale);
-    let (sw, sh) = (panel.0 as f32 / scale, panel.1 as f32 / scale);
-    if sx < 0.0 || sy < 0.0 || sx + sw > canvas.width() as f32 || sy + sh > canvas.height() as f32 {
-        return show_up(display, sprites, canvas, u, (x, y), position);
-    }
-    let fixed = |v: f32| (v * 65536.0) as u32;
-    let src = [fixed(sx), fixed(sy), fixed(sw), fixed(sh)];
+    let k = panel.0 as f32 / sw;
+    let fixed = |v: f32| (v * 65536.0).round() as u32;
     let sprite = match (sprites.as_mut(), position) {
         (Some(sp), Some(m)) => {
             let (at, heading) = parts(m);
             let c = u.sixteenth(at);
             let on_panel = (
-                ((c.0 as f32 / 16.0 - sx) * scale).round() as i64,
-                ((c.1 as f32 / 16.0 - sy) * scale).round() as i64,
+                ((c.0 as f32 / 16.0 - sx) * k).round() as i64,
+                ((c.1 as f32 / 16.0 - sy) * k).round() as i64,
             );
             Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
         }
         _ => None,
     };
+    let src = [fixed(sx), fixed(sy), fixed(sw), fixed(sh)];
     let mut tries = 0;
     loop {
         match display.show_canvas_scaled(canvas, src, sprite) {
-            Show::Shown => return true,
-            Show::Busy if tries < 50 => {
-                tries += 1;
-                thread::sleep(BUSY_WAIT);
-            }
-            Show::Busy | Show::Failed => return false,
-        }
-    }
-}
-
-/// Show the heading-up frame `canvas` (holding `u`) with its window at
-/// `(x, y)`, the marker on its sprite; a pending flip tried again a
-/// moment later. True when shown.
-fn show_up(
-    display: &Display,
-    sprites: &mut Option<Sprites>,
-    canvas: &Canvas,
-    u: &UpHeld,
-    (x, y): (u32, u32),
-    position: Option<Marker>,
-) -> bool {
-    let sprite = match (sprites.as_mut(), position) {
-        (Some(sp), Some(m)) => {
-            let (at, heading) = parts(m);
-            let c = u.sixteenth(at);
-            let on_panel = (
-                ((c.0 + 8) >> 4) - i64::from(x),
-                ((c.1 + 8) >> 4) - i64::from(y),
-            );
-            Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
-        }
-        _ => None,
-    };
-    let mut tries = 0;
-    loop {
-        match display.show_canvas_with(canvas, x, y, sprite) {
             Show::Shown => return true,
             Show::Busy if tries < 50 => {
                 tries += 1;
@@ -1389,6 +1477,8 @@ struct UpStats {
     /// Turns with nothing shown meanwhile, and of those, at another zoom.
     blind: u32,
     blind_zoom: u32,
+    /// Turned at half the resolution.
+    halves: u32,
     last_shown: Option<Instant>,
     since: Instant,
 }
@@ -1413,6 +1503,7 @@ impl UpStats {
             late: 0,
             blind: 0,
             blind_zoom: 0,
+            halves: 0,
             last_shown: None,
             since: Instant::now(),
         }
@@ -1445,10 +1536,11 @@ impl UpStats {
         if self.since.elapsed() >= UP_STATS_EVERY {
             let each = |d: Duration| d.as_millis() / u128::from(self.turned.max(1));
             log::info!(
-                "map: {} frames heading up in {} s, {} turned, {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
+                "map: {} frames heading up in {} s, {} turned ({} at half resolution), {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
                 self.frames,
                 self.since.elapsed().as_secs(),
                 self.turned,
+                self.halves,
                 each(self.took),
                 each(self.cost.tiles),
                 each(self.cost.rotate),
@@ -1556,6 +1648,9 @@ pub(crate) struct UpHeld {
     anchor: (i64, i64),
     top: u32,
     progress: Option<Progress>,
+    /// Turned at half the resolution, a zoom further out, for the zoom
+    /// past it: shown scaled twice (while steering, as it is quick).
+    half: bool,
 }
 
 impl UpHeld {
@@ -1589,6 +1684,7 @@ impl UpHeld {
     /// Where the panel's window for `view`, `h` up, sits on this frame
     /// (`size`): when the frame is turned near enough that way and the
     /// window lies inside what it has drawn.
+    #[cfg(test)]
     fn window(
         &self,
         view: &View,
@@ -1671,6 +1767,7 @@ pub(crate) fn render_up(
         anchor,
         top,
         progress,
+        half: false,
     };
     let (p, across, down) = (held.p, held.across(), held.down());
     // The drawn part's corners on the map, for the tiles under them.
@@ -1983,6 +2080,7 @@ mod tests {
             anchor: anchor_on(PANEL, WINDOW),
             top,
             progress: None,
+            half: false,
         }
     }
 
@@ -2051,6 +2149,50 @@ mod tests {
         // Another zoom never shows on it.
         let out = View { zoom: 16, ..AT };
         assert_eq!(f.window(&out, turned(30.0), SIZE, PANEL), None);
+    }
+
+    #[test]
+    fn a_half_frame_serves_the_zoom_past_its_own_at_half_the_size() {
+        let (hs, hp) = (halved(SIZE), halved(PANEL));
+        let window = (UP_SIDE / 2, hs.1 - hp.1 - UP_BACK / 2);
+        let out = View { zoom: 16, ..AT };
+        let f = UpHeld {
+            half: true,
+            anchor: anchor_on(hp, window),
+            ..frame(&out, turned(0.0), 0)
+        };
+        // For zoom 17 (the view's), half the panel at the window.
+        let src = place_up(&f, &AT, turned(0.0), SIZE, PANEL, UP_TOLERANCE).unwrap();
+        assert_eq!(
+            src,
+            [window.0 as f32, window.1 as f32, hp.0 as f32, hp.1 as f32]
+        );
+        // Not for its own zoom, nor two past it.
+        assert!(place_up(&f, &out, turned(0.0), SIZE, PANEL, UP_TOLERANCE).is_none());
+        let far = View { zoom: 18, ..AT };
+        assert!(place_up(&f, &far, turned(0.0), SIZE, PANEL, UP_TOLERANCE).is_none());
+        // A whole frame: the panel's size.
+        let whole = frame(&AT, turned(0.0), 0);
+        let src = place_up(&whole, &AT, turned(0.0), SIZE, PANEL, UP_TOLERANCE).unwrap();
+        assert_eq!(src[2..], [800.0, 480.0]);
+    }
+
+    #[test]
+    fn scaling_keeps_the_view_s_point_where_it_is_on_the_panel() {
+        let a = panel_anchor(PANEL);
+        let src = [10.0, 20.0, 800.0, 480.0];
+        let twice = scaled_src(src, 2.0, PANEL);
+        assert_eq!(twice[2..], [400.0, 240.0]);
+        // The point under the anchor is the same frame pixel before and
+        // after: the source's left edge plus the anchor's share of it.
+        let under = |s: [f32; 4]| {
+            (
+                s[0] + a.0 as f32 * s[2] / 800.0,
+                s[1] + a.1 as f32 * s[3] / 480.0,
+            )
+        };
+        assert_eq!(under(src), under(twice));
+        assert_eq!(scaled_src(src, 1.0, PANEL), src);
     }
 
     #[test]
