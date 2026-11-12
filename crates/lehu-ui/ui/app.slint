@@ -1706,7 +1706,7 @@ component ScreenSettings inherits ListPage {
 
 // The map's data on the card: the region shown, stepped through those
 // there and taken with Enter (one damaged or for a newer LEHU says so and
-// is not taken), and whether the spoken prompts' voice is there.
+// is not taken), and the spoken prompts' voice, picked the same way.
 component ScreenMapSettings inherits ListPage {
     title: "Map";
     LevelRow {
@@ -1721,7 +1721,18 @@ component ScreenMapSettings inherits ListPage {
         clicked => { Bridge.pick-press(17); }
         step(direction) => { Bridge.pick-step(direction); }
     }
-    InfoLine { icon: "navigation"; label: "Voice"; value: Bridge.voice-label; }
+    LevelRow {
+        ring-key: "voice";
+        icon: "navigation";
+        label: "Voice";
+        value: Bridge.voice-label;
+        edit-text: Bridge.pick-value;
+        value-width: 400px;
+        long-value: true;
+        editing: Bridge.pick == 18;
+        clicked => { Bridge.pick-press(18); }
+        step(direction) => { Bridge.pick-step(direction); }
+    }
     if Bridge.map-hint != "": HorizontalLayout {
         padding-left: 24px;
         padding-right: 24px;

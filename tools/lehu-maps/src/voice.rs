@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Mehmet Tekbas
-//! The spoken prompts' voice: a Piper voice from rhasspy/piper-voices on
-//! Hugging Face. The prompts' phrases are English (scripts/voice-clips.py),
-//! so only the English voices are offered.
+//! The spoken prompts' voices: Piper voices from rhasspy/piper-voices on
+//! Hugging Face, in the languages scripts/voice-clips.py has the prompts'
+//! phrases in. Each goes to the card as a folder of its own, `voice/<key>`;
+//! the head unit's Settings > Map > Voice picks one.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -10,9 +11,18 @@ use std::collections::BTreeMap;
 pub const BASE: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 pub const VOICES_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json";
 pub const DEFAULT: &str = "en_GB-cori-high";
-/// The card's folder for the set, under `voice/`: the head unit asks for
-/// `voice/en` (crates/lehu-map/src/region.rs).
-pub const LANG: &str = "en";
+
+/// The languages the prompts' phrases are in (scripts/voice-clips.py's
+/// PHRASES), by their code, and their names.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("hu", "Hungarian"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("it", "Italian"),
+    ("tr", "Turkish"),
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Voice {
@@ -20,6 +30,8 @@ pub struct Voice {
     pub key: String,
     /// "Cori, British English, high".
     pub title: String,
+    /// "en": the phrases it speaks.
+    pub lang: String,
     /// The model and its config: (path under BASE, size, md5).
     pub onnx: (String, u64, String),
     pub config: (String, u64, String),
@@ -52,19 +64,28 @@ fn title(name: &str, code: &str, quality: &str) -> String {
     let lang = match code {
         "en_GB" => "British English",
         "en_US" => "American English",
-        c => c,
+        "es_MX" => "Mexican Spanish",
+        c => language(c).map_or(c, |(_, name)| name),
     };
     format!("{n}, {lang}, {quality}")
 }
 
-/// The English voices of voices.json, the default first, then by key.
+/// The language of a Piper language code (`hu_HU`), when the phrases are
+/// in it.
+pub fn language(code: &str) -> Option<(&'static str, &'static str)> {
+    let short = code.split('_').next().unwrap_or(code);
+    LANGUAGES.iter().copied().find(|(c, _)| *c == short)
+}
+
+/// The voices of voices.json in the phrases' languages: the default
+/// first, then by language (as LANGUAGES has them) and key.
 pub fn parse(json: &str) -> Result<Vec<Voice>, String> {
     let all: BTreeMap<String, Entry> =
         serde_json::from_str(json).map_err(|e| format!("Piper's voice list does not read: {e}"))?;
     let mut out: Vec<Voice> = all
         .into_iter()
-        .filter(|(_, e)| matches!(e.language.code.as_str(), "en_GB" | "en_US"))
         .filter_map(|(key, e)| {
+            let (lang, _) = language(&e.language.code)?;
             let pick = |suffix: &str| {
                 e.files
                     .iter()
@@ -73,14 +94,21 @@ pub fn parse(json: &str) -> Result<Vec<Voice>, String> {
             };
             Some(Voice {
                 title: title(&e.name, &e.language.code, &e.quality),
+                lang: lang.into(),
                 onnx: pick(".onnx")?,
                 config: pick(".onnx.json")?,
                 key,
             })
         })
         .collect();
-    out.sort_by_key(|v| (v.key != DEFAULT, v.key.clone()));
+    let order = |l: &str| LANGUAGES.iter().position(|(c, _)| *c == l);
+    out.sort_by_key(|v| (v.key != DEFAULT, order(&v.lang), v.key.clone()));
     Ok(out)
+}
+
+/// The card's folder for `v`, under its root: `voice/en_GB-cori-high`.
+pub fn folder(v: &Voice) -> String {
+    format!("{}/{}", crate::card::VOICE, v.key)
 }
 
 /// The default voice when the list cannot be fetched.
@@ -88,6 +116,7 @@ pub fn fallback() -> Vec<Voice> {
     vec![Voice {
         key: DEFAULT.into(),
         title: title("cori", "en_GB", "high"),
+        lang: "en".into(),
         onnx: (
             "en/en_GB/cori/high/en_GB-cori-high.onnx".into(),
             114_219_352,
@@ -110,6 +139,12 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"{
+      "cs_CZ-jirka-medium": {"key":"cs_CZ-jirka-medium","name":"jirka","language":{"code":"cs_CZ"},"quality":"medium",
+        "files":{"cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx":{"size_bytes":1,"md5_digest":"a"},
+                 "cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx.json":{"size_bytes":1,"md5_digest":"b"}}},
+      "hu_HU-anna-medium": {"key":"hu_HU-anna-medium","name":"anna","language":{"code":"hu_HU"},"quality":"medium",
+        "files":{"hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx":{"size_bytes":1,"md5_digest":"a"},
+                 "hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx.json":{"size_bytes":1,"md5_digest":"b"}}},
       "de_DE-thorsten-high": {"key":"de_DE-thorsten-high","name":"thorsten","language":{"code":"de_DE"},"quality":"high",
         "files":{"de/de_DE/thorsten/high/de_DE-thorsten-high.onnx":{"size_bytes":1,"md5_digest":"a"},
                  "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json":{"size_bytes":1,"md5_digest":"b"}}},
@@ -123,10 +158,22 @@ mod tests {
     }"#;
 
     #[test]
-    fn english_only_default_first() {
+    fn the_phrases_languages_default_first() {
         let v = parse(SAMPLE).unwrap();
         let keys: Vec<&str> = v.iter().map(|v| v.key.as_str()).collect();
-        assert_eq!(keys, ["en_GB-cori-high", "en_US-lessac-medium"]);
+        // Not Czech: the prompts have no phrases in it.
+        assert_eq!(
+            keys,
+            [
+                "en_GB-cori-high",
+                "en_US-lessac-medium",
+                "hu_HU-anna-medium",
+                "de_DE-thorsten-high"
+            ]
+        );
+        assert_eq!(v[2].title, "Anna, Hungarian, medium");
+        assert_eq!(v[2].lang, "hu");
+        assert_eq!(folder(&v[2]), "voice/hu_HU-anna-medium");
         assert_eq!(v[0], fallback()[0]);
         assert_eq!(v[1].title, "Lessac, American English, medium");
         assert_eq!(

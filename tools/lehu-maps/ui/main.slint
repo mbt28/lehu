@@ -2,18 +2,24 @@
 // Copyright (C) 2026 Mehmet Tekbas
 //
 // lehu-maps: one window. The regions on the left; on the right the chosen
-// region, the voice, the card, the one button that writes them, and how
+// region, the voices, the card, the one button that writes them, and how
 // it is going. The colours are the head unit's night palette
 // (crates/lehu-ui/ui/app.slint's Theme), the text a little brighter for a
 // desk.
 
-import { Button, ComboBox, LineEdit, ListView, ProgressIndicator, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, ProgressIndicator, ScrollView } from "std-widgets.slint";
 
 export struct AreaRow {
     name: string,
     // The parents, when the list is searched.
     path: string,
     depth: int,
+}
+
+// A voice to choose: "Anna, Hungarian, medium", ticked to be written.
+export struct VoiceRow {
+    title: string,
+    checked: bool,
 }
 
 export struct CardItem {
@@ -198,10 +204,13 @@ export component MainWindow inherits Window {
     in property <string> sel-size;
     in property <string> sel-preset;
 
-    // The voice.
-    in property <[string]> voices;
-    in-out property <int> voice-index;
-    callback voice-changed(int);
+    // The voices: each ticked is written, in a folder of its own; the
+    // head unit picks one.
+    in property <[VoiceRow]> voices;
+    in property <string> voices-chosen;
+    callback voice-toggled(int);
+    // No region: only the voices are written.
+    callback clear-region();
 
     // The card.
     in property <[string]> cards;
@@ -270,7 +279,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "Maps and the voice for the head unit's card";
+                    text: "Maps and voices for the head unit's card";
                     color: Theme.dim;
                     font-size: 13px;
                     vertical-alignment: center;
@@ -373,14 +382,23 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding: 14px;
                             spacing: 6px;
-                            Text {
-                                text: root.sel-name == "" ? "Choose a region" : root.sel-name;
-                                color: root.sel-name == "" ? Theme.dim : Theme.text;
-                                font-size: 22px;
-                                font-weight: 600;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: root.sel-name == "" ? "Choose a region" : root.sel-name;
+                                    color: root.sel-name == "" ? Theme.dim : Theme.text;
+                                    font-size: 22px;
+                                    font-weight: 600;
+                                    horizontal-stretch: 1;
+                                }
+                                if root.sel-name != "": Button {
+                                    text: "No region";
+                                    enabled: !root.busy;
+                                    clicked => { root.clear-region(); }
+                                }
                             }
                             if root.sel-name == "": WrapText {
-                                text: "Pick a country or region on the left. LEHU Maps downloads its OpenStreetMap extract, builds the map for the head unit and writes it to the card.";
+                                text: "Pick a country or region on the left. LEHU Maps downloads its OpenStreetMap extract, builds the map for the head unit and writes it to the card. With no region, only the voices ticked below are written.";
                                 color: Theme.dim;
                                 wrap: word-wrap;
                             }
@@ -406,17 +424,33 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 12px;
                                 Text {
-                                    text: "Voice";
+                                    text: "Voices";
                                     color: Theme.dim;
                                     width: 110px;
-                                    vertical-alignment: center;
                                 }
-                                ComboBox {
-                                    model: root.voices;
-                                    current-index <=> root.voice-index;
-                                    enabled: !root.busy;
-                                    selected => { root.voice-changed(self.current-index); }
+                                VerticalLayout {
+                                    spacing: 6px;
                                     horizontal-stretch: 1;
+                                    WrapText {
+                                        text: root.voices-chosen;
+                                        color: Theme.text;
+                                        wrap: word-wrap;
+                                    }
+                                    ListView {
+                                        height: 168px;
+                                        for v[i] in root.voices: CheckBox {
+                                            text: v.title;
+                                            checked: v.checked;
+                                            enabled: !root.busy;
+                                            toggled => { root.voice-toggled(i); }
+                                        }
+                                    }
+                                    Text {
+                                        text: "Each goes to the card in a folder of its own; the head unit's Settings > Map > Voice picks one.";
+                                        color: Theme.dim;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
                                 }
                             }
                             HorizontalLayout {

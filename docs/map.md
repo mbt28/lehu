@@ -112,14 +112,31 @@ announced late is worse than one not announced. `map.voice = false` turns
 them off, and so does the map menu's Voice row, at once.
 
 A prompt is put together from clips, WAV files of a phrase each ("In 500
-metres", "turn left", "then", "Take the second exit"), read from
-`map.voice-dir` as they are first needed: by default `/maps/voice/en` on
-the card's map partition ([below](#data-on-the-card)), or
-`/var/lib/lehu/voice/en` on a card without one. The clips are not in the
-system image: they are made on a PC and copied to the card. Without them the map guides in silence, and Settings > Map says
-the voice is not installed. They are made on a PC by `scripts/voice-clips.py`, with
+metres", "turn left", "then", "Take the second exit"), read from a voice's
+folder as they are first needed. The card's map partition can hold many
+voices, each in a folder of its own under `voice/` ([below](#data-on-the-card)):
+`/maps/voice/en_GB-cori-high`, `/maps/voice/hu_HU-anna-medium`.
+Settings > Map > Voice steps through them by name ("Anna, Hungarian,
+medium"), with the knob or the - and + keys, and Enter takes the one
+shown: it is `map.voice-dir` from then on, and the next prompt speaks with
+it. With none chosen (or the one chosen taken off the card), LEHU speaks
+with `/maps/voice/en` when the card has it (as the first lehu-maps wrote
+it), else the card's first English voice, else its first; on a card
+without the partition, `/var/lib/lehu/voice/en`. The clips are not in the
+system image: they are made on a PC and copied to the card. Without them
+the map guides in silence, and Settings > Map says the voice is not
+installed.
+
+They are made on a PC by `scripts/voice-clips.py`, with
 [Piper](https://github.com/OHF-voice/piper1-gpl), an offline speech
-synthesizer, and a voice from its catalogue. `en_GB-cori-high`, a British
+synthesizer, and a voice from its catalogue, in English, Hungarian,
+German, French, Spanish, Italian or Turkish: the script has the phrases
+in each, and the language is the voice's (`hu_HU-anna-medium` speaks
+Hungarian; `--lang` to say another). The board plays the clips of a
+prompt one after the other, so each language's phrases are written to read
+as one sentence that way ("Ötszáz méter múlva." + "Forduljon balra.",
+"In fünfhundert Metern" + "links abbiegen."); the clips' names, and so the
+head unit, are the same in every language. `en_GB-cori-high`, a British
 English voice, is in the public domain: its recordings are LibriVox's and
 the model was trained from scratch on them. Nothing is installed system
 wide:
@@ -128,15 +145,18 @@ wide:
 python3 -m venv voice-venv
 voice-venv/bin/pip install piper-tts
 voice-venv/bin/python -m piper.download_voices --data-dir voices en_GB-cori-high
-voice-venv/bin/python scripts/voice-clips.py voices/en_GB-cori-high.onnx voice/en \
-    --demo demo.wav
+voice-venv/bin/python scripts/voice-clips.py voices/en_GB-cori-high.onnx \
+    voice/en_GB-cori-high --demo demo.wav
 ```
 
-The script writes the forty-one clips, about 2.8 MB, into `voice/en`: 16-bit
+The script writes the forty-one clips, about 2.8 MB, into the folder: 16-bit
 mono PCM at 24 kHz, half the mixer's rate, their silent ends trimmed and
 all at one loudness, so the board only copies them. `--demo` also writes
 a few whole prompts, put together as the board does, to hear on the PC.
-Copy the directory to the card's map partition as `voice/en`. A clip
+`tools/lehu-maps` does all this for each voice ticked, and writes each to
+the card with a `map.toml` naming it (`title`, `lang`, the Piper `voice`)
+and every clip's size and sha256. By hand, copy the folder to the card's
+map partition under `voice/`. A clip
 that is missing is named once in the log, and the
 prompts that need it stay silent. Routes found on the board (below) are
 spoken the same way, and so is the speed camera warning ("Speed camera
@@ -705,7 +725,8 @@ with the scripts here.
   roads.bin            the road network
   cameras.bin          the speed cameras, for that roads.bin
   places.bin           the names to search, fuel, parking, charging
-/maps/voice/<lang>/    the spoken prompts' clips, e.g. /maps/voice/en
+/maps/voice/<voice>/   a voice's clips and its map.toml, one folder a voice,
+                       e.g. /maps/voice/hu_HU-anna-medium
 ```
 
 What navigation needs, and where it comes from (Luxembourg measured,
@@ -719,7 +740,7 @@ Hungary the region planned for):
 | Road network | routing, turns, speed limits, motorways, the main-road layer | `scripts/map-graph.py` | `roads.bin` | 7.0 MB | 68.6 MB |
 | Places | Go to's search, house numbers; fuel, parking, charging | `scripts/map-graph.py` | `places.bin` | 0.5 MB | 19.3 MB |
 | Speed cameras | the camera warning | `scripts/map-graph.py` (OSM `highway=speed_camera`) | `cameras.bin`, tied to its roads.bin | 1 kB, 39 cameras | 11.5 kB, 480 |
-| Voice clips | spoken prompts | `scripts/voice-clips.py` (Piper) | `/maps/voice/en/*.wav` | 2.8 MB (English) | the same |
+| Voice clips | spoken prompts | `scripts/voice-clips.py` (Piper) | `/maps/voice/<voice>/*.wav` | 2.8 MB a voice | the same |
 | Region description | versions, checks, where to open | `scripts/map-region.py` | `map.toml` | 1 KB | 1 KB |
 | Time zone | local arrival times | the system image's tzdata | `/usr/share/zoneinfo` | | Europe/Budapest |
 | Test drive | a fake position on the bench | `scripts/route-gpx.py` | anywhere, `map.fake-track` | 33 KB | |
@@ -743,7 +764,7 @@ regions on the card, with the knob or the - and + keys, and Enter takes
 the one shown; the map then opens on that region's own start. A region
 that cannot be shown says so as it is stepped past ("Needs a newer
 LEHU", "Damaged") and Enter leaves the region shown as it was. Settings >
-Map also says whether the voice is there.
+Map > Voice picks the voice the same way ([above](#spoken-prompts)).
 
 **Versions and checks.** `map.toml` names the layout the folder is in
 (`data-version`): a LEHU refuses a region of a later layout than it reads
@@ -761,12 +782,13 @@ on. A folder from before there was a `data-version` is read as before.
 
 The PC tool, [`tools/lehu-maps`](../tools/lehu-maps/README.md), is the
 way: a small window (Linux, Windows, macOS) where you pick a region from
-Geofabrik's list and a voice, and press **Write to card**. It downloads
+Geofabrik's list (or none) and any number of voices, and press **Write
+to card**. It downloads
 the extract (continuing one that stopped, checked by its md5), sets up
 its own Python environment, builds the region with
 `scripts/map-region.py` (`--estimate` first, to check the card's room;
-`--progress` for its bar), makes the voice's clips with
-`scripts/voice-clips.py`, and writes both to the card's LEHU-MAPS drive:
+`--progress` for its bar), makes each voice's clips with
+`scripts/voice-clips.py`, and writes them all to the card's LEHU-MAPS drive:
 into `.incoming/` first, every file read back and checked against its
 sha256, then renamed into place. Built regions are cached, so a second
 card is quick. It lists what is on the card, with Remove, and never
@@ -778,8 +800,8 @@ folder to the partition, with the card in the PC's reader:
 
 - **Windows:** put the card in a reader. Windows shows a drive called
   LEHU-MAPS (and offers to format the card's other partitions: say no).
-  Copy the region's folder (for example `hungary`) into it, and the
-  voice folder into `voice`, then eject the drive before taking the card
+  Copy the region's folder (for example `hungary`) into it, and each
+  voice's folder into `voice`, then eject the drive before taking the card
   out.
 - **macOS:** the card shows up as LEHU-MAPS in the Finder; copy the
   folder onto it and eject it. The Finder adds `._*` files beside the

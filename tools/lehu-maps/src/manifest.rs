@@ -38,6 +38,13 @@ pub struct Manifest {
     pub osm_date: String,
     #[serde(default)]
     pub preset: String,
+    /// A voice set's: "Anna, Hungarian, medium", "hu", the Piper voice.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub lang: String,
+    #[serde(default)]
+    pub voice: String,
     #[serde(default)]
     pub files: BTreeMap<String, FileSum>,
 }
@@ -129,10 +136,11 @@ fn toml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// `<dir>/map.toml` for a voice set, as map-region.py's `--voice-dir`
-/// writes it: the language as the name, the data version, and each
-/// clip's size and sha256. `voice` (the Piper voice) is noted in a comment.
-pub fn write_voice(dir: &Path, lang: &str, voice: &str) -> Result<Manifest> {
+/// `<dir>/map.toml` for a voice set: the language as the name (as the
+/// first head units read it), the data version, the title the head unit's
+/// Voice row shows, the language, the Piper voice, and each clip's size
+/// and sha256.
+pub fn write_voice(dir: &Path, lang: &str, voice: &str, title: &str) -> Result<Manifest> {
     let mut clips: Vec<String> = fs::read_dir(dir)
         .map_err(|e| io_err(dir.display(), e))?
         .flatten()
@@ -145,8 +153,11 @@ pub fn write_voice(dir: &Path, lang: &str, voice: &str) -> Result<Manifest> {
     }
     let mut text = format!(
         "# Written by lehu-maps: a set of spoken prompts, Piper voice {voice}.\n\
-         name = {}\ndata-version = {DATA_VERSION}\n\n[files]\n",
-        toml_str(lang)
+         name = {}\ndata-version = {DATA_VERSION}\ntitle = {}\nlang = {}\nvoice = {}\n\n[files]\n",
+        toml_str(lang),
+        toml_str(title),
+        toml_str(lang),
+        toml_str(voice)
     );
     for c in &clips {
         let p = dir.join(c);
@@ -241,8 +252,18 @@ pub(crate) mod tests {
         fs::write(t.path().join("turn-left.wav"), b"RIFF....").unwrap();
         fs::write(t.path().join("then.wav"), b"RIFF..").unwrap();
         fs::write(t.path().join("notes.txt"), b"x").unwrap();
-        let m = write_voice(t.path(), "en", "en_GB-cori-high").unwrap();
-        assert_eq!(m.name, "en");
+        let m = write_voice(
+            t.path(),
+            "hu",
+            "hu_HU-anna-medium",
+            "Anna, Hungarian, medium",
+        )
+        .unwrap();
+        assert_eq!(m.name, "hu");
+        assert_eq!(
+            (m.title.as_str(), m.lang.as_str(), m.voice.as_str()),
+            ("Anna, Hungarian, medium", "hu", "hu_HU-anna-medium")
+        );
         assert_eq!(m.files.len(), 2);
         let again = Manifest::read(t.path()).unwrap();
         assert_eq!(again, m);

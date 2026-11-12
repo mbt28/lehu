@@ -18,7 +18,7 @@ use crate::jobs::{self, Ctx, Event, Plan};
 use crate::python;
 use crate::util::{Cancel, Error, human_size, human_time};
 use crate::voice::{self, Voice};
-use crate::{AreaRow, CardItem, MainWindow};
+use crate::{AreaRow, CardItem, MainWindow, VoiceRow};
 
 /// What the window knows of a region before it is built.
 #[derive(Clone, Debug, Default)]
@@ -43,8 +43,8 @@ pub struct App {
     pub index_failed: bool,
 
     pub voices: Vec<Voice>,
-    /// The voice chosen; None for none.
-    pub voice: Option<usize>,
+    /// The voices ticked, by key, in the order they were.
+    pub chosen: Vec<String>,
 
     pub cards: Vec<Card>,
     pub card: Option<usize>,
@@ -84,6 +84,27 @@ impl App {
 
     pub fn area(&self) -> Option<&Area> {
         self.selected.and_then(|i| self.areas.get(i))
+    }
+
+    /// The voices ticked, in the list's order.
+    pub fn chosen_voices(&self) -> Vec<Voice> {
+        self.voices
+            .iter()
+            .filter(|v| self.chosen.contains(&v.key))
+            .cloned()
+            .collect()
+    }
+
+    /// Tick or untick the voice at `i` of the list.
+    pub fn toggle_voice(&mut self, i: usize) {
+        let Some(key) = self.voices.get(i).map(|v| v.key.clone()) else {
+            return;
+        };
+        if let Some(at) = self.chosen.iter().position(|k| *k == key) {
+            self.chosen.remove(at);
+        } else {
+            self.chosen.push(key);
+        }
     }
 
     pub fn set_areas(&mut self, areas: Vec<Area>) {
@@ -131,17 +152,17 @@ impl App {
         if let Some(p) = &self.python_problem {
             return Some(p.clone());
         }
-        let Some(area) = self.area() else {
-            return Some("Choose a region on the left.".into());
-        };
+        if self.area().is_none() && self.chosen.is_empty() {
+            return Some("Choose a region on the left, or a voice.".into());
+        }
         let Some(card) = self.target() else {
             return Some(format!(
                 "Put the card in: no {} drive found. Or type the path of a folder.",
                 card::LABEL
             ));
         };
-        if let (Some(need), Some((free, _))) =
-            (self.info.get(&area.id).and_then(|i| i.need), self.space)
+        if let (Some(area), Some((free, _))) = (self.area(), self.space)
+            && let Some(need) = self.info.get(&area.id).and_then(|i| i.need)
         {
             let on_card = self
                 .contents
@@ -160,6 +181,21 @@ impl App {
             }
         }
         None
+    }
+}
+
+/// "No voice: no spoken prompts", "Cori, British English, high", "2 voices:
+/// Cori, Anna".
+pub fn voices_chosen(v: &[Voice]) -> String {
+    let first = |v: &Voice| v.title.split(',').next().unwrap_or_default().to_string();
+    match v {
+        [] => "No voice: no spoken prompts.".into(),
+        [one] => one.title.clone(),
+        many => format!(
+            "{} voices: {}",
+            many.len(),
+            many.iter().map(first).collect::<Vec<_>>().join(", ")
+        ),
     }
 }
 
@@ -231,12 +267,18 @@ pub fn apply(ui: &MainWindow, app: &mut App) {
         }
     }
 
-    let mut voices: Vec<SharedString> = app.voices.iter().map(|v| v.title.clone().into()).collect();
-    voices.push("No voice (no spoken prompts)".into());
+    let voices: Vec<VoiceRow> = app
+        .voices
+        .iter()
+        .map(|v| VoiceRow {
+            title: v.title.clone().into(),
+            checked: app.chosen.contains(&v.key),
+        })
+        .collect();
     if !same(&ui.get_voices(), &voices) {
         ui.set_voices(ModelRc::new(VecModel::from(voices)));
     }
-    ui.set_voice_index(app.voice.map_or(app.voices.len() as i32, |v| v as i32));
+    ui.set_voices_chosen(voices_chosen(&app.chosen_voices()).into());
 
     let cards: Vec<SharedString> = app.cards.iter().map(|c| c.title.clone().into()).collect();
     if !same(&ui.get_cards(), &cards) {
@@ -462,16 +504,14 @@ pub fn load_voices(weak: Weak<MainWindow>, shared: Shared) {
             .and_then(|t| voice::parse(&t).ok())
             .filter(|v| !v.is_empty());
         post(&weak, &shared, move |app| {
-            let keep = app.voice.map(|v| app.voices[v].key.clone());
             match voices {
                 Some(v) => app.voices = v,
                 None => app
                     .log("Piper's voice list could not be had: only the default voice is offered"),
             }
-            // The voice chosen stays chosen; "No voice" stays none.
-            if let Some(key) = keep {
-                app.voice = app.voices.iter().position(|v| v.key == key).or(Some(0));
-            }
+            // The voices ticked stay ticked, when the list has them.
+            let keys: Vec<String> = app.voices.iter().map(|v| v.key.clone()).collect();
+            app.chosen.retain(|k| keys.contains(k));
         });
     });
 }
@@ -581,7 +621,7 @@ pub fn write(weak: Weak<MainWindow>, shared: Shared) {
         if app.write_reason().is_some() {
             return;
         }
-        let (Some(area), Some(card), Some(ctx)) =
+        let (area, Some(card), Some(ctx)) =
             (app.area().cloned(), app.target().cloned(), app.ctx.clone())
         else {
             return;
@@ -597,12 +637,19 @@ pub fn write(weak: Weak<MainWindow>, shared: Shared) {
         app.progress = -1.0;
         app.detail.clear();
         let plan = Plan {
-            preset: geofabrik::preset(&area.id).into(),
-            voice: app.voice.and_then(|v| app.voices.get(v).cloned()),
+            preset: area
+                .as_ref()
+                .map_or("auto", |a| geofabrik::preset(&a.id))
+                .into(),
+            voices: app.chosen_voices(),
             card: card.root.clone(),
             area,
         };
-        app.log(format!("Writing {} to {}", plan.area.name, card.title));
+        let what = plan.area.as_ref().map_or_else(
+            || voices_chosen(&plan.voices),
+            |a| format!("{} and {}", a.name, voices_chosen(&plan.voices)),
+        );
+        app.log(format!("Writing {what} to {}", card.title));
         (ctx, plan)
     };
     post(&weak, &shared, |_| {});
@@ -610,7 +657,7 @@ pub fn write(weak: Weak<MainWindow>, shared: Shared) {
         let mut rep = Reporter::new(weak.clone(), shared.clone());
         let r = jobs::write_to_card(&ctx, &plan, &mut |e| rep.event(e));
         rep.flush();
-        let id = plan.area.id.clone();
+        let id = plan.area.as_ref().map(|a| a.id.clone());
         post(&weak, &shared, move |app| {
             app.busy = false;
             app.cancel = None;
@@ -631,14 +678,15 @@ pub fn write(weak: Weak<MainWindow>, shared: Shared) {
                     app.status_kind = 2;
                 }
             }
-            app.info.remove(&id);
+            if let Some(id) = &id {
+                app.info.remove(id);
+            }
         });
         refresh_cards(weak.clone(), shared.clone());
-        let area = lock(&shared)
-            .areas
-            .iter()
-            .find(|a| a.id == plan.area.id)
-            .cloned();
+        let area = plan
+            .area
+            .as_ref()
+            .and_then(|p| lock(&shared).areas.iter().find(|a| a.id == p.id).cloned());
         if let Some(a) = area {
             load_info(weak, shared, a);
         }
@@ -669,9 +717,19 @@ pub fn connect(ui: &MainWindow, shared: &Shared) {
     let (w, s) = (ui.as_weak(), shared.clone());
     ui.on_retry_index(move || load_index(w.clone(), s.clone()));
     let (w, s) = (ui.as_weak(), shared.clone());
-    ui.on_voice_changed(move |i| {
+    ui.on_voice_toggled(move |i| {
         post(&w, &s, move |app| {
-            app.voice = usize::try_from(i).ok().filter(|&i| i < app.voices.len());
+            if let Ok(i) = usize::try_from(i) {
+                app.toggle_voice(i);
+            }
+        });
+    });
+    let (w, s) = (ui.as_weak(), shared.clone());
+    ui.on_clear_region(move || {
+        post(&w, &s, |app| {
+            app.selected = None;
+            app.areas_dirty = true;
+            app.status.clear();
         });
     });
     let (w, s) = (ui.as_weak(), shared.clone());

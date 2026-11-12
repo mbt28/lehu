@@ -386,7 +386,7 @@ impl Ctx {
             .cache
             .join("voices")
             .join(format!("{}-{}", v.key, &phrases[..8]))
-            .join(voice::LANG);
+            .join(&v.key);
         if let Ok(m) = Manifest::read(&out)
             && m.check_sizes(&out).is_ok()
         {
@@ -423,12 +423,16 @@ impl Ctx {
         fs::create_dir_all(&out).map_err(|e| io_err(out.display(), e))?;
         let onnx = model_dir.join(v.onnx.0.rsplit('/').next().unwrap_or_default());
         let mut c = proc::command(py);
-        c.arg(&script).arg(&onnx).arg(&out);
+        c.arg(&script)
+            .arg(&onnx)
+            .arg(&out)
+            .arg("--lang")
+            .arg(&v.lang);
         let r = proc::run(c, &self.cancel, &mut |_, l| {
             report(Event::Log(l.to_string()));
             Ok(())
         })
-        .and_then(|()| manifest::write_voice(&out, voice::LANG, &v.key));
+        .and_then(|()| manifest::write_voice(&out, &v.lang, &v.key, &v.title));
         match r {
             Ok(m) => Ok((out, m)),
             Err(e) => {
@@ -446,12 +450,13 @@ fn sidecar(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// What "Write to card" does.
+/// What "Write to card" does: the region (none: only the voices), and
+/// the voices, each to a folder of its own.
 #[derive(Clone, Debug)]
 pub struct Plan {
-    pub area: Area,
+    pub area: Option<Area>,
     pub preset: String,
-    pub voice: Option<Voice>,
+    pub voices: Vec<Voice>,
     pub card: PathBuf,
 }
 
@@ -477,8 +482,6 @@ pub fn room(card: &Path, need: u64) -> Result<()> {
 
 /// The whole of "Write to card". What it wrote, for the window.
 pub fn write_to_card(ctx: &Ctx, plan: &Plan, report: Report) -> Result<String> {
-    let area = &plan.area;
-    let folder = geofabrik::folder(&area.id);
     if !plan.card.is_dir() {
         return Err(format!(
             "{} is not there any more: is the card still in?",
@@ -486,53 +489,134 @@ pub fn write_to_card(ctx: &Ctx, plan: &Plan, report: Report) -> Result<String> {
         )
         .into());
     }
-    ctx.scripts()?;
-    let ex = ctx.fetch_extract(area, report)?;
-    ctx.cancel.check()?;
-    let py = ctx.python(report)?;
-    ctx.cancel.check()?;
-    let voice_need = if plan.voice.is_some() { VOICE_BYTES } else { 0 };
-    let out = ctx.build_dir(area, &ex, &plan.preset);
-    if Manifest::read(&out).is_err() {
-        report(Event::Stage("Estimating the size".into()));
-        let (bytes, secs) = ctx.estimate(&py, &ex.path, &plan.preset)?;
-        report(Event::Log(format!(
-            "Estimate: {}, {}",
-            human_size(bytes),
-            crate::util::human_time(secs)
-        )));
-        room(&plan.card, bytes + voice_need)?;
+    if plan.area.is_none() && plan.voices.is_empty() {
+        return Err("Nothing to write: choose a region or a voice.".into());
     }
-    let (built, m) = ctx.build_region(&py, area, &ex, &plan.preset, report)?;
-    let voice = match &plan.voice {
-        Some(v) => Some(ctx.build_voice(&py, v, report)?),
+    ctx.scripts()?;
+    let voice_need = VOICE_BYTES * plan.voices.len() as u64;
+    // The region's extract first: a download that fails says so before
+    // anything is built.
+    let ex = match &plan.area {
+        Some(area) => {
+            let ex = ctx.fetch_extract(area, report)?;
+            ctx.cancel.check()?;
+            Some(ex)
+        }
         None => None,
     };
-    let mut wrote = Vec::new();
-    if same_on_card(&plan.card, &folder, &m) {
-        report(Event::Log(format!(
-            "{} is on the card already, the same copy",
-            area.name
-        )));
-    } else {
-        room(&plan.card, m.size() + voice_need)?;
-        copy(ctx, &built, &plan.card, &folder, &area.name, report)?;
-        wrote.push(area.name.clone());
+    let py = ctx.python(report)?;
+    ctx.cancel.check()?;
+    let region = match (&plan.area, &ex) {
+        (Some(area), Some(ex)) => {
+            let out = ctx.build_dir(area, ex, &plan.preset);
+            if Manifest::read(&out).is_err() {
+                report(Event::Stage("Estimating the size".into()));
+                let (bytes, secs) = ctx.estimate(&py, &ex.path, &plan.preset)?;
+                report(Event::Log(format!(
+                    "Estimate: {}, {}",
+                    human_size(bytes),
+                    crate::util::human_time(secs)
+                )));
+                room(&plan.card, bytes + voice_need)?;
+            }
+            Some((area, ctx.build_region(&py, area, ex, &plan.preset, report)?))
+        }
+        _ => {
+            room(&plan.card, voice_need)?;
+            None
+        }
+    };
+    let mut voices = Vec::with_capacity(plan.voices.len());
+    for v in &plan.voices {
+        let (dir, m) = ctx.build_voice(&py, v, report)?;
+        voices.push((v, dir, m));
+        ctx.cancel.check()?;
     }
-    if let Some((dir, vm)) = voice {
-        let rel = format!("{}/{}", card::VOICE, voice::LANG);
-        if !same_on_card(&plan.card, &rel, &vm) {
-            copy(ctx, &dir, &plan.card, &rel, "the voice", report)?;
-            wrote.push("the voice".into());
+    // What was written and what was there already: the region's name, the
+    // voices' first names ("Cori, British English, high": Cori).
+    let (mut wrote, mut kept) = (Written::default(), Written::default());
+    if let Some((area, (built, m))) = region {
+        let folder = geofabrik::folder(&area.id);
+        if same_on_card(&plan.card, &folder, &m) {
+            report(Event::Log(format!(
+                "{} is on the card already, the same copy",
+                area.name
+            )));
+            kept.region = Some(area.name.clone());
+        } else {
+            room(&plan.card, m.size() + voice_need)?;
+            copy(ctx, &built, &plan.card, &folder, &area.name, report)?;
+            wrote.region = Some(area.name.clone());
+        }
+    }
+    for (v, dir, vm) in voices {
+        let rel = voice::folder(v);
+        let what = format!("the voice {}", v.title);
+        let name = v.title.split(',').next().unwrap_or(&v.key).to_string();
+        if same_on_card(&plan.card, &rel, &vm) {
+            report(Event::Log(format!("{what} is on the card already")));
+            kept.voices.push(name);
+        } else {
+            copy(ctx, &dir, &plan.card, &rel, &what, report)?;
+            wrote.voices.push(name);
         }
     }
     Ok(if wrote.is_empty() {
-        format!("{} was on the card already. Nothing written.", area.name)
+        format!(
+            "{} on the card already. Nothing written.",
+            capital(&kept.said())
+        )
     } else {
         format!(
             "{} written and checked. Eject the card safely before you take it out.",
-            wrote.join(" and ")
+            capital(&wrote.said())
         )
+    })
+}
+
+/// A region and voices, as a message names them.
+#[derive(Default)]
+struct Written {
+    region: Option<String>,
+    voices: Vec<String>,
+}
+
+impl Written {
+    fn is_empty(&self) -> bool {
+        self.region.is_none() && self.voices.is_empty()
+    }
+
+    /// "Hungary and the voices Cori and Anna", "the voice Anna".
+    fn said(&self) -> String {
+        let voices = match self.voices.as_slice() {
+            [] => None,
+            [one] => Some(format!("the voice {one}")),
+            many => Some(format!("the voices {}", and_list(many))),
+        };
+        and_list(
+            &self
+                .region
+                .iter()
+                .cloned()
+                .chain(voices)
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+/// "a", "a and b", "a, b and c".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| {
+        f.to_uppercase().collect::<String>() + c.as_str()
     })
 }
 
@@ -694,6 +778,25 @@ print("@done", flush=True)
         assert!(dir.ends_with("abcdef01-auto"));
         assert!(!dir.exists());
         assert_eq!(fs::read_dir(dir.parent().unwrap()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn what_was_written_is_named() {
+        let w = |region: Option<&str>, voices: &[&str]| Written {
+            region: region.map(Into::into),
+            voices: voices.iter().map(|v| v.to_string()).collect(),
+        };
+        assert_eq!(
+            w(Some("Hungary"), &["Cori", "Anna"]).said(),
+            "Hungary and the voices Cori and Anna"
+        );
+        assert_eq!(w(None, &["Anna"]).said(), "the voice Anna");
+        assert_eq!(
+            w(None, &["Anna", "Imre", "Berta"]).said(),
+            "the voices Anna, Imre and Berta"
+        );
+        assert_eq!(w(Some("Hungary"), &[]).said(), "Hungary");
+        assert!(w(None, &[]).is_empty());
     }
 
     #[test]

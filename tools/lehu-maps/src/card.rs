@@ -287,7 +287,9 @@ pub fn folder(path: &Path) -> Card {
 fn item(root: &Path, rel: String) -> Item {
     match Manifest::read(&root.join(&rel)) {
         Ok(m) => Item {
-            name: if m.name.is_empty() {
+            name: if !m.title.is_empty() {
+                m.title.clone()
+            } else if m.name.is_empty() {
                 rel.clone()
             } else {
                 m.name.clone()
@@ -411,7 +413,7 @@ mod tests {
         let v = t.path().join("voice").join("en");
         fs::create_dir_all(&v).unwrap();
         fs::write(v.join("then.wav"), b"RIFF").unwrap();
-        manifest::write_voice(&v, "en", "en_GB-cori-high").unwrap();
+        manifest::write_voice(&v, "en", "en_GB-cori-high", "Cori, British English, high").unwrap();
         let c = contents(t.path());
         let names: Vec<&str> = c.regions.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["Hungary", "Luxembourg"]);
@@ -420,6 +422,7 @@ mod tests {
         assert_eq!(c.regions[0].problem, None);
         assert_eq!(c.voices.len(), 1);
         assert_eq!(c.voices[0].rel, "voice/en");
+        assert_eq!(c.voices[0].name, "Cori, British English, high");
         remove(t.path(), "luxembourg").unwrap();
         remove(t.path(), "voice/en").unwrap();
         assert!(remove(t.path(), "photos").is_err());

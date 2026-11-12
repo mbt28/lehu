@@ -477,6 +477,7 @@ struct State<H> {
     // ── Settings > Map ──────────────────────────────────────────────────
     /// The regions as listed when Settings or its Map screen last opened.
     regions: Vec<crate::host::MapRegion>,
+    voices: Vec<crate::host::MapVoice>,
     regions_gen: Option<u32>,
     /// The screen the last pump saw, to read the regions again on opening.
     regions_screen: i32,
@@ -677,6 +678,7 @@ impl<H: Host> State<H> {
             p_output_label: Last::default(),
             pick_list: Vec::new(),
             regions: Vec::new(),
+            voices: Vec::new(),
             regions_gen: None,
             regions_screen: -1,
             p_region_label: Last::default(),

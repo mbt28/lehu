@@ -33,10 +33,10 @@ use slint::ComponentHandle;
 slint::include_modules!();
 
 const HELP: &str = "\
-lehu-maps: maps and the voice for LEHU's SD card
+lehu-maps: maps and voices for LEHU's SD card
 
     lehu-maps [--scripts DIR] [--workers N] [--card DIR]
-    lehu-maps --write REGION --card DIR [--voice KEY|none] [--scripts DIR] [--workers N]
+    lehu-maps --write REGION|none --card DIR [--voice KEY|none]... [--scripts DIR] [--workers N]
     lehu-maps --screenshot DIR
 
   --scripts DIR     the folder with map-region.py (or a LEHU checkout);
@@ -44,8 +44,10 @@ lehu-maps: maps and the voice for LEHU's SD card
   --workers N       processes drawing tiles (default: the cores less one)
   --card DIR        a folder to write to, instead of a LEHU-MAPS drive
   --write REGION    without the window: write Geofabrik's REGION (its id,
-                    e.g. luxembourg) to --card as Write to card does, with
-                    the voice --voice (en_GB-cori-high unless named)
+                    e.g. luxembourg; none for the voices alone) to --card
+                    as Write to card does, with the voices --voice names
+                    (Piper's keys, e.g. hu_HU-anna-medium; one --voice
+                    each, or a comma list; en_GB-cori-high unless named)
   --screenshot DIR  draw the window's states into DIR as PNGs, and exit
 
 The cache (extracts, the Python environment, built regions) is in
@@ -58,7 +60,8 @@ struct Args {
     card: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     write: Option<String>,
-    voice: Option<String>,
+    /// The voices named; `none` for none.
+    voices: Vec<String>,
 }
 
 fn args() -> Result<Args, String> {
@@ -71,7 +74,13 @@ fn args() -> Result<Args, String> {
             "--card" => a.card = Some(value("--card")?.into()),
             "--screenshot" => a.screenshot = Some(value("--screenshot")?.into()),
             "--write" => a.write = Some(value("--write")?.to_string_lossy().into_owned()),
-            "--voice" => a.voice = Some(value("--voice")?.to_string_lossy().into_owned()),
+            "--voice" => a.voices.extend(
+                value("--voice")?
+                    .to_string_lossy()
+                    .split(',')
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty()),
+            ),
             "--workers" => {
                 let v = value("--workers")?;
                 a.workers = Some(
@@ -142,30 +151,53 @@ fn headless(a: &Args) -> Result<String, String> {
         .http
         .text(geofabrik::INDEX_URL)
         .map_err(|e| e.to_string())?;
-    let area = geofabrik::parse(&index)?
-        .into_iter()
-        .find(|x| x.id == id)
-        .ok_or_else(|| format!("{id}: not in Geofabrik's index"))?;
-    let voice = match a.voice.as_deref() {
-        Some("none") => None,
-        want => {
-            let key = want.unwrap_or(voice::DEFAULT);
-            let list = ctx
-                .http
-                .text(voice::VOICES_URL)
-                .ok()
-                .and_then(|t| voice::parse(&t).ok())
-                .unwrap_or_else(voice::fallback);
-            Some(
-                list.into_iter()
-                    .find(|v| v.key == key)
-                    .ok_or_else(|| format!("{key}: no such English voice"))?,
-            )
-        }
+    let area = if id == "none" {
+        None
+    } else {
+        Some(
+            geofabrik::parse(&index)?
+                .into_iter()
+                .find(|x| x.id == id)
+                .ok_or_else(|| format!("{id}: not in Geofabrik's index"))?,
+        )
+    };
+    let keys: Vec<String> = if a.voices.is_empty() {
+        vec![voice::DEFAULT.into()]
+    } else if a.voices.iter().any(|k| k == "none") {
+        Vec::new()
+    } else {
+        a.voices.clone()
+    };
+    let voices = if keys.is_empty() {
+        Vec::new()
+    } else {
+        let list = ctx
+            .http
+            .text(voice::VOICES_URL)
+            .ok()
+            .and_then(|t| voice::parse(&t).ok())
+            .unwrap_or_else(voice::fallback);
+        keys.iter()
+            .map(|key| {
+                list.iter().find(|v| v.key == *key).cloned().ok_or_else(|| {
+                    format!(
+                        "{key}: no such voice in Piper's list in a language the prompts speak ({})",
+                        voice::LANGUAGES
+                            .iter()
+                            .map(|(_, n)| *n)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
     };
     let plan = jobs::Plan {
-        preset: geofabrik::preset(&area.id).into(),
-        voice,
+        preset: area
+            .as_ref()
+            .map_or("auto", |a| geofabrik::preset(&a.id))
+            .into(),
+        voices,
         card,
         area,
     };
@@ -191,7 +223,7 @@ fn run(a: Args) -> Result<(), slint::PlatformError> {
     let ctx = ctx(&a);
     let mut state = app::App {
         voices: voice::fallback(),
-        voice: Some(0),
+        chosen: vec![voice::DEFAULT.into()],
         ..app::App::default()
     };
     state.log(format!("Cache: {}", ctx.cache.display()));

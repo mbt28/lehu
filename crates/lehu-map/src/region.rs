@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! /maps/<region>/   map.toml, tiles.pmtiles, labels.pack, roads.bin, ...
-//! /maps/voice/<lang>/  the spoken prompts' clips
+//! /maps/voice/<voice>/ the spoken prompts' clips, one folder a voice
 //! ```
 //!
 //! The partition is written only on a PC (the card in its reader); LEHU
@@ -286,15 +286,94 @@ pub fn default_dir(root: &Path, checks: Option<&Checks>) -> PathBuf {
         .map_or_else(|| PathBuf::from(OLD_MAP_DIR), |l| l.dir)
 }
 
-/// The voice set to use when the settings name none: `<root>/voice/<lang>`
-/// when the map partition has it, else the folder from before.
+/// The voice set to use when the settings name none (or one no longer
+/// there): `<root>/voice/en` when the map partition has it (as the first
+/// lehu-maps wrote it), else its first English voice, else its first
+/// voice; the folder from before without one.
 pub fn default_voice_dir(root: &Path) -> PathBuf {
     let dir = root.join(VOICE).join(DEFAULT_LANG);
     if dir.is_dir() {
-        dir
-    } else {
-        PathBuf::from(OLD_VOICE_DIR)
+        return dir;
     }
+    let sets = voice_sets(root);
+    sets.iter()
+        .find(|v| v.lang == DEFAULT_LANG)
+        .or(sets.first())
+        .map_or_else(|| PathBuf::from(OLD_VOICE_DIR), |v| v.dir.clone())
+}
+
+/// A voice on the card: its folder, what it is called, its language.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoiceSet {
+    pub dir: PathBuf,
+    /// "Anna, Hungarian", as lehu-maps names it in its map.toml; else the
+    /// language's name.
+    pub title: String,
+    /// "hu".
+    pub lang: String,
+}
+
+/// A clip every voice set has: a folder with it is one.
+const VOICE_MARK: &str = "in-500.wav";
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct VoiceManifest {
+    name: String,
+    title: String,
+    lang: String,
+}
+
+/// The name of a language the clips speak, in English as the screens are.
+pub fn language_name(code: &str) -> &str {
+    match code {
+        "en" => "English",
+        "hu" => "Hungarian",
+        "de" => "German",
+        "fr" => "French",
+        "es" => "Spanish",
+        "it" => "Italian",
+        "tr" => "Turkish",
+        other => other,
+    }
+}
+
+/// The voice sets under `<root>/voice` (folders with the clips, not
+/// hidden), by title.
+pub fn voice_sets(root: &Path) -> Vec<VoiceSet> {
+    let mut out: Vec<VoiceSet> = fs::read_dir(root.join(VOICE))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let folder = e.file_name().to_string_lossy().into_owned();
+            let dir = e.path();
+            if folder.starts_with('.') || !dir.join(VOICE_MARK).is_file() {
+                return None;
+            }
+            let m: VoiceManifest = fs::read_to_string(dir.join("map.toml"))
+                .ok()
+                .and_then(|t| toml::from_str(&t).ok())
+                .unwrap_or_default();
+            // The language: as written, else the first lehu-maps' name
+            // ("en"), else the folder's start ("hu_HU-anna-medium").
+            let lang = [m.lang.as_str(), m.name.as_str(), folder.as_str()]
+                .into_iter()
+                .map(|s| s.split(['_', '-']).next().unwrap_or(""))
+                .find(|s| s.len() == 2)
+                .unwrap_or("")
+                .to_string();
+            let title = if m.title.is_empty() {
+                language_name(&lang).to_string()
+            } else {
+                m.title
+            };
+            Some(VoiceSet { dir, title, lang })
+        })
+        .collect();
+    out.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.dir.cmp(&b.dir)));
+    out
 }
 
 /// What the sha256 checks found, kept between starts: a line a region
@@ -514,5 +593,51 @@ mod tests {
             default_voice_dir(&root.join("missing")),
             PathBuf::from(OLD_VOICE_DIR)
         );
+    }
+
+    /// A voice folder with a clip, and its map.toml when `toml` is given.
+    fn voice(dir: &Path, toml: Option<&str>) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(VOICE_MARK), b"RIFF").unwrap();
+        if let Some(t) = toml {
+            fs::write(dir.join("map.toml"), t).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_voices_on_the_card_are_listed_by_title() {
+        let root = temp("voices");
+        voice(
+            &root.join("voice/hu_HU-anna-medium"),
+            Some("name = \"hu\"\ntitle = \"Anna, Hungarian\"\nlang = \"hu\"\n"),
+        );
+        voice(
+            &root.join("voice/en_GB-cori-high"),
+            Some("name = \"en\"\ntitle = \"Cori, British English\"\nlang = \"en\"\n"),
+        );
+        // As the first lehu-maps wrote it: the language as its name.
+        voice(&root.join("voice/old"), Some("name = \"de\"\n"));
+        // No map.toml: the folder's name says the language.
+        voice(&root.join("voice/tr_TR-dfki-medium"), None);
+        // Not voices: no clips, hidden.
+        fs::create_dir_all(root.join("voice/empty")).unwrap();
+        voice(&root.join("voice/.Trash"), None);
+        let seen: Vec<(String, String)> = voice_sets(&root)
+            .into_iter()
+            .map(|v| (v.title, v.lang))
+            .collect();
+        let pair = |t: &str, l: &str| (t.to_string(), l.to_string());
+        assert_eq!(
+            seen,
+            [
+                pair("Anna, Hungarian", "hu"),
+                pair("Cori, British English", "en"),
+                pair("German", "de"),
+                pair("Turkish", "tr"),
+            ]
+        );
+        // No voice/en: the first English one.
+        assert_eq!(default_voice_dir(&root), root.join("voice/en_GB-cori-high"));
+        assert!(voice_sets(&root.join("missing")).is_empty());
     }
 }

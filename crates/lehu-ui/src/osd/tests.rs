@@ -3905,3 +3905,54 @@ fn our_next_turn_is_the_card_on_the_other_screens_unless_the_phone_guides() {
     tick(&mut osd);
     assert!(!br(&osd).get_nav_card());
 }
+
+#[test]
+fn the_map_voice_steps_through_the_voices_on_the_card() {
+    use crate::host::MapVoice;
+    let voice = |dir: &str, name: &str| MapVoice {
+        dir: dir.into(),
+        name: name.into(),
+        current: false,
+    };
+    let mut host = TestHost::new();
+    host.map_voices = vec![
+        voice("/maps/voice/hu_HU-anna-medium", "Anna, Hungarian"),
+        voice("/maps/voice/en_GB-cori-high", "Cori, British English"),
+        voice("/maps/voice/de_DE-thorsten-high", "Thorsten, German"),
+    ];
+    host.persist(
+        "map.voice-dir",
+        toml::Value::String("/maps/voice/en_GB-cori-high".into()),
+    )
+    .unwrap();
+    host.calls.clear();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Cori, British English");
+    // Started on the voice spoken with; stepped through the others.
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd), (18, 1));
+    assert_eq!(prop!(osd, get_pick_value), "Cori, British English");
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(prop!(osd, get_pick_value), "Anna, Hungarian");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(pick(&osd).0, 0);
+    assert_eq!(
+        osd.host().persisted("map.voice-dir"),
+        Some(&toml::Value::String("/maps/voice/hu_HU-anna-medium".into()))
+    );
+    assert_eq!(prop!(osd, get_voice_label), "Anna, Hungarian");
+    // Enter on the one spoken with changes nothing.
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd), (18, 0));
+    osd.host_mut().calls.clear();
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().calls.is_empty(), "{:?}", osd.host().calls);
+    // No voice on the card: nothing to step through.
+    osd.host_mut().map_voice = false;
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Not installed");
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd).0, 0);
+}

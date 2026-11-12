@@ -115,6 +115,9 @@ pub struct TestHost {
     pub map_regions: Vec<crate::host::MapRegion>,
     pub map_regions_gen: u32,
     pub map_voice: bool,
+    /// The voices on the card; the one `map.voice-dir` names (else the
+    /// first) is current. Empty: one English voice while `map_voice`.
+    pub map_voices: Vec<crate::host::MapVoice>,
     /// Over the map while there is no picture.
     pub map_note: String,
     pub learned_key: Option<u32>,
@@ -207,6 +210,7 @@ impl TestHost {
             map_regions: Vec::new(),
             map_regions_gen: 0,
             map_voice: true,
+            map_voices: Vec::new(),
             map_note: String::new(),
             learned_key: None,
             bt_available: true,
@@ -505,6 +509,29 @@ impl Host for TestHost {
 
     fn map_voice_installed(&self) -> bool {
         self.map_voice
+    }
+
+    fn map_voices(&mut self) -> Vec<crate::host::MapVoice> {
+        if !self.map_voice {
+            return Vec::new();
+        }
+        if self.map_voices.is_empty() {
+            return vec![crate::host::MapVoice {
+                dir: String::new(),
+                name: "English".into(),
+                current: true,
+            }];
+        }
+        let dir = self.settings.map.voice_dir.clone();
+        let named = self.map_voices.iter().any(|v| v.dir == dir);
+        self.map_voices
+            .iter()
+            .enumerate()
+            .map(|(i, v)| crate::host::MapVoice {
+                current: if named { v.dir == dir } else { i == 0 },
+                ..v.clone()
+            })
+            .collect()
     }
 
     fn map_guidance(&self) -> Option<&NavCard> {

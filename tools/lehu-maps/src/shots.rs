@@ -89,15 +89,28 @@ fn sample() -> App {
             workers: 3,
         }),
         voices: voice::fallback(),
-        voice: Some(0),
+        chosen: vec![voice::DEFAULT.into(), "hu_HU-anna-medium".into()],
         ..App::default()
     };
-    a.voices.push(voice::Voice {
-        key: "en_US-lessac-medium".into(),
-        title: "Lessac, American English, medium".into(),
-        onnx: Default::default(),
-        config: Default::default(),
-    });
+    for (key, title, lang) in [
+        (
+            "en_US-lessac-medium",
+            "Lessac, American English, medium",
+            "en",
+        ),
+        ("hu_HU-anna-medium", "Anna, Hungarian, medium", "hu"),
+        ("hu_HU-imre-medium", "Imre, Hungarian, medium", "hu"),
+        ("de_DE-thorsten-high", "Thorsten, German, high", "de"),
+        ("tr_TR-fettah-medium", "Fettah, Turkish, medium", "tr"),
+    ] {
+        a.voices.push(voice::Voice {
+            key: key.into(),
+            title: title.into(),
+            lang: lang.into(),
+            onnx: Default::default(),
+            config: Default::default(),
+        });
+    }
     a.set_areas(areas);
     a.log("Geofabrik's index: 554 regions");
     a
@@ -120,8 +133,8 @@ fn with_card(a: &mut App) {
             problem: None,
         }],
         voices: vec![Item {
-            rel: "voice/en".into(),
-            name: "en".into(),
+            rel: "voice/en_GB-cori-high".into(),
+            name: "Cori, British English, high".into(),
             osm_date: String::new(),
             size: 2_840_112,
             problem: None,
@@ -243,7 +256,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
     );
     a.space = Some((25_800_000_000, 26_800_000_000));
     a.status =
-        "Hungary and the voice written and checked. Eject the card safely before you take it out."
+        "Hungary and the voices Cori and Anna written and checked. Eject the card safely before you take it out."
             .into();
     a.status_kind = 1;
     shot("4-done", &mut a, false)?;

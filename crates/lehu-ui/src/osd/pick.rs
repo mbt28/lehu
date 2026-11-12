@@ -44,6 +44,8 @@ pub(super) enum Pick {
     Fps,
     /// The map's region (Settings > Map).
     Region,
+    /// The spoken prompts' voice (Settings > Map).
+    Voice,
 }
 
 impl Pick {
@@ -61,6 +63,7 @@ impl Pick {
             15 => Pick::Country,
             16 => Pick::Fps,
             17 => Pick::Region,
+            18 => Pick::Voice,
             _ => Pick::None,
         }
     }
@@ -81,6 +84,7 @@ impl Pick {
             Pick::Country => 15,
             Pick::Fps => 16,
             Pick::Region => 17,
+            Pick::Voice => 18,
         }
     }
 
@@ -96,6 +100,7 @@ impl Pick {
                 | Pick::Channel
                 | Pick::Country
                 | Pick::Region
+                | Pick::Voice
         )
     }
 
@@ -103,7 +108,7 @@ impl Pick {
     fn listed(self) -> bool {
         matches!(
             self,
-            Pick::Output | Pick::Channel | Pick::Country | Pick::Region
+            Pick::Output | Pick::Channel | Pick::Country | Pick::Region | Pick::Voice
         )
     }
 
@@ -173,7 +178,7 @@ impl<H: Host> State<H> {
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
             Pick::Night | Pick::Fps => VIDEO,
             Pick::Power => SYSTEM,
-            Pick::Region => MAP_SETTINGS,
+            Pick::Region | Pick::Voice => MAP_SETTINGS,
             _ => SETTINGS,
         }
     }
@@ -215,6 +220,7 @@ impl<H: Host> State<H> {
             let start = match row {
                 Pick::Output => self.output_start(),
                 Pick::Region => self.region_start(),
+                Pick::Voice => self.voice_start(),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => self.ap_start(row),
                 Pick::Night => Some(night_index(night)),
                 Pick::Fps => Some(i32::from(self.host.settings().android_auto.fps >= 60)),
@@ -264,6 +270,7 @@ impl<H: Host> State<H> {
                 Pick::Buffer => self.save_buffer(),
                 Pick::Output => self.output_take(taken),
                 Pick::Region => self.region_take(bridge, taken),
+                Pick::Voice => self.voice_take(bridge, taken),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => {
                     self.ap_take(row, taken)
                 }

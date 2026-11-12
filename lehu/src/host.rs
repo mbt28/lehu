@@ -946,13 +946,16 @@ impl AppHost {
         }
     }
 
-    /// The spoken prompts' clips: `map.voice-dir`, else the map
-    /// partition's English set, else the folder from before.
+    /// The spoken prompts' clips: `map.voice-dir` while it is there (a
+    /// voice taken off the card leaves it named), else the map
+    /// partition's English set, else its first, else the folder from
+    /// before.
     fn map_voice_dir(&self) -> std::path::PathBuf {
-        if self.settings.map.voice_dir.is_empty() {
-            lehu_map::region::default_voice_dir(std::path::Path::new(lehu_map::region::MAPS_ROOT))
+        let named = std::path::PathBuf::from(&self.settings.map.voice_dir);
+        if !self.settings.map.voice_dir.is_empty() && named.is_dir() {
+            named
         } else {
-            std::path::PathBuf::from(&self.settings.map.voice_dir)
+            lehu_map::region::default_voice_dir(std::path::Path::new(lehu_map::region::MAPS_ROOT))
         }
     }
 
@@ -2064,6 +2067,31 @@ impl Host for AppHost {
 
     fn map_voice_installed(&self) -> bool {
         self.map_voice_dir().is_dir()
+    }
+
+    fn map_voices(&mut self) -> Vec<lehu_ui::MapVoice> {
+        let current = self.map_voice_dir();
+        let root = std::path::Path::new(lehu_map::region::MAPS_ROOT);
+        let mut voices: Vec<lehu_ui::MapVoice> = lehu_map::region::voice_sets(root)
+            .into_iter()
+            .map(|v| lehu_ui::MapVoice {
+                current: v.dir == current,
+                dir: v.dir.to_string_lossy().into_owned(),
+                name: v.title,
+            })
+            .collect();
+        // The folder from before, or one the settings name elsewhere.
+        if !voices.iter().any(|v| v.current) && current.is_dir() {
+            voices.insert(
+                0,
+                lehu_ui::MapVoice {
+                    dir: current.to_string_lossy().into_owned(),
+                    name: "English".into(),
+                    current: true,
+                },
+            );
+        }
+        voices
     }
 
     fn map_away(&self) -> bool {

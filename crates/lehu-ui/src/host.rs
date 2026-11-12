@@ -360,6 +360,17 @@ impl MapRegion {
     }
 }
 
+/// A voice for the spoken prompts, as Settings > Map > Voice lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapVoice {
+    /// Its folder (`map.voice-dir`).
+    pub dir: String,
+    /// "Anna, Hungarian".
+    pub name: String,
+    /// The one the prompts speak with.
+    pub current: bool,
+}
+
 /// Where finding the route to a destination is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RouteStage {
@@ -696,6 +707,18 @@ pub trait Host {
     /// The spoken prompts' clips are on the card.
     fn map_voice_installed(&self) -> bool {
         true
+    }
+    /// The voices on the card, the one the prompts speak with current.
+    fn map_voices(&mut self) -> Vec<MapVoice> {
+        if self.map_voice_installed() {
+            vec![MapVoice {
+                dir: String::new(),
+                name: "English".into(),
+                current: true,
+            }]
+        } else {
+            Vec::new()
+        }
     }
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);

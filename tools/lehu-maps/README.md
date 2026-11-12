@@ -1,11 +1,13 @@
 # LEHU Maps
 
 A small desktop program that puts LEHU's map regions and the spoken
-prompts' voice on the head unit's SD card. Take the card out of the head
+prompts' voices on the head unit's SD card. Take the card out of the head
 unit, put it in the PC's card reader, and in one window:
 
-1. pick a region (any country or sub-region Geofabrik offers);
-2. pick a voice (English Piper voices; or none);
+1. pick a region (any country or sub-region Geofabrik offers), or **No
+   region** to write only voices;
+2. tick the voices (Piper's, in English, Hungarian, German, French,
+   Spanish, Italian and Turkish; any number, or none);
 3. check that the card's **LEHU-MAPS** drive is found (or type a folder);
 4. press **Write to card**.
 
@@ -23,9 +25,10 @@ It then:
   follows its stages: road network, tiles, names, packing, checksums);
   a region built once is kept in the cache per extract date and zoom
   preset, so a second card is written in a minute;
-- downloads the Piper voice and makes the 41 clips with
-  `scripts/voice-clips.py`, also kept in the cache;
-- copies both to the card into `.incoming/`, flushes them, reads every
+- downloads each Piper voice ticked and makes its 41 clips with
+  `scripts/voice-clips.py`, in the voice's language, also kept in the
+  cache;
+- copies them all to the card into `.incoming/`, flushes them, reads every
   file back and checks its sha256 against the folder's `map.toml`, and only
   then renames it into place, replacing an older copy of the same region.
 
@@ -34,11 +37,14 @@ The card's layout (see [docs/map.md](../../docs/map.md#data-on-the-card)):
 ```
 <LEHU-MAPS>/<region>/      map.toml, tiles.pmtiles, labels.pack, roads.bin,
                            places.bin, cameras.bin
-<LEHU-MAPS>/voice/en/      the 41 WAV clips and their map.toml
+<LEHU-MAPS>/voice/<voice>/ a voice's 41 WAV clips and their map.toml,
+                           e.g. voice/hu_HU-anna-medium
 ```
 
+The head unit's Settings > Map > Voice picks among the voices on the card.
+
 The window also lists what is on the card (each region's name, OSM date
-and size; the voice) with **Remove**, and the free space. Cancel stops
+and size; each voice) with **Remove**, and the free space. Cancel stops
 any step: a download continues from where it stopped next time, and
 nothing on the card changes until a new copy has been checked. **LEHU Maps
 never partitions or formats anything**: the LEHU-MAPS partition is made by
@@ -89,7 +95,7 @@ Options:
 
 ```
 lehu-maps [--scripts DIR] [--workers N] [--card DIR]
-lehu-maps --write REGION --card DIR [--voice KEY|none]   the same work without the window
+lehu-maps --write REGION|none --card DIR [--voice KEY[,KEY...]|none]...   the same work without the window
 lehu-maps --screenshot DIR    the window's states as PNGs (offscreen), for the docs
 ```
 
