@@ -25,6 +25,72 @@ pub struct Drive {
 /// zooms in a level.
 pub const NEAR_TURN_M: u32 = 250;
 
+/// Following a drive, the map is closer or further out by its speed: in
+/// town a level closer than the zoom chosen, so it moves visibly (the
+/// window moves in whole pixels: at zoom 16 and 50 km/h, nine a second),
+/// and on a motorway a level further out, to see further ahead. Below
+/// `SLOW_KMH` closer, above `FAST_KMH` further out; a change needs the
+/// speed `MARGIN_KMH` past the boundary for `HOLD_MS`, so a speed about a
+/// boundary does not flick the zoom to and fro.
+pub const SLOW_KMH: u32 = 60;
+pub const FAST_KMH: u32 = 100;
+const MARGIN_KMH: u32 = 5;
+const HOLD_MS: u64 = 3000;
+
+/// The zoom's offset by speed, as it settles.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpeedZoom {
+    /// The offset now; None before the first speed.
+    offset: Option<i8>,
+    /// Another offset the speed asks for, and since when.
+    asked: Option<(i8, u64)>,
+}
+
+impl SpeedZoom {
+    /// The offset to the chosen zoom at `kmh`, `now_ms`: +1, 0 or -1.
+    pub fn step(&mut self, kmh: u32, now_ms: u64) -> i8 {
+        let Some(offset) = self.offset else {
+            let first = band(kmh);
+            self.offset = Some(first);
+            return first;
+        };
+        // Near a boundary: no change asked.
+        let want = clear_band(kmh).unwrap_or(offset);
+        if want == offset {
+            self.asked = None;
+            return offset;
+        }
+        match self.asked {
+            Some((asked, since)) if asked == want => {
+                if now_ms.saturating_sub(since) >= HOLD_MS {
+                    self.offset = Some(want);
+                    self.asked = None;
+                    return want;
+                }
+            }
+            _ => self.asked = Some((want, now_ms)),
+        }
+        offset
+    }
+}
+
+/// The offset for `kmh`: +1 slow, 0 between, -1 fast.
+fn band(kmh: u32) -> i8 {
+    if kmh < SLOW_KMH {
+        1
+    } else if kmh <= FAST_KMH {
+        0
+    } else {
+        -1
+    }
+}
+
+/// `band`, when `kmh` is clear of both boundaries by `MARGIN_KMH`.
+fn clear_band(kmh: u32) -> Option<i8> {
+    let near = |b: u32| kmh.abs_diff(b) <= MARGIN_KMH;
+    (!near(SLOW_KMH) && !near(FAST_KMH)).then(|| band(kmh))
+}
+
 /// The way up while following: the drive's heading, turned towards by how
 /// long it has been (45% of the way each 200 ms), so a bend turns the map
 /// over about a second; at once when the drive reverses.
@@ -69,6 +135,31 @@ impl Steer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_zoom_follows_the_speed_and_settles() {
+        let mut z = SpeedZoom::default();
+        // In town at once: a level closer.
+        assert_eq!(z.step(45, 0), 1);
+        // Onto a motorway: further out once the speed has held 3 s.
+        assert_eq!(z.step(120, 1000), 1);
+        assert_eq!(z.step(120, 3999), 1);
+        assert_eq!(z.step(120, 4000), -1);
+        // About a boundary (100 km/h, give or take 5): no change at all.
+        for (i, kmh) in [97, 103, 99, 104, 96, 101].into_iter().enumerate() {
+            assert_eq!(z.step(kmh, 5000 + 2000 * i as u64), -1, "{kmh}");
+        }
+        // Clearly below it for 3 s: the zoom chosen.
+        assert_eq!(z.step(90, 20_000), -1);
+        assert_eq!(z.step(90, 23_000), 0);
+        // A dip that does not last changes nothing.
+        assert_eq!(z.step(40, 24_000), 0);
+        assert_eq!(z.step(70, 25_000), 0);
+        assert_eq!(z.step(40, 26_000), 0);
+        assert_eq!(z.step(40, 29_000), 1);
+        // Stopped at a light: still closer.
+        assert_eq!(z.step(0, 40_000), 1);
+    }
 
     #[test]
     fn steering_turns_by_time_not_by_steps() {

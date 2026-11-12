@@ -834,7 +834,12 @@ refreshes' own times as the kernel stamps them, not by when the thread
 woke: the map moves in even steps at the panel's rate, sixty a second.
 The window moves in whole pixels, so at a slow speed far out it creeps a
 pixel at a time (at zoom 16 and 50 km/h in Budapest, about nine pixels a
-second).
+second). So following a drive, the zoom goes with the speed: below 60 km/h
+a level closer than the zoom chosen (17 px a second at 50 km/h), above
+100 km/h a level further out to see further ahead, between them the zoom
+chosen; a change waits for the speed to stay 5 km/h past the boundary for
+3 s. Near a turn it is a level closer than chosen, as town already is, so
+a town's turns change nothing. The - and + keys change the zoom chosen.
 
 Heading up, the map is turned on the CPU into a picture a little larger
 than the panel, with some road ahead; driving on moves the window over it,

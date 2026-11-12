@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use lehu_drm::{Canvas, Display, Show};
 
-use crate::drive::{Drive, NEAR_TURN_M, Steer};
+use crate::drive::{Drive, NEAR_TURN_M, SpeedZoom, Steer};
 use crate::hw::HwJpeg;
 use crate::labels::Names;
 use crate::nv12::{self, Surface};
@@ -450,6 +450,7 @@ fn drive(shared: &Shared, display: &Display) {
         libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param);
     }
     let mut steer = Steer::default();
+    let mut speed_zoom = SpeedZoom::default();
     // When the last picture worked out was to be shown.
     let mut last: Option<Instant> = None;
     let mut next: Option<u32> = None;
@@ -471,6 +472,7 @@ fn drive(shared: &Shared, display: &Display) {
                     break d.clone();
                 }
                 (last, next, seen) = (None, None, None);
+                speed_zoom = SpeedZoom::default();
                 inner = shared
                     .drive_wake
                     .wait(inner)
@@ -529,10 +531,17 @@ fn drive(shared: &Shared, display: &Display) {
         // Following, as it is now: the loop may just have stopped it.
         let (want, up, up_soon) = match inner.follow {
             Some(base) => {
+                // The zoom chosen, a level closer in town and further out
+                // fast; near a turn a level closer than chosen, as town is
+                // already (so the zoom stays through a town's turns).
+                let top = drive.top_zoom.max(base);
+                let by_speed = base
+                    .saturating_add_signed(speed_zoom.step(fix.kmh, ms))
+                    .clamp(1, top);
                 let zoom = if near {
-                    base.saturating_add(1).min(drive.top_zoom.max(base))
+                    by_speed.max(base.saturating_add(1)).min(top)
                 } else {
-                    base
+                    by_speed
                 };
                 let mut v = View {
                     zoom,
