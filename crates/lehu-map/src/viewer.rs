@@ -632,6 +632,10 @@ fn run(
     // said every so often.
     let mut recent_up: [Option<usize>; 2] = [None, None];
     let mut up_held: Vec<Option<UpHeld>> = vec![None; ups.len()];
+    // When each frame was turned, by a count: only the newest is shown, so
+    // a turn never steps back to an older frame's way up.
+    let mut up_seq: Vec<u64> = vec![0; ups.len()];
+    let mut turns_drawn: u64 = 0;
     let mut last_turn: Option<Instant> = None;
     let mut up_stats = UpStats::new();
     // A sprite canvas the driver would not show, kept to be freed.
@@ -821,35 +825,40 @@ fn run(
             // Without the sprite the marker is in the frame: each is new.
             // A half frame only while steering: then a whole one.
             let steering = last_turn.is_some_and(|t| t.elapsed() < STEER_MS);
+            // The newest frame turned: the only one shown. Two frames
+            // turned a little apart, shown by turns, would swing the map
+            // to and fro.
+            let newest = (0..ups.len())
+                .filter(|&i| up_held[i].is_some())
+                .max_by_key(|&i| up_seq[i]);
             let placed = if sprites.is_some() {
-                let find = |halves: bool| {
-                    recent_up
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .chain(0..ups.len())
-                        .find_map(|i| {
-                            let u = up_held[i]?;
-                            (u.half == halves).then_some(())?;
-                            fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
-                            place_up(&u, &want, h, size, panel, UP_TOLERANCE).map(|src| (i, src))
-                        })
-                };
-                find(false).or_else(|| if steering { find(true) } else { None })
+                newest.and_then(|i| {
+                    let u = up_held[i]?;
+                    (!u.half || steering).then_some(())?;
+                    fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
+                    place_up(&u, &want, h, size, panel, UP_TOLERANCE).map(|src| (i, src))
+                })
             } else {
                 None
             };
             let (i, src) = match placed {
                 Some(p) => p,
                 None => {
-                    let Some(i) = (0..ups.len()).find(|i| !recent_up.contains(&Some(*i))) else {
+                    // Drawn into a frame neither on the panel lately nor
+                    // the newest (shown meanwhile).
+                    let free = (0..ups.len())
+                        .find(|i| !recent_up.contains(&Some(*i)) && Some(*i) != newest)
+                        .or_else(|| {
+                            (0..ups.len()).find(|i| recent_up[0] != Some(*i) && Some(*i) != newest)
+                        });
+                    let Some(i) = free else {
                         break;
                     };
                     let started = Instant::now();
                     let mut cost = UpCost::default();
                     // The frame shown, moved along meanwhile: with the
                     // marker on its sprite, the pictures need not change.
-                    let meanwhile = recent_up[0]
+                    let meanwhile = newest
                         .filter(|_| sprites.is_some())
                         .and_then(|j| up_held[j].map(|u| (j, u)));
                     // Steering, at the zoom shown: turned at half the
@@ -1003,6 +1012,8 @@ fn run(
                         break;
                     };
                     up_held[i] = Some(drawn);
+                    turns_drawn += 1;
+                    up_seq[i] = turns_drawn;
                     last_turn = Some(Instant::now());
                     up_stats.turned(started.elapsed(), cost);
                     if drawn.half {
