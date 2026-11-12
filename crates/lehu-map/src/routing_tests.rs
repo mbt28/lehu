@@ -1569,3 +1569,185 @@ fn layer_against_plain() {
         );
     }
 }
+
+/// A camera as the file has it, `east`, `south` metres from the corner, on
+/// `edge` `from_a` metres from its a, watching `ways` (1 a to b, 2 b to a).
+fn cam_at(east: f64, south: f64, edge: u32, from_a: f64, ways: u32, limit: u32) -> CameraWords {
+    let (x, y) = at(east, south);
+    [
+        x as u32,
+        y as u32,
+        edge,
+        (from_a * 10.0) as u32,
+        ways,
+        limit,
+    ]
+}
+
+fn with_cameras(nodes: &[(i64, i64)], roads: &[Road], cameras: &[CameraWords]) -> Router {
+    let g = Graph::from_bytes(&write(nodes, roads)).unwrap();
+    let id = g.build_id().unwrap();
+    let cams = Cameras::from_bytes(&crate::cameras::write(id, cameras), &g).unwrap();
+    Router::new(g, None).with_cameras(Some(cams))
+}
+
+/// A position `east`, `south` metres from the corner going `heading` at
+/// 50 km/h.
+fn moving(east: f64, south: f64, heading: (i32, i32)) -> Fix {
+    let (x, y) = at(east, south);
+    Fix {
+        x,
+        y,
+        heading,
+        step: 0,
+        kmh: 50,
+        limit: None,
+    }
+}
+
+/// The camera ahead of a position `east`, `south` going `heading`, come
+/// to from 40 m back along it: a road ahead found afresh counts once a
+/// little of it was driven.
+fn look_from_behind(
+    look: &mut crate::CameraLookout,
+    r: &Router,
+    (east, south): (f64, f64),
+    heading: (i32, i32),
+    ms: u64,
+) -> Option<crate::CameraAhead> {
+    let (dx, dy) = (f64::from(heading.0) / 1024.0, f64::from(heading.1) / 1024.0);
+    let back = moving(east - 40.0 * dx, south - 40.0 * dy, heading);
+    if look.look(r, &back, ms).is_some() {
+        // Not yet: 30 m of it first.
+        return None;
+    }
+    look.look(r, &moving(east, south, heading), ms + 1000)
+}
+
+#[test]
+fn without_a_route_the_camera_ahead_on_the_road_is_seen_the_way_it_watches() {
+    let (nodes, roads, cameras) = camera_street();
+    let r = with_cameras(&nodes, &roads, &cameras);
+    let mut look = crate::CameraLookout::new();
+    // Found afresh, it counts only once 30 m of it was driven.
+    assert_eq!(look.look(&r, &moving(60.0, 0.0, EAST), 0), None);
+    assert_eq!(look.look(&r, &moving(80.0, 0.0, EAST), 500), None);
+    // East, 100 m along: the camera at 500 m watching east, 400 m on.
+    let c = look.look(&r, &moving(100.0, 0.0, EAST), 1000).unwrap();
+    assert!((c.metres as i64 - 400).abs() <= 3, "{c:?}");
+    assert_eq!(c.limit, Some(50));
+    // Driven on past it: the next, at 1500 m.
+    let c = look.look(&r, &moving(700.0, 0.0, EAST), 2000).unwrap();
+    assert!((c.metres as i64 - 800).abs() <= 3, "{c:?}");
+    // West from 1900 m: the one watching both ways, 400 m on; the one at
+    // 500 m watches only east, so nothing after it.
+    let mut look = crate::CameraLookout::new();
+    let c = look_from_behind(&mut look, &r, (1900.0, 0.0), WEST, 0).unwrap();
+    assert!((c.metres as i64 - 400).abs() <= 3, "{c:?}");
+    assert_eq!(look.look(&r, &moving(1400.0, 0.0, WEST), 2000), None);
+    // Across the road, or off it: not on it going its way.
+    let mut look = crate::CameraLookout::new();
+    assert_eq!(
+        look_from_behind(&mut look, &r, (100.0, 0.0), SOUTH, 0),
+        None
+    );
+    let mut look = crate::CameraLookout::new();
+    assert_eq!(
+        look_from_behind(&mut look, &r, (100.0, 60.0), EAST, 0),
+        None
+    );
+}
+
+/// Main street east, 0 to 1 to 2, 1 km each; Side street south from 1;
+/// a camera on Main 200 m past the junction, one on Side 200 m down it.
+fn camera_junction() -> Router {
+    let nodes = [
+        at(0.0, 0.0),
+        at(1000.0, 0.0),
+        at(2000.0, 0.0),
+        at(1000.0, 1000.0),
+    ];
+    let roads = vec![road(0, 1, "Main"), road(1, 2, "Main"), road(1, 3, "Side")];
+    let cameras = [
+        cam_at(1200.0, 0.0, 1, 200.0, 1, 50),
+        cam_at(1000.0, 200.0, 2, 200.0, 1, 30),
+    ];
+    with_cameras(&nodes, &roads, &cameras)
+}
+
+#[test]
+fn the_road_ahead_goes_on_through_a_junction_and_is_found_anew_off_it() {
+    let r = camera_junction();
+    let mut look = crate::CameraLookout::new();
+    // On Main, 600 m in: Main goes on past the junction, its camera 600 m
+    // ahead; the side street's is not on the way.
+    let c = look_from_behind(&mut look, &r, (600.0, 0.0), EAST, 0).unwrap();
+    assert!((c.metres as i64 - 600).abs() <= 3, "{c:?}");
+    assert_eq!(c.limit, Some(50));
+    // At the junction, the side street near: still Main's.
+    let c = look.look(&r, &moving(995.0, 8.0, EAST), 2000).unwrap();
+    assert_eq!(c.limit, Some(50), "{c:?}");
+    // Turned into Side: found anew, its camera ahead once some of it was
+    // driven.
+    assert_eq!(look.look(&r, &moving(1000.0, 60.0, SOUTH), 3000), None);
+    let c = look.look(&r, &moving(1000.0, 100.0, SOUTH), 4000).unwrap();
+    assert_eq!(c.limit, Some(30), "{c:?}");
+    assert!((c.metres as i64 - 100).abs() <= 3, "{c:?}");
+}
+
+#[test]
+fn a_camera_on_the_road_ahead_is_warned_of_once_within_its_lead() {
+    let (nodes, roads, cameras) = camera_street();
+    let r = with_cameras(&nodes, &roads, &cameras);
+    let mut look = crate::CameraLookout::new();
+    let far = look_from_behind(&mut look, &r, (60.0, 0.0), EAST, 0).unwrap();
+    // 440 m off at 50 km/h: further than its lead (300 m).
+    assert!(!look.due(&far, 50, 0));
+    let near = look.look(&r, &moving(250.0, 0.0, EAST), 1000).unwrap();
+    assert!(look.due(&near, 50, 1000));
+    let nearer = look.look(&r, &moving(350.0, 0.0, EAST), 2000).unwrap();
+    assert!(!look.due(&nearer, 50, 2000));
+    // The next camera is its own.
+    let next = look.look(&r, &moving(1250.0, 0.0, EAST), 3000).unwrap();
+    assert!(look.due(&next, 50, 3000), "{next:?}");
+}
+
+#[test]
+fn a_camera_mapped_twice_is_warned_of_once() {
+    // One gantry as two points 30 m apart, both watching east.
+    let nodes = [at(0.0, 0.0), at(2000.0, 0.0)];
+    let cameras = [
+        cam_at(800.0, 0.0, 0, 800.0, 1, 70),
+        cam_at(830.0, 0.0, 0, 830.0, 1, 70),
+    ];
+    let r = with_cameras(&nodes, &[road(0, 1, "Est")], &cameras);
+    let mut look = crate::CameraLookout::new();
+    let mut said = 0;
+    let mut m = 0.0;
+    let mut ms = 0;
+    while m < 1500.0 {
+        if let Some(c) = look.look(&r, &moving(m, 0.0, EAST), ms)
+            && look.due(&c, 50, ms)
+        {
+            said += 1;
+        }
+        m += 14.0;
+        ms += 1000;
+    }
+    assert_eq!(said, 1);
+}
+
+#[test]
+fn a_crawl_does_not_find_the_road_ahead_anew() {
+    let r = camera_junction();
+    let mut look = crate::CameraLookout::new();
+    let slow = |east: f64, south: f64, heading: (i32, i32)| Fix {
+        kmh: 8,
+        ..moving(east, south, heading)
+    };
+    // Not found at a crawl, found once moving, then kept at a crawl.
+    assert_eq!(look.look(&r, &slow(600.0, 0.0, EAST), 0), None);
+    assert!(look_from_behind(&mut look, &r, (640.0, 0.0), EAST, 1000).is_some());
+    let c = look.look(&r, &slow(990.0, 0.0, SOUTH), 2000).unwrap();
+    assert_eq!(c.limit, Some(50), "Main's, not Side's: {c:?}");
+}

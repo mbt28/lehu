@@ -28,6 +28,7 @@
 //! from a road network and a list of names written on a PC
 //! (`scripts/map-graph.py`) and mapped from the card: see [`Router`].
 
+mod ahead;
 mod blob;
 mod cameras;
 mod drive;
@@ -49,6 +50,7 @@ mod view;
 mod viewer;
 pub mod voice;
 
+pub use ahead::{CameraAhead, CameraLookout};
 pub use cameras::{CAMERAS_FILE, Camera, Cameras};
 pub use drive::Drive;
 pub use follow::{ARRIVE_M, ARRIVE_NEAR_M, Follow, Following, OFF_M, OFF_MS, WRONG_WAY_MS};
@@ -61,7 +63,7 @@ pub use track::{
     metres_between,
 };
 pub use view::{View, WORLD_Z, degrees_from_world, parse_position, world_from_degrees};
-pub use viewer::{Marker, Route, Viewer};
+pub use viewer::{CAMERA_ZOOM, CameraMarks, Marker, Route, Viewer};
 pub use voice::{CameraWatch, Clip, Voice, camera_lead};
 
 #[cfg(test)]

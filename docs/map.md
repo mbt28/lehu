@@ -332,7 +332,8 @@ has 237 filling stations, 403 car parks and 531 charging stations.
 
 With `map.speed-cameras = true` (the Route choices' Speed cameras row
 switches it: Warn or Off), LEHU says "Speed camera ahead" once
-before each fixed speed camera on the route: twelve seconds of driving
+before each fixed speed camera on the route (or, without one, on the road
+ahead): twelve seconds of driving
 ahead of it, but no nearer than 300 m and no further than 500 m (300 m up
 to 90 km/h, 433 m at 130). The phrase takes a second and a half, and
 slowing from 130 to 90 km/h comfortably takes seven seconds more, so
@@ -345,6 +346,36 @@ camera sign and the distance to it, in 50 m steps ("350 m"), in the place
 of the time of arrival under the road, until it is passed; with the voice
 off too. `Host::map_camera_ahead(within)` gives the metres to the next
 camera on the route within that distance.
+
+Without a route of ours (only where we are: a position from elsewhere, or
+a replayed drive), the cameras are looked for on the road ahead instead
+(`lehu_map::CameraLookout`). The position is placed on the nearest road
+within 25 m going its way (the heading within 40 degrees of the road's),
+and the road ahead is followed from there for 800 m: at each junction on
+into the road of the same name, else the one within 50 degrees of
+straight on, and not past a fork with neither. It is then kept while the
+position stays within 25 m of it, so a cross street at a junction is not
+taken for it, and found anew near its end or once the driver leaves it.
+It is found only above 15 km/h, when a heading from positions is steady,
+and a road ahead found afresh counts once 30 m of it was driven: one
+position off by a lot can put it on a cross street. Its cameras that
+watch the way it goes are warned of as a route's are, the sign taking the
+map's line in the bar. A camera within 100 m of one already warned of is
+not warned of again: a gantry is often mapped twice, a point for each
+carriageway or side. A camera just past a junction straight on is warned
+of even when the driver then turns; the road ahead cannot know.
+`examples/lookout.rs` replays a GPX drive this way and prints each
+warning. On a 14 km drive through a city and onto a motorway, the
+warnings are the cameras a route along it has, 330 m before each at
+100 km/h, and a drive that leaves the route has those of the roads it
+took; with positions jittered by 10 m, the same; by 20 m, one run in
+three had one more, of a camera on a cross street it passed. A look
+takes 3 to 10 µs on a Raspberry Pi 5, under 0.3 ms at worst.
+
+While they are warned of, the map draws each camera from zoom 13 in
+(`lehu_map::CAMERA_ZOOM`; further out a city's would crowd it): a red
+ring round a white disc with a dark camera, over the names
+(`Viewer::set_cameras`).
 
 The cameras are OpenStreetMap's (`highway=speed_camera`), each taken to
 the nearest road within 50 m. A camera watches the traffic its

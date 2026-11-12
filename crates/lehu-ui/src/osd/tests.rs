@@ -3762,12 +3762,20 @@ fn speed_cameras_are_switched_in_route_and_shown_ahead_on_the_bar() {
     osd.host_mut().map_camera = Some(120);
     tick(&mut osd);
     assert_eq!(prop!(osd, get_map_camera), "100 m");
-    // Further than 500 m, passed, or not guiding: none.
+    // Further than 500 m, or passed: none.
     osd.host_mut().map_camera = Some(700);
     tick(&mut osd);
     assert_eq!(prop!(osd, get_map_camera), "");
+    osd.host_mut().map_camera = None;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
+    // Not guiding: the camera on the road ahead, the same way.
     osd.host_mut().map_camera = Some(200);
     osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "200 m");
+    // Switched off: none.
+    osd.host_mut().settings.map.speed_cameras = false;
     tick(&mut osd);
     assert_eq!(prop!(osd, get_map_camera), "");
 }

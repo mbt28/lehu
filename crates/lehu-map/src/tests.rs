@@ -1401,6 +1401,7 @@ fn labelled_shot() {
                         Some(crate::Marker::Arrow(x, y, (0, -1024))),
                         None,
                         None,
+                        None,
                         UP_ANCHOR,
                         0,
                     );
@@ -1572,6 +1573,7 @@ fn labels_cost() {
                     None,
                     None,
                     None,
+                    None,
                     UP_ANCHOR,
                     0,
                 );
@@ -1595,5 +1597,77 @@ fn labels_cost() {
                 (names.drawn - before) / 5
             );
         }
+    }
+}
+
+#[test]
+fn a_camera_sign_is_drawn_inside_its_clip() {
+    let (w, h) = (64usize, 48usize);
+    let (pitch, chroma) = (w, w * h);
+    let blank = || {
+        let mut b = vec![120u8; w * h * 3 / 2];
+        b[chroma..].fill(128);
+        b
+    };
+    let mut buf = blank();
+    let whole = (0, 0, w as i64, h as i64);
+    nv12::camera_sign(
+        &mut buf,
+        pitch,
+        chroma,
+        (w as u32, h as u32),
+        whole,
+        (32, 24),
+    );
+    let luma = |b: &[u8], x: usize, y: usize| b[y * pitch + x];
+    let pair = |b: &[u8], x: usize, y: usize| {
+        let c = chroma + (y / 2) * pitch + (x & !1);
+        (b[c], b[c + 1])
+    };
+    let (ring, fill, ink) = (ycc([220, 38, 38]), ycc([255; 3]), ycc([33; 3]));
+    // The ring is red, the lens white, the body round it dark.
+    assert_eq!(luma(&buf, 32 + 10, 24), ring.0);
+    assert_eq!(pair(&buf, 32 + 10, 24), (ring.1, ring.2));
+    assert_eq!(luma(&buf, 32, 25), fill.0);
+    assert_eq!(luma(&buf, 32 + 4, 24 + 3), ink.0);
+    assert_eq!(pair(&buf, 32, 24), (128, 128));
+    // Outside the sign, nothing.
+    assert_eq!(luma(&buf, 32 + 12, 24), 120);
+    assert_eq!(luma(&buf, 2, 2), 120);
+    // Clipped to the left half: the right half is left as it was.
+    let mut half = blank();
+    nv12::camera_sign(
+        &mut half,
+        pitch,
+        chroma,
+        (w as u32, h as u32),
+        (0, 0, 32, h as i64),
+        (32, 24),
+    );
+    assert_eq!(luma(&half, 32 + 10, 24), 120);
+    assert_eq!(pair(&half, 32 + 10, 24), (128, 128));
+    assert_eq!(luma(&half, 32 - 10, 24), ring.0);
+    // Off the canvas: nothing, and no panic.
+    let mut off = blank();
+    nv12::camera_sign(
+        &mut off,
+        pitch,
+        chroma,
+        (w as u32, h as u32),
+        whole,
+        (-40, 200),
+    );
+    assert_eq!(off, blank());
+    // LEHU_SHOTS=<dir>: the sign four times its size, to look at.
+    if let Ok(dir) = std::env::var("LEHU_SHOTS") {
+        let rgb = nv12_rgb(&buf, pitch, chroma, (16, 8), (32, 32));
+        let mut big = Vec::with_capacity(rgb.len() * 16);
+        for y in 0..128 {
+            for x in 0..128 {
+                let at = ((y / 4) * 32 + x / 4) * 3;
+                big.extend_from_slice(&rgb[at..at + 3]);
+            }
+        }
+        save_png(&Path::new(&dir).join("camera-sign.png"), &big, (128, 128));
     }
 }

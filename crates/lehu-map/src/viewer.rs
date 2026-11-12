@@ -13,6 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 /// The route to draw: world pixels at `WORLD_Z`.
 pub type Route = Arc<[(i64, i64)]>;
+/// The speed cameras to draw: world pixels at `WORLD_Z`, in the order of
+/// their x.
+pub type CameraMarks = Arc<[(i64, i64)]>;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -28,6 +31,10 @@ use crate::tileset::TileSet;
 use crate::view::{Layout, TILE, View, WORLD_Z};
 
 const CANVASES: usize = 3;
+
+/// The speed cameras are drawn from this zoom in: further out they would
+/// crowd a city.
+pub const CAMERA_ZOOM: u8 = 13;
 
 /// The largest tile file the video engine is handed (its input buffer);
 /// a larger one decodes in software. Tiles are 5 to 30 KB.
@@ -66,6 +73,8 @@ struct Inner {
     position: Option<Marker>,
     /// The route, drawn under the marker.
     route: Option<Route>,
+    /// The speed cameras, drawn over the names.
+    cameras: Option<CameraMarks>,
     /// Heading-up: the way that is up on the panel (x right, y down),
     /// the view's point at the anchor; None for north-up.
     heading: Option<(i32, i32)>,
@@ -164,6 +173,7 @@ impl Viewer {
                 night: false,
                 position: None,
                 route: None,
+                cameras: None,
                 heading: None,
                 stop: false,
                 shown: false,
@@ -257,6 +267,20 @@ impl Viewer {
     }
 
     /// Draw this route (or none) under the marker.
+    /// The speed cameras to draw (from [`CAMERA_ZOOM`] in), or none.
+    pub fn set_cameras(&self, cameras: Option<CameraMarks>) {
+        let mut inner = self.shared.lock();
+        let same = match (&inner.cameras, &cameras) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            inner.cameras = cameras;
+            self.shared.wake.notify_one();
+        }
+    }
+
     pub fn set_route(&self, route: Option<Route>) {
         let mut inner = self.shared.lock();
         let same = match (&inner.route, &route) {
@@ -524,6 +548,7 @@ fn run(
     // along it, and day or night.
     let mut position: Option<Marker> = None;
     let mut route: Option<Route> = None;
+    let mut cameras: Option<CameraMarks> = None;
     let mut progress: Option<Progress> = None;
     let mut night = false;
     loop {
@@ -539,6 +564,19 @@ fn run(
                     // Every canvas has the old one: all composed afresh.
                     route = inner.route.clone();
                     held.fill(None);
+                    ahead = None;
+                    shown = None;
+                }
+                let new_cameras = match (&inner.cameras, &cameras) {
+                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    (None, None) => false,
+                    _ => true,
+                };
+                if new_cameras {
+                    // Every picture has the old ones (or none).
+                    cameras = inner.cameras.clone();
+                    held.fill(None);
+                    up_held.fill(None);
                     ahead = None;
                     shown = None;
                 }
@@ -607,6 +645,7 @@ fn run(
                     &layout,
                     baked,
                     route.as_deref(),
+                    cameras.as_deref(),
                     progress,
                 ) {
                     log::debug!(
@@ -668,6 +707,7 @@ fn run(
                         h,
                         baked,
                         route.as_deref(),
+                        cameras.as_deref(),
                         progress,
                         anchor_on(panel, window),
                         top,
@@ -766,6 +806,9 @@ fn run(
                     if let Some(n) = names.as_mut() {
                         draw_names(n, &mut surface(canvas), &h.layout, rect, tiles.night());
                     }
+                    if let Some(c) = cameras.as_deref() {
+                        draw_cameras(&mut surface(canvas), &h.layout, rect, c);
+                    }
                 }
                 draw_marker(canvas.pixels(), pitch, chroma, size, &h.layout, baked);
                 held[i] = Some(Held {
@@ -790,6 +833,7 @@ fn run(
                     &layout,
                     baked,
                     route.as_deref(),
+                    cameras.as_deref(),
                     progress,
                 ) else {
                     log::error!("map: no canvas free to compose into");
@@ -1064,6 +1108,7 @@ pub(crate) fn render_up(
     h: (i64, i64),
     marker: Option<Marker>,
     route: Option<&[(i64, i64)]>,
+    cameras: Option<&[(i64, i64)]>,
     progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
@@ -1127,18 +1172,20 @@ pub(crate) fn render_up(
             split,
         );
     }
-    if let Some(n) = names {
-        // The part drawn, on the map, in world pixels.
+    // The part drawn, on the map, in world pixels.
+    let area = {
         let s = i32::from(WORLD_Z - view.zoom.min(WORLD_Z)) - 16;
         let world = |v: i64| if s >= 0 { v << s } else { v >> -s };
         let xs = corners.iter().map(|c| c.0);
         let ys = corners.iter().map(|c| c.1);
-        let area = (
+        (
             world(xs.clone().min().unwrap_or(0)),
             world(ys.clone().min().unwrap_or(0)),
             world(xs.max().unwrap_or(0)),
             world(ys.max().unwrap_or(0)),
-        );
+        )
+    };
+    if let Some(n) = names {
         n.draw(
             out,
             (0, t, w, ht),
@@ -1148,6 +1195,11 @@ pub(crate) fn render_up(
             |q| held.sixteenth(q),
             |m| held.turn(m),
         );
+    }
+    if let Some(c) = cameras {
+        signs(out, (0, t, w, ht), view.zoom, area, c, |q| {
+            held.sixteenth(q)
+        });
     }
     match marker {
         Some(Marker::Dot(x, y)) => {
@@ -1241,6 +1293,65 @@ pub(crate) fn draw_names(
     );
 }
 
+/// The speed cameras on a north-up canvas of `layout`, only inside `clip`
+/// (its pixels).
+fn draw_cameras(
+    out: &mut Surface<'_>,
+    layout: &Layout,
+    clip: (i64, i64, i64, i64),
+    cameras: &[(i64, i64)],
+) {
+    let s = WORLD_Z - layout.zoom.min(WORLD_Z);
+    let world = |px: i64, tile: i64| (px + tile * TILE) << s;
+    let area = (
+        world(clip.0, layout.tx),
+        world(clip.1, layout.ty),
+        world(clip.2, layout.tx),
+        world(clip.3, layout.ty),
+    );
+    signs(out, clip, layout.zoom, area, cameras, |p| {
+        layout.sixteenth(p)
+    });
+}
+
+/// The speed cameras within `area` (world pixels, widened by a sign's
+/// reach) as signs, each where `place` puts it (1/16 px), inside `clip`;
+/// none further out than [`CAMERA_ZOOM`].
+fn signs(
+    out: &mut Surface<'_>,
+    clip: (i64, i64, i64, i64),
+    zoom: u8,
+    area: (i64, i64, i64, i64),
+    cameras: &[(i64, i64)],
+    place: impl Fn((i64, i64)) -> (i64, i64),
+) {
+    if zoom < CAMERA_ZOOM {
+        return;
+    }
+    let reach = nv12::SIGN_REACH << (WORLD_Z - zoom.min(WORLD_Z));
+    let (x0, y0, x1, y1) = (
+        area.0 - reach,
+        area.1 - reach,
+        area.2 + reach,
+        area.3 + reach,
+    );
+    let first = cameras.partition_point(|c| c.0 < x0);
+    for &c in cameras[first..].iter().take_while(|c| c.0 <= x1) {
+        if c.1 < y0 || c.1 > y1 {
+            continue;
+        }
+        let at = place(c);
+        nv12::camera_sign(
+            out.pixels,
+            out.pitch,
+            out.chroma,
+            out.size,
+            clip,
+            (at.0 >> 4, at.1 >> 4),
+        );
+    }
+}
+
 /// The part of a canvas a marker covers, in its pixels: left, top, right,
 /// bottom.
 fn marker_rect(layout: &Layout, marker: Marker) -> (i64, i64, i64, i64) {
@@ -1263,6 +1374,7 @@ fn compose_free(
     layout: &Layout,
     position: Option<Marker>,
     route: Option<&[(i64, i64)]>,
+    cameras: Option<&[(i64, i64)]>,
     progress: Option<Progress>,
 ) -> Option<usize> {
     let index = (0..canvases.len()).find(|i| !recent.contains(&Some(*i)))?;
@@ -1287,6 +1399,10 @@ fn compose_free(
     if let Some(n) = names {
         let whole = (0, 0, i64::from(size.0), i64::from(size.1));
         draw_names(n, &mut surface(canvas), layout, whole, tiles.night());
+    }
+    if let Some(c) = cameras {
+        let whole = (0, 0, i64::from(size.0), i64::from(size.1));
+        draw_cameras(&mut surface(canvas), layout, whole, c);
     }
     draw_marker(canvas.pixels(), pitch, chroma, size, layout, position);
     held[index] = Some(Held {

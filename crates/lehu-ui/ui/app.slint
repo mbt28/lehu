@@ -2711,11 +2711,27 @@ component ScreenMap inherits Rectangle {
             if !Bridge.map-preview && Bridge.map-flash == "" && !Bridge.map-guiding: VerticalLayout {
                 padding-left: 24px;
                 alignment: center;
-                Text {
+                if Bridge.map-camera == "": Text {
                     text: Bridge.map-label;
                     color: Theme.text;
                     font-size: 16px;
                     overflow: elide;
+                }
+                // Without a route, a speed camera on the road ahead takes
+                // the map's line: the sign and how far.
+                if Bridge.map-camera != "": HorizontalLayout {
+                    spacing: 6px;
+                    Icon {
+                        kind: "camera";
+                        ink: Theme.danger;
+                        size: 22px;
+                    }
+                    Text {
+                        text: Bridge.map-camera;
+                        color: Theme.danger;
+                        font-size: 18px;
+                        vertical-alignment: center;
+                    }
                 }
                 Text {
                     text: "© OpenStreetMap contributors";

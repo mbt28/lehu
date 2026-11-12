@@ -276,6 +276,79 @@ pub fn dot(
     }
 }
 
+/// The speed camera sign: a red ring round a white disc with a dark
+/// camera in it, its radii in pixels.
+const SIGN_RING: [u8; 3] = [220, 38, 38];
+const SIGN_FILL: [u8; 3] = [255, 255, 255];
+const SIGN_INK: [u8; 3] = [33, 33, 33];
+const SIGN_R: i64 = 11;
+const SIGN_FILL_R: i64 = 8;
+/// How far the sign reaches from its centre, in pixels.
+pub const SIGN_REACH: i64 = SIGN_R + 1;
+
+/// Draw the speed camera sign centred at (`cx`, `cy`) on an NV12 canvas,
+/// only inside `clip` (left, top, right, bottom, in pixels; a chroma pair
+/// only when its whole block is inside). Written, not read.
+pub fn camera_sign(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (width, height): (u32, u32),
+    clip: (i64, i64, i64, i64),
+    (cx, cy): (i64, i64),
+) {
+    let (cl, ct) = (clip.0.max(0), clip.1.max(0));
+    let (cr, cb) = (clip.2.min(i64::from(width)), clip.3.min(i64::from(height)));
+    if cx + SIGN_R < cl || cy + SIGN_R < ct || cx - SIGN_R >= cr || cy - SIGN_R >= cb {
+        return;
+    }
+    let ring = ycc(SIGN_RING);
+    let (fill_y, ink_y) = (ycc(SIGN_FILL).0, ycc(SIGN_INK).0);
+    let inside = |dx: i64, dy: i64, r: i64| dx * dx + dy * dy <= r * r;
+    // The camera: a body, the bump on its top, a lens in it.
+    let ink = |dx: i64, dy: i64| {
+        let body = (-5..=5).contains(&dx) && (-2..=4).contains(&dy);
+        let bump = (-2..=1).contains(&dx) && (-4..=-3).contains(&dy);
+        let lens = dx * dx + (dy - 1) * (dy - 1) <= 4;
+        (body || bump) && !lens
+    };
+    for y in (cy - SIGN_R).max(ct)..(cy + SIGN_R + 1).min(cb) {
+        for x in (cx - SIGN_R).max(cl)..(cx + SIGN_R + 1).min(cr) {
+            let (dx, dy) = (x - cx, y - cy);
+            let v = if inside(dx, dy, SIGN_FILL_R) {
+                if ink(dx, dy) { ink_y } else { fill_y }
+            } else if inside(dx, dy, SIGN_R) {
+                ring.0
+            } else {
+                continue;
+            };
+            if let Some(p) = dst.get_mut(y as usize * pitch + x as usize) {
+                *p = v;
+            }
+        }
+    }
+    // The chroma by each block's middle: red in the ring, none inside.
+    for by in (cy - SIGN_R).max(ct).div_euclid(2)..(cy + SIGN_R + 2).min(cb).div_euclid(2) {
+        for bx in (cx - SIGN_R).max(cl).div_euclid(2)..(cx + SIGN_R + 2).min(cr).div_euclid(2) {
+            if 2 * bx < cl || 2 * by < ct || 2 * bx + 2 > cr || 2 * by + 2 > cb {
+                continue;
+            }
+            let (dx2, dy2) = (4 * bx + 1 - 2 * cx, 4 * by + 1 - 2 * cy);
+            let pair = if inside(dx2, dy2, 2 * SIGN_FILL_R) {
+                [128, 128]
+            } else if inside(dx2, dy2, 2 * SIGN_R) {
+                [ring.1, ring.2]
+            } else {
+                continue;
+            };
+            let at = chroma + by as usize * pitch + 2 * bx as usize;
+            if let Some(p) = dst.get_mut(at..at + 2) {
+                p.copy_from_slice(&pair);
+            }
+        }
+    }
+}
+
 /// The quarter (`qx`, `qy`, each 0 or 1) of an NV12 tile `side` pixels a
 /// side, at twice the size, as a whole tile: bilinear, from the samples
 /// around it in the tile too, so the quarters meet without a seam.

@@ -203,6 +203,24 @@ impl Router {
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
+
+    pub(crate) fn camera_list(&self) -> Option<&Cameras> {
+        self.cameras.as_ref()
+    }
+
+    /// Where every speed camera is (world pixels at zoom 22), for the map
+    /// to draw: in the order of their x.
+    pub fn camera_points(&self) -> Vec<(i64, i64)> {
+        let Some(c) = &self.cameras else {
+            return Vec::new();
+        };
+        let mut out: Vec<(i64, i64)> = (0..c.len())
+            .map(|i| c.camera(i))
+            .map(|c| (c.x, c.y))
+            .collect();
+        out.sort_unstable();
+        out
+    }
 }
 
 /// A route's points with what the turns need: at each point the junction

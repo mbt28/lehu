@@ -257,6 +257,13 @@ pub struct AppHost {
     map_voice: Option<Speaker>,
     /// The speed cameras warned of along the drive (map.speed-cameras).
     map_cameras: lehu_map::CameraWatch,
+    /// Without a route of ours: the speed cameras on the road ahead, and
+    /// the next one.
+    map_lookout: lehu_map::CameraLookout,
+    map_road_camera: Option<lehu_map::CameraAhead>,
+    /// Where the road network's speed cameras are, for the map to draw
+    /// (map.speed-cameras); made when first wanted.
+    map_marks: Option<lehu_map::CameraMarks>,
     map_note: String,
     map_label: String,
     /// Map > Go to: the road network and the names (looked for each time
@@ -397,6 +404,9 @@ impl AppHost {
             map_speed: None,
             map_voice: None,
             map_cameras: lehu_map::CameraWatch::new(),
+            map_lookout: lehu_map::CameraLookout::new(),
+            map_road_camera: None,
+            map_marks: None,
             map_note: String::new(),
             map_label: String::new(),
             map_router: None,
@@ -762,6 +772,7 @@ impl AppHost {
         };
         if self.map_router_dir != route_dir {
             self.map_router = None;
+            self.map_marks = None;
         }
         if self.map_router.is_none() {
             self.map_router_dir.clone_from(&route_dir);
@@ -891,6 +902,7 @@ impl AppHost {
             Ok(viewer) => {
                 viewer.set_night(self.night_now());
                 self.map = Some(viewer);
+                self.map_marks_show();
                 self.map_view = view;
                 self.map_set = Some(set);
                 self.map_show();
@@ -1111,6 +1123,7 @@ impl AppHost {
     /// the map is closed, at a slower pace; the map itself is not needed.
     pub fn map_tick(&mut self) {
         self.map_check_poll();
+        self.map_marks_show();
         let now = lehu_core::clock::now_ms();
         if self
             .map_arrival
@@ -1145,6 +1158,8 @@ impl AppHost {
                 lehu_map::Following::Arrived => self.map_reached = true,
             }
         }
+        self.map_speaker_ready();
+        self.map_road_cameras(&fix, now);
         let (Some(track), Some(ms)) = (&self.map_track, self.map_track_ms()) else {
             // Only where we are: no guidance.
             self.map_track_shown = now;
@@ -1157,20 +1172,14 @@ impl AppHost {
             .as_ref()
             .map(|a| guidance(a, then_of(track, a), local_time_ms(self.zone_min)));
         // The prompts, while the map guides.
-        let voice_dir = self.map_voice_dir();
-        let m = &self.settings.map;
-        if m.voice {
-            let voice_dir = voice_dir.to_string_lossy();
-            if self.map_voice.as_ref().is_none_or(|v| v.dir() != voice_dir) {
-                self.map_voice = Some(Speaker::new(&voice_dir));
-            }
-            if let (Some(speaker), Some(a)) = (&mut self.map_voice, &ahead) {
-                let then = track.then(a).map(|(next, gap)| (next.turn, gap));
-                speaker.tick(a, fix.kmh, then, &self.audio);
-            }
-        } else {
-            self.map_voice = None;
+        let then = ahead
+            .as_ref()
+            .and_then(|a| track.then(a))
+            .map(|(next, gap)| (next.turn, gap));
+        if let (Some(speaker), Some(a)) = (&mut self.map_voice, &ahead) {
+            speaker.tick(a, fix.kmh, then, &self.audio);
         }
+        let m = &self.settings.map;
         let (kmh, limit) = self.map_speed_at(&fix);
         if self.map_speeding.tick(now, kmh, limit) && m.speed_warning {
             if self.map_chime.is_empty() {
@@ -1288,6 +1297,71 @@ impl AppHost {
                 self.map_take_route(track, &to);
             }
             Err(e) => log::info!("map: no route anew to {}: {e}", to.name),
+        }
+    }
+
+    /// The prompts' speaker (`map_voice`) made ready while they are on
+    /// (map.voice), with the clips of the voice chosen; dropped while they
+    /// are off.
+    fn map_speaker_ready(&mut self) {
+        if !self.settings.map.voice {
+            self.map_voice = None;
+            return;
+        }
+        let voice_dir = self.map_voice_dir();
+        let voice_dir = voice_dir.to_string_lossy();
+        if self.map_voice.as_ref().is_none_or(|v| v.dir() != voice_dir) {
+            self.map_voice = Some(Speaker::new(&voice_dir));
+        }
+    }
+
+    /// The speed cameras on the map while they are warned of
+    /// (map.speed-cameras), else none.
+    fn map_marks_show(&mut self) {
+        let Some(viewer) = &self.map else {
+            return;
+        };
+        let router = self
+            .map_router
+            .as_ref()
+            .filter(|r| self.settings.map.speed_cameras && r.cameras() > 0);
+        let marks = match router {
+            Some(r) => Some(
+                self.map_marks
+                    .get_or_insert_with(|| r.camera_points().into())
+                    .clone(),
+            ),
+            None => None,
+        };
+        viewer.set_cameras(marks);
+    }
+
+    /// Without a route of ours, the speed camera on the road ahead of
+    /// `fix`: for the bar, and "speed camera ahead" once as it nears, when
+    /// they are warned of (map.speed-cameras). A route of ours has its own
+    /// (`map_camera_tick`).
+    fn map_road_cameras(&mut self, fix: &lehu_map::Fix, now: u64) {
+        let router = self
+            .map_router
+            .clone()
+            .filter(|_| self.settings.map.speed_cameras && !self.map_routed);
+        let Some(router) = router else {
+            self.map_road_camera = None;
+            return;
+        };
+        self.map_road_camera = self.map_lookout.look(&router, fix, now);
+        let Some(camera) = self.map_road_camera else {
+            return;
+        };
+        if self.settings.map.voice && self.map_lookout.due(&camera, fix.kmh, now) {
+            log::info!(
+                "map: a speed camera {} m ahead on the road, at {} km/h",
+                camera.metres,
+                fix.kmh
+            );
+            if let Some(speaker) = &mut self.map_voice {
+                speaker.say(&[lehu_map::Clip::Camera], &self.audio);
+            }
         }
     }
 
@@ -1923,6 +1997,13 @@ impl Host for AppHost {
     fn map_camera_ahead(&self, within: u32) -> Option<u32> {
         if !self.settings.map.speed_cameras {
             return None;
+        }
+        if !self.map_routed {
+            // No route of ours: the road ahead's.
+            return self
+                .map_road_camera
+                .map(|c| c.metres)
+                .filter(|&m| m <= within);
         }
         let (track, ms) = (self.map_track.as_ref()?, self.map_track_ms()?);
         track.camera_ahead(ms, within).map(|(_, metres)| metres)

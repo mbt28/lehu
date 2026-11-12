@@ -467,14 +467,12 @@ impl<H: Host> State<H> {
             self.p_map_cameras = Some(cameras);
             bridge.set_map_cameras(cameras);
         }
-        // The next speed camera, to 50 m: the bar changes every few
-        // seconds, not every tick.
+        // The next speed camera, on the route or, without one, on the road
+        // ahead; to 50 m: the bar changes every few seconds, not every
+        // tick.
         let camera = self
             .host
-            .map_guidance()
-            .is_some()
-            .then(|| self.host.map_camera_ahead(CAMERA_SIGN_M))
-            .flatten()
+            .map_camera_ahead(CAMERA_SIGN_M)
             .map(|m| (m + 25) / 50 * 50);
         if self.p_map_camera != Some(camera) {
             self.p_map_camera = Some(camera);
