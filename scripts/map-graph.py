@@ -19,13 +19,14 @@ as a network of their own (the layer, which long routes are found on);
 cameras.bin the speed cameras on it, tied to that roads.bin by its build
 ID (a hash of its contents), so they can be replaced alone; places.bin the
 street names, each with a point on the street and the town or village it
-is in, the places' own names, and the filling stations, public car parks
-and charging stations (found nearest, not by name). The files are little
+is in, the places' own names, the house numbers on each street (with their
+postcodes), and the filling stations, public car parks and charging
+stations (found nearest, not by name). The files are little
 endian and made of 32-bit words, so the board maps them and reads them in
 place; the layout is written out in docs/map.md and in
 crates/lehu-map/src/graph.rs, cameras.rs and search.rs. Luxembourg makes
-about 7 MB and 0.5 MB in half a minute, Hungary 69 MB and 4 MB in about
-five minutes and 2.2 GB of memory. It needs pyosmium (python3 -m venv v &&
+about 7 MB and 0.5 MB in half a minute, Hungary 69 MB and 19 MB in about
+five minutes and 3 GB of memory. It needs pyosmium (python3 -m venv v &&
 v/bin/pip install osmium).
 
 Map data (c) OpenStreetMap contributors, ODbL 1.0.
@@ -70,12 +71,16 @@ PLACE_RANK = {"city": 0, "town": 1, "suburb": 2, "village": 3, "quarter": 4,
 STREET_RANK = {"motorway": 8, "trunk": 8, "primary": 9, "secondary": 10, "tertiary": 11}
 STREET_RANK_OTHER = 12
 KIND_STREET, KIND_PLACE = 0, 1
+# A house further than this from the street of its name in its town (or,
+# with none there, from the nearest street of its name) is left out,
+# metres.
+HOUSE_STREET_M = 3000
 
 ROADS_MAGIC = b"LEHUROAD"
 PLACES_MAGIC = b"LEHUFIND"
 CAMERAS_MAGIC = b"LEHUCAMS"
 ROADS_VERSION = 3
-PLACES_VERSION = 2
+PLACES_VERSION = 3
 CAMERAS_VERSION = 1
 # The classes a route avoiding motorways keeps off.
 MOTORWAY = ("motorway", "motorway_link")
@@ -166,8 +171,16 @@ class Extract(osmium.SimpleHandler):
         self.cameras = []  # (node id, lat, lon, direction tag, speed limit or None)
         self.pois = []  # (category, name, detail, lat, lon, named)
         self.enforcements = []  # (device node id, from node id, to node id, limit)
+        self.houses = []  # (street, house number, postcode, lat, lon)
+
+    def house(self, tags, lat, lon):
+        number, street = tags.get("addr:housenumber"), tags.get("addr:street")
+        if number and street:
+            self.houses.append((street, number, tags.get("addr:postcode", ""), lat, lon))
 
     def node(self, n):
+        if "addr:housenumber" in n.tags and n.location.valid():
+            self.house(n.tags, n.location.lat, n.location.lon)
         if n.tags.get("amenity") in POI_CATEGORY and n.location.valid():
             self.poi(n.tags, n.location.lat, n.location.lon)
         if n.tags.get("highway") == "speed_camera" and n.location.valid():
@@ -184,13 +197,17 @@ class Extract(osmium.SimpleHandler):
             self.pois.append((*p[:3], lat, lon, p[3]))
 
     def way(self, w):
-        if w.tags.get("amenity") in POI_CATEGORY:
+        poi = w.tags.get("amenity") in POI_CATEGORY
+        if poi or "addr:housenumber" in w.tags:
             # An area: at the middle of its outline.
             pts = [(n.lat, n.lon) for n in w.nodes if n.location.valid()]
             if pts and len(pts) == len(w.nodes):
                 if len(pts) > 1 and pts[0] == pts[-1]:
                     pts = pts[:-1]
-                self.poi(w.tags, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+                mid = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+                if poi:
+                    self.poi(w.tags, *mid)
+                self.house(w.tags, *mid)
         r = rg.road(w.tags)
         if r is None:
             return
@@ -804,6 +821,32 @@ def write_places(path, ex, keep_nodes):
     entry_words = []
     for x, y, name, town, kind, rank in entries:
         entry_words += [x, y, text.add(name), text.add(fold(name)), town | (kind << 16) | (rank << 24)]
+    # The words of the names, sorted, each with its name: a word typed is
+    # looked up, not every name read.
+    words = sorted({(w.encode(), i) for i, e in enumerate(entries) for w in fold(e[2]).split()})
+    word_words = []
+    for w, i in words:
+        word_words += [text.add(w.decode()), i]
+    # The names of each town, together.
+    by_town = sorted(range(len(entries)), key=lambda i: (entries[i][3], i))
+    town_first, at = [], 0
+    for t in range(len(towns)):
+        town_first.append(at)
+        while at < len(by_town) and entries[by_town[at]][3] == t:
+            at += 1
+    town_first.append(at)
+    # The houses of each street, at the street of their name in their town.
+    houses, lost = place_houses(ex.houses, entries, locality)
+    house_first, house_words, at = [], [], 0
+    for i in range(len(entries)):
+        house_first.append(at)
+        while at < len(houses) and houses[at][0] == i:
+            _, _, x, y, number, postcode = houses[at]
+            house_words += [x, y, text.add(number), text.add(postcode)]
+            at += 1
+    house_first.append(at)
+    if lost:
+        print(f"{lost} house numbers away from any street of their name left out", flush=True)
     # The points of interest, by category, near ones near in the file.
     pois = []
     for category, name, detail, lat, lon, _ in same_pois(ex.pois):
@@ -814,18 +857,62 @@ def write_places(path, ex, keep_nodes):
     for category, _, x, y, name, detail, town in pois:
         poi_words += [x, y, text.add(name), text.add(detail), town | (category << 16)]
     header = PLACES_MAGIC + u32s([PLACES_VERSION, len(entries), len(towns), len(text.blob),
-                                  len(pois)])
-    assert len(header) == 28
+                                  len(pois), len(houses), len(words)])
+    assert len(header) == 36
     with open(path + ".tmp", "wb") as f:
         f.write(header)
         f.write(u32s(town_words))
         f.write(u32s(entry_words))
         f.write(u32s(poi_words))
+        f.write(u32s(word_words))
+        f.write(u32s(town_first))
+        f.write(u32s(by_town))
+        f.write(u32s(house_first))
+        f.write(u32s(house_words))
         f.write(text.padded())
     os.replace(path + ".tmp", path)
     streets_n = sum(1 for e in entries if e[4] == KIND_STREET)
     counts = [sum(1 for p in pois if p[0] == c) for c in (1, 2, 3)]
-    return streets_n, len(entries) - streets_n, len(towns), counts
+    return streets_n, len(entries) - streets_n, len(towns), counts, len(houses)
+
+
+def place_houses(found, entries, locality):
+    """The house numbers by the name they are on: each at the street of its
+    name in the town it is in, or, with none there, at the nearest street
+    of its name within HOUSE_STREET_M. Returns (entry, the number's order,
+    x, y, number, postcode) sorted, and how many were left out."""
+    streets = {}
+    for i, (x, y, name, town, kind, _) in enumerate(entries):
+        if kind == KIND_STREET:
+            streets.setdefault(fold(name), []).append((i, town, x, y))
+    out, lost, seen = [], 0, set()
+    for street, number, postcode, lat, lon in found:
+        x, y = world(lat, lon)
+        number, postcode = number.strip(), postcode.strip()
+        # A building and a point inside it, both with the address: once.
+        key = (street, number, x >> 10, y >> 10)
+        if key in seen:
+            continue
+        seen.add(key)
+        here = streets.get(fold(street))
+        if not here or not number:
+            lost += 1
+            continue
+        m_per_px = EQUATOR / WORLD * math.cos(math.radians(lat))
+        town = locality(x, y)
+        same = [s for s in here if s[1] == town]
+        best = min(same or here, key=lambda s: math.hypot(s[2] - x, s[3] - y))
+        if not same and math.hypot(best[2] - x, best[3] - y) * m_per_px > HOUSE_STREET_M:
+            lost += 1
+            continue
+        lead = len(number) - len(number.lstrip("0123456789"))
+        out.append((best[0], (int(number[:min(lead, 6)] or 0), number), x, y, number, postcode))
+    # An address on two buildings (or a building and a point beside it):
+    # once, the first.
+    out.sort(key=lambda h: (h[0], h[1]))
+    once = [h for k, h in enumerate(out)
+            if k == 0 or (h[0], h[4], h[5]) != (out[k - 1][0], out[k - 1][4], out[k - 1][5])]
+    return once, lost
 
 
 def main():
@@ -855,10 +942,10 @@ def main():
         if a_ in keep and b_ in keep:
             on_network.update(between)
     places = os.path.join(a.out, "places.bin")
-    st, pl, towns, (fuel, parking, charging) = write_places(places, ex, on_network)
-    print(f"{places}: {st} streets, {pl} places, {towns} towns, {fuel} fuel, {parking} parking, "
-          f"{charging} charging; {os.path.getsize(places) / 1e6:.1f} MB in {time.time() - t0:.0f} s",
-          flush=True)
+    st, pl, towns, (fuel, parking, charging), houses = write_places(places, ex, on_network)
+    print(f"{places}: {st} streets, {pl} places, {towns} towns, {houses} house numbers, {fuel} "
+          f"fuel, {parking} parking, {charging} charging; {os.path.getsize(places) / 1e6:.1f} MB "
+          f"in {time.time() - t0:.0f} s", flush=True)
 
 
 if __name__ == "__main__":

@@ -157,7 +157,32 @@ all the matches as rows (a knob or a remote walks them, Enter takes one).
 Case and accents never matter, and every word typed has to begin a word
 of the name or of its town: "gare" finds Gare and Avenue de la Gare,
 "gare esch" the Rue de la Gare in Esch-sur-Alzette. Places come before
-streets, and among equal matches the nearest first.
+streets, and among equal matches the nearest first. The words can come in
+any order, and the usual short forms are written out ("krt" körút, "rkp"
+rakpart, "sgt" sugárút, "ltp" lakótelep; "u" begins utca and út anyway).
+
+A number typed with a street's words is a house number: the street's
+houses whose number begins with it come first, named with it and their
+postcode ("Main Street 57", "1200 Oldtown"), the number whole before the
+ones it begins, then the street itself, so a street whose houses the map
+does not have is still found. A letter after the number is part of it
+("57 a" is 57/A), and either number of a range finds it ("32" finds
+30-32). A postcode typed too keeps only its houses ("main street 57
+1200"). A number the street does not have lists the nearest one on the
+same side of the street (53 typed, 55 found), within 20 of it. The houses
+are OpenStreetMap's addresses (`addr:housenumber` with `addr:street`), each
+on the street of its name in its town; a route to one goes to the road
+nearest it.
+
+A search reads only the names that can match: of the words typed, the one
+fewest names can match (by the sorted words of the names, and the names of
+the towns it begins a word of) is looked up, and only those names are
+read; a number, only the houses of the streets found. Typing the town
+narrows it to that town's streets. On the board a key typed in Hungary
+(137,000 names, 720,000 houses) took 170 ms reading every name; this way
+it takes 3 to 14 ms, the first letter or two up to 60 ms (they begin many
+words). Opening the index checks it whole: 0.2 s, 1.1 s read cold from
+the card, in the background with the roads.
 
 The route is found on the head unit, from where we are now (the replayed
 drive's position, else `map.fake-position`, else the middle of the map) to
@@ -321,7 +346,7 @@ v/bin/python scripts/map-graph.py luxembourg-latest.osm.pbf maps
 |---|---|---|
 | `roads.bin` | 7.0 MB: 63,000 junctions, 75,000 roads; 3,900 junctions of main roads | 68.6 MB: 620,000 junctions, 770,000 roads, 1.8 million shape points; 18,500 junctions of main roads, 35,000 runs of them |
 | `cameras.bin` | 1 kB: 39 speed cameras | 11.5 kB: 480 |
-| `places.bin` | 0.5 MB: 10,000 streets, 2,200 places, 1,200 filling stations, car parks and charging stations | 4.1 MB: 119,000 streets, 17,900 places (3,200 towns), 1,800 filling stations, 1,500 car parks, 1,500 charging stations |
+| `places.bin` | 0.5 MB: 10,000 streets, 2,200 places, 1,200 filling stations, car parks and charging stations | 19.3 MB: 119,000 streets, 17,900 places (3,200 towns), 720,000 house numbers, 1,800 filling stations, 1,500 car parks, 1,500 charging stations |
 | on a PC | half a minute | about 5 minutes and 2.2 GB of memory (a Raspberry Pi 5) |
 
 They go in the region's folder, beside `map.toml`
@@ -390,16 +415,22 @@ the `roads.bin`'s is ignored, with a line in the log ("placed on roads.bin
 more often than the roads, and can be replaced alone, as long as they
 are placed on the same build.
 
-`places.bin` starts with 7 words: "LEHUFIND", the version (2), the
-numbers of names and towns, the text's bytes and the number of points of
-interest. Then the towns, 2 words each (the name and its folded key, byte
-offsets into the text); the names, 5 words each (x, y, the name, its
-folded key, and the town's index + the kind × 2^16 (0 a street, 1 a
-place) + the rank × 2^24, lower more important); the points of interest,
-5 words each (x, y, the name, a detail, and the town's index + the
-category × 2^16: 1 fuel, 2 parking, 3 charging), in the order of their
-categories; then the text, each string a length byte and UTF-8. Version
-1 (still read) has the first 6 words and no points of interest. A key is
+`places.bin` starts with 9 words: "LEHUFIND", the version (3), the
+numbers of names and towns, the text's bytes, the number of points of
+interest, of houses and of words. Then the towns, 2 words each (the name
+and its folded key, byte offsets into the text); the names, 5 words each
+(x, y, the name, its folded key, and the town's index + the kind × 2^16
+(0 a street, 1 a place) + the rank × 2^24, lower more important); the
+points of interest, 5 words each (x, y, the name, a detail, and the
+town's index + the category × 2^16: 1 fuel, 2 parking, 3 charging), in
+the order of their categories; the words of the names' keys, 2 words each
+(the word and its name), sorted by the word's bytes; where each town's
+names begin (towns + 1 words) and the names' indices, town by town; where
+each street's houses begin (names + 1 words) and the houses, 4 words each
+(x, y, the number as written and the postcode); then the text, each
+string a length byte and UTF-8. Version 2 (still read) has the first 7
+words and stops after the points of interest, version 1 the first 6 and
+no points of interest; with either, a search reads every name. A key is
 the name folded: lower case, without accents, its words split by single
 spaces. A street is in the city, town or village nearest it (a city
 counts from three times as far, a town twice); it has one name for each
@@ -623,7 +654,7 @@ Hungary the region planned for):
 | Night map tiles | the map at night | made on the head unit from the day tiles | none | 0 | 0 |
 | Names | street and place names LEHU draws | `map-tiles.py --labels data` | `labels.pack` | 0.3 MB | 5.4 MB |
 | Road network | routing, turns, speed limits, motorways, the main-road layer | `scripts/map-graph.py` | `roads.bin` | 7.0 MB | 68.6 MB |
-| Places | Go to's search; fuel, parking, charging | `scripts/map-graph.py` | `places.bin` | 0.5 MB | 4.1 MB |
+| Places | Go to's search, house numbers; fuel, parking, charging | `scripts/map-graph.py` | `places.bin` | 0.5 MB | 19.3 MB |
 | Speed cameras | the camera warning | `scripts/map-graph.py` (OSM `highway=speed_camera`) | `cameras.bin`, tied to its roads.bin | 1 kB, 39 cameras | 11.5 kB, 480 |
 | Voice clips | spoken prompts | `scripts/voice-clips.py` (Piper) | `/maps/voice/en/*.wav` | 2.8 MB (English) | the same |
 | Region description | versions, checks, where to open | `scripts/map-region.py` | `map.toml` | 1 KB | 1 KB |

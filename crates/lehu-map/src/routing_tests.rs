@@ -880,9 +880,143 @@ fn a_broken_index_is_refused() {
     assert!(Places::from_bytes(&index[..index.len() - 4]).is_err());
     let mut bad = index.clone();
     // The entry's town: one that is not there.
-    let at = 7 * 4 + 2 * 4 + 4 * 4;
+    let at = 9 * 4 + 2 * 4 + 4 * 4;
     bad[at..at + 4].copy_from_slice(&7u32.to_le_bytes());
     assert!(Places::from_bytes(&bad).is_err());
+}
+
+#[test]
+fn house_numbers_and_postcodes_are_found_on_their_streets() {
+    let here = at(0.0, 0.0);
+    let p = |east: f64| at(east, 0.0);
+    let index = crate::search::build::write_houses(
+        &[
+            // (name, town, kind, rank, x, y)
+            ("Main Street", 0, 0, 12, p(500.0).0, p(500.0).1),
+            ("Main Street", 1, 0, 12, p(30_000.0).0, p(30_000.0).1),
+            ("Mill Lane", 0, 0, 12, p(900.0).0, p(900.0).1),
+            ("Ring Road", 0, 0, 9, p(1500.0).0, p(1500.0).1),
+            ("Oldtown", 0, 1, 1, here.0, here.1),
+        ],
+        &[],
+        &["Oldtown", "Newbury"],
+        &[
+            // (entry, number, postcode, x, y), by entry
+            (0, "5", "1100", p(450.0).0, p(450.0).1),
+            (0, "55", "1200", p(600.0).0, p(600.0).1),
+            (0, "57/A", "1200", p(610.0).0, p(610.0).1),
+            (0, "59", "1200", p(620.0).0, p(620.0).1),
+            (0, "30-32", "1100", p(400.0).0, p(400.0).1),
+            (1, "57", "2300", p(30_010.0).0, p(30_010.0).1),
+            (2, "2", "", p(910.0).0, p(910.0).1),
+        ],
+        3,
+    );
+    let places = Places::from_bytes(&index).unwrap();
+    let names = |q: &str| -> Vec<(String, String)> {
+        places
+            .search(q, Some(here), 10)
+            .into_iter()
+            .map(|f| (f.name, f.town))
+            .collect()
+    };
+    // The number whole first, the nearest first; then the ones it begins;
+    // the streets after their houses.
+    let n57 = names("main st 57");
+    assert_eq!(n57[0], ("Main Street 57".into(), "2300 Newbury".into()));
+    assert_eq!(n57[1], ("Main Street 57/A".into(), "1200 Oldtown".into()));
+    assert_eq!(n57[2].0, "Main Street");
+    // A letter typed apart is the number's; a postcode keeps its houses.
+    assert_eq!(names("main 57 a")[0].0, "Main Street 57/A");
+    assert_eq!(
+        names("main street 57 1200")[0],
+        ("Main Street 57/A".into(), "1200 Oldtown".into())
+    );
+    assert_eq!(names("1200 main 5")[0].0, "Main Street 55");
+    // A town typed: only its streets.
+    assert_eq!(
+        names("main 57 newbury")[0],
+        ("Main Street 57".into(), "2300 Newbury".into())
+    );
+    assert!(
+        names("main 57 newbury")
+            .iter()
+            .all(|n| n.1.contains("Newbury"))
+    );
+    // Either number of a range; the house found is where it is.
+    assert_eq!(names("main 32")[0].0, "Main Street 30-32");
+    let house = &places.search("mill 2", Some(here), 1)[0];
+    assert_eq!(
+        (house.name.as_str(), house.town.as_str()),
+        ("Mill Lane 2", "Oldtown")
+    );
+    assert!((905..915).contains(&house.metres.unwrap()), "{house:?}");
+    // No such number: the nearest on the same side, then the street.
+    let n53 = names("main street 53 1200");
+    assert_eq!(n53[0].0, "Main Street 55");
+    assert_eq!(n53[1].0, "Main Street");
+    assert_eq!(names("1200 main street 53")[0].0, "Main Street 55");
+    // A street without houses is still found with a number.
+    assert_eq!(names("ring 12")[0].0, "Ring Road");
+    // A number alone finds nothing; the short forms are written out.
+    assert!(names("57").is_empty());
+    // Places still come first without a number, and the old search agrees.
+    assert_eq!(names("old")[0].0, "Oldtown");
+    assert_eq!(
+        names("main oldtown")[0],
+        ("Main Street".into(), "Oldtown".into())
+    );
+}
+
+#[test]
+fn the_index_reads_only_what_a_word_can_match() {
+    // Two thousand streets in two towns: what the words find is what a
+    // search of every entry finds.
+    let names: Vec<String> = (0..2000)
+        .map(|i| format!("Street {i} {}", ["Alpha", "Beta", "Gamma"][i % 3]))
+        .collect();
+    let entries: Vec<_> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), (i % 2) as u32, 0, 12, i as i64 * 1000, 0))
+        .collect();
+    let indexed = Places::from_bytes(&crate::search::build::write_with(
+        &entries,
+        &[],
+        &["Northam", "Southam"],
+        3,
+    ))
+    .unwrap();
+    let scanned = Places::from_bytes(&crate::search::build::write_with(
+        &entries,
+        &[],
+        &["Northam", "Southam"],
+        2,
+    ))
+    .unwrap();
+    for q in [
+        "street",
+        "gam",
+        "beta south",
+        "1999",
+        "street 12 alpha",
+        "north",
+        "southam gamma",
+        "zeta",
+    ] {
+        let a: Vec<_> = indexed
+            .search(q, Some((0, 0)), 20)
+            .into_iter()
+            .map(|f| (f.name, f.town))
+            .collect();
+        let b: Vec<_> = scanned
+            .search(q, Some((0, 0)), 20)
+            .into_iter()
+            .map(|f| (f.name, f.town))
+            .collect();
+        assert_eq!(a, b, "{q}");
+    }
+    assert!(!indexed.search("southam gamma", None, 5).is_empty());
 }
 
 /// The router on scripts/map-graph.py's network agrees with
