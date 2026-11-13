@@ -1035,7 +1035,7 @@ fn run(
                                         // made ready meanwhile, for a bend
                                         // (whole: the half's) or a corner
                                         // (half: the quarter's) to come.
-                                        if div <= 2 && job.view.zoom >= 2 {
+                                        if REDUCE_WHILE_TURNING && div <= 2 && job.view.zoom >= 2 {
                                             let q = View {
                                                 zoom: job.view.zoom - 1,
                                                 ..job.view

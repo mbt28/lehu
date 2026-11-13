@@ -1749,3 +1749,170 @@ fn turn_bench() {
         println!("route of {n} points ({inside} in view, amplitude {amp} px): {best:.1} ms");
     }
 }
+
+/// What each step of getting a tile costs on this machine (cross-built for
+/// the board, it says what the chip there does):
+/// `LEHU_MAP_DIR=<region> cargo test -p lehu-map decode_bench -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn decode_bench() {
+    use std::time::Instant;
+    let dir = std::env::var("LEHU_MAP_DIR").unwrap();
+    let set = TileSet::open(Path::new(&dir)).unwrap();
+    let center = set.center;
+    // A zoom the set has everywhere (Hungary: 8 to 14 over the country).
+    let zoom = 14u8;
+    let s = WORLD_Z - zoom;
+    let (tx, ty) = ((center.0 >> s) / TILE, (center.1 >> s) / TILE);
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+    // The file: from the pack, warm and cold-ish (49 different tiles).
+    let mut path = std::path::PathBuf::new();
+    let mut file = Vec::new();
+    let t = Instant::now();
+    let mut n = 0;
+    let mut bytes = 0;
+    for dy in -3..=3 {
+        for dx in -3..=3 {
+            if set
+                .read(zoom, tx + dx, ty + dy, &mut path, &mut file)
+                .unwrap()
+            {
+                n += 1;
+                bytes += file.len();
+            }
+        }
+    }
+    println!(
+        "read {n} tiles from the pack: {:.2} ms each, {} bytes each",
+        ms(t) / n as f64,
+        bytes / n.max(1)
+    );
+    set.read(zoom, tx, ty, &mut path, &mut file).unwrap();
+    let t = Instant::now();
+    for _ in 0..20 {
+        set.read(zoom, tx, ty, &mut path, &mut file).unwrap();
+    }
+    println!("read the same tile again: {:.2} ms", ms(t) / 20.0);
+    // The engine: the shim's call alone, then the copy out and untile.
+    let mut out = vec![0u8; crate::tiles::TILE_BYTES];
+    match crate::hw::HwJpeg::open(TILE as u32, 256 * 1024) {
+        Ok((mut hw, dev)) => {
+            hw.decode(&file, &mut out).unwrap();
+            let t = Instant::now();
+            for _ in 0..20 {
+                hw.decode(&file, &mut out).unwrap();
+            }
+            println!(
+                "engine decode + copy + untile ({dev}): {:.2} ms",
+                ms(t) / 20.0
+            );
+            let staging = vec![0u8; crate::tiles::TILE_BYTES];
+            let t = Instant::now();
+            for _ in 0..20 {
+                crate::hw::untile(&staging, TILE as usize, (TILE * TILE) as usize, &mut out);
+            }
+            println!("  of which untile (cached source): {:.2} ms", ms(t) / 20.0);
+        }
+        Err(e) => println!("no engine: {e}"),
+    }
+    let t = Instant::now();
+    let p = lehu_image::decode(&file, TILE as u32, set.land).unwrap();
+    let took = ms(t);
+    let t = Instant::now();
+    nv12::from_rgb(&p.rgb, TILE as usize, &mut out);
+    println!(
+        "software decode: {took:.1} ms, RGB to NV12: {:.2} ms",
+        ms(t)
+    );
+    let mut big = vec![0u8; crate::tiles::TILE_BYTES];
+    let t = Instant::now();
+    for _ in 0..20 {
+        nv12::enlarge_quarter(&out, TILE as usize, (1, 0), &mut big);
+    }
+    println!("enlarge a quarter: {:.2} ms", ms(t) / 20.0);
+    let night = nv12::Night::new(set.land);
+    let t = Instant::now();
+    for _ in 0..20 {
+        night.apply(&mut out, TILE as usize);
+    }
+    println!("night lookup on a tile: {:.2} ms", ms(t) / 20.0);
+    // 49 different tiles through the engine, read and decode apart.
+    if let Ok((mut hw, _)) = crate::hw::HwJpeg::open(TILE as u32, 256 * 1024) {
+        let (mut read_ms, mut dec_ms, mut n) = (0.0, 0.0, 0);
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                let t = Instant::now();
+                let there = set
+                    .read(zoom, tx + dx + 10, ty + dy + 10, &mut path, &mut file)
+                    .unwrap();
+                read_ms += ms(t);
+                if there {
+                    let t = Instant::now();
+                    hw.decode(&file, &mut out).unwrap();
+                    dec_ms += ms(t);
+                    n += 1;
+                }
+            }
+        }
+        println!(
+            "{n} different tiles: read {:.2} ms each, engine decode + copy + untile {:.2} ms each",
+            read_ms / n.max(1) as f64,
+            dec_ms / n.max(1) as f64
+        );
+        let t = Instant::now();
+        for _ in 0..20 {
+            let b = vec![0u8; crate::tiles::TILE_BYTES].into_boxed_slice();
+            std::hint::black_box(&b);
+        }
+        println!(
+            "a tile's buffer allocated and zeroed: {:.2} ms",
+            ms(t) / 20.0
+        );
+    }
+    // A cold grid and a cold canvas.
+    let hw = crate::hw::HwJpeg::open(TILE as u32, 256 * 1024)
+        .ok()
+        .map(|(h, _)| h);
+    let mut tiles = Tiles::new(TileSet::open(Path::new(&dir)).unwrap(), None, hw);
+    let t = Instant::now();
+    let g = tiles.grid(zoom, (tx - 3, ty - 3), 7, 7);
+    let have = g.tiles.iter().filter(|t| t.is_some()).count();
+    drop(g);
+    println!(
+        "cold grid of 49 tiles ({have} there): {:.1} ms, {} decoded",
+        ms(t),
+        tiles.decoded
+    );
+    let t = Instant::now();
+    let g = tiles.grid(zoom, (tx - 3, ty - 3), 7, 7);
+    drop(g);
+    println!("the same grid warm: {:.2} ms", ms(t));
+    let view = View {
+        zoom,
+        x: center.0,
+        y: center.1,
+    };
+    let layout = Layout::around(&view, (800, 480), 5, 3);
+    let (w, h) = (5 * TILE as usize, 3 * TILE as usize);
+    let mut canvas = vec![0u8; w * h * 3 / 2];
+    let t = Instant::now();
+    tiles.compose(&layout, &mut canvas, w, w * h);
+    println!(
+        "compose a 5x3 canvas (tiles warm, canvas pages cold): {:.1} ms",
+        ms(t)
+    );
+    let t = Instant::now();
+    tiles.compose(&layout, &mut canvas, w, w * h);
+    println!("compose it again (canvas pages warm): {:.1} ms", ms(t));
+    let t = Instant::now();
+    let mut other = vec![0u8; w * h * 3 / 2];
+    other.copy_from_slice(&canvas);
+    println!(
+        "a plain memcpy of the canvas, {} KB, pages cold: {:.1} ms",
+        w * h * 3 / 2 / 1024,
+        ms(t)
+    );
+    let t = Instant::now();
+    other.copy_from_slice(&canvas);
+    println!("the same memcpy, pages warm: {:.1} ms", ms(t));
+}
