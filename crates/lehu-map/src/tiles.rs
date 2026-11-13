@@ -25,9 +25,14 @@ pub const LAND: [u8; 3] = [242, 239, 233];
 
 /// Tiles kept decoded (96 KiB each, taken as they are needed): a canvas
 /// is 15; a turned frame two zooms past the set's last wants up to 36, and
-/// the tiles a zoom and two zooms out they are enlarged from, all at once.
-/// Fewer, and they push each other out while one frame is drawn.
-pub const CACHED: usize = 64;
+/// the tiles a zoom and two zooms out they are enlarged from, all at once;
+/// and those decoded ahead along the route (crate::viewer), up to 32, so
+/// that they do not push the frame's own out. Fewer, and they push each
+/// other out while one frame is drawn.
+pub const CACHED: usize = 96;
+
+/// Buffers of tiles let go kept for the next decoded, at most.
+const SPARE: usize = 8;
 
 /// Tiles remembered as missing, besides: a few bytes each, kept apart so
 /// that a trip over empty land does not push decoded tiles out.
@@ -61,6 +66,10 @@ pub struct Tiles {
     lut: Option<nv12::Night>,
     hw: Option<HwJpeg>,
     entries: Vec<Entry>,
+    /// The buffers of tiles let go, for the next decoded: a tile's 96 KiB
+    /// is above the allocator's mmap threshold, so a fresh one costs a
+    /// mapping and its page faults (half a millisecond) each time.
+    spare: Vec<Box<[u8]>>,
     clock: u64,
     path: PathBuf,
     file: Vec<u8>,
@@ -89,6 +98,7 @@ impl Tiles {
             lut: None,
             hw,
             entries: Vec::with_capacity(CACHED + MISSING),
+            spare: Vec::new(),
             clock: 0,
             path: PathBuf::new(),
             file: Vec::new(),
@@ -134,7 +144,12 @@ impl Tiles {
                         .filter(|(_, e)| e.pixels.is_some() == has)
                         .min_by_key(|(_, e)| e.used)
                         .map_or(0, |(i, _)| i);
-                    self.entries[i] = entry;
+                    let old = std::mem::replace(&mut self.entries[i], entry);
+                    if let Some(b) = old.pixels
+                        && self.spare.len() < SPARE
+                    {
+                        self.spare.push(b);
+                    }
                     i
                 } else {
                     self.entries.push(entry);
@@ -188,7 +203,7 @@ impl Tiles {
                 return None;
             }
         }
-        let mut out = vec![0u8; TILE_BYTES].into_boxed_slice();
+        let mut out = self.buffer();
         if let Some(hw) = self.hw.as_mut() {
             match hw.decode(&self.file, &mut out) {
                 Ok(()) => {
@@ -224,6 +239,30 @@ impl Tiles {
         Some((out, 0))
     }
 
+    /// A tile's buffer: one let go, else a fresh one. Every byte is written
+    /// by whoever fills it (the engine's untile, the software decode, the
+    /// enlarging), so a used one needs no clearing.
+    fn buffer(&mut self) -> Box<[u8]> {
+        self.spare
+            .pop()
+            .unwrap_or_else(|| vec![0u8; TILE_BYTES].into_boxed_slice())
+    }
+
+    /// Tile `key` is kept decoded (or known missing).
+    pub fn kept(&self, key: (u8, i64, i64)) -> bool {
+        self.entries.iter().any(|e| e.key == key)
+    }
+
+    /// Tile `key` decoded now if it is not kept, for a frame to come: true
+    /// when something was done.
+    pub fn prefetch(&mut self, key: (u8, i64, i64)) -> bool {
+        if !inside(key.0, key.1, key.2) || self.kept(key) {
+            return false;
+        }
+        self.slot(key);
+        true
+    }
+
     /// A tile the set lacks, as its quarter of the tile a zoom out,
     /// enlarged (that one made the same way if it is missing too): softer,
     /// but the map rather than bare land, so a set can stop at a lower
@@ -238,11 +277,11 @@ impl Tiles {
         let parent = &self.entries[i];
         // A tile kept from an earlier enlargement counts its own.
         let soft = parent.soft + 1;
-        if soft > MAX_ENLARGE {
+        if soft > MAX_ENLARGE || parent.pixels.is_none() {
             return None;
         }
-        let src = parent.pixels.as_deref()?;
-        let mut out = vec![0u8; TILE_BYTES].into_boxed_slice();
+        let mut out = self.buffer();
+        let src = self.entries[i].pixels.as_deref()?;
         let quarter = ((x & 1) as usize, (y & 1) as usize);
         nv12::enlarge_quarter(src, SIDE, quarter, &mut out);
         self.enlarged += 1;

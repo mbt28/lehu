@@ -28,6 +28,7 @@ use crate::nv12::{self, Surface};
 use crate::sprite::Sprites;
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
+use crate::track::ground_px;
 use crate::view::{Layout, TILE, View, WORLD_Z};
 
 const CANVASES: usize = 3;
@@ -697,6 +698,9 @@ fn run(
     let mut cameras: Option<CameraMarks> = None;
     let mut progress: Option<Progress> = None;
     let mut night = false;
+    // The tiles the drive will want next, decoded one at a time while
+    // nothing is to be shown.
+    let mut prefetch = Prefetch::default();
     loop {
         let want = {
             let mut inner = shared.lock();
@@ -752,7 +756,11 @@ fn run(
                     position = inner.position;
                     shown = None;
                 }
-                if inner.stop || shown != Some(inner.want) || ahead.is_some() || zoom_anim.is_some()
+                if inner.stop
+                    || shown != Some(inner.want)
+                    || ahead.is_some()
+                    || zoom_anim.is_some()
+                    || prefetch.pending()
                 {
                     break;
                 }
@@ -805,9 +813,33 @@ fn run(
                         started.elapsed().as_millis()
                     );
                 }
+            } else if ahead.is_none()
+                && let Some(key) = prefetch.next(&tiles)
+            {
+                // Nothing to show and nothing to ready: a tile the drive
+                // will want, from the cache's point of view the same as
+                // one a frame asked for.
+                let started = Instant::now();
+                if tiles.prefetch(key) && trace {
+                    log::info!(
+                        "map: tile {}/{}/{} decoded ahead in {} ms",
+                        key.0,
+                        key.1,
+                        key.2,
+                        started.elapsed().as_millis()
+                    );
+                }
             }
             continue;
         };
+        // Where the drive is going, for the tiles to decode ahead.
+        prefetch.plan(
+            &want,
+            route.as_deref(),
+            progress,
+            position,
+            drive_top_zoom(shared),
+        );
         if let Some(up) = heading {
             ahead = None;
             let h = unit_up(up);
@@ -1635,6 +1667,150 @@ fn show_up_src(
     }
 }
 
+/// The top zoom the drive may follow at, as the loop set it.
+fn drive_top_zoom(shared: &Shared) -> u8 {
+    shared.lock().drive.as_ref().map_or(WORLD_Z, |d| d.top_zoom)
+}
+
+/// How far ahead along the route tiles are decoded, metres, at the zoom
+/// shown; and at the zoom a level closer, which a turn switches to.
+const PREFETCH_M: f64 = 1500.0;
+const PREFETCH_NEAR_M: f64 = 500.0;
+/// Without a route, how far along the heading.
+const PREFETCH_FREE_M: f64 = 800.0;
+/// Tiles decoded ahead at most for one plan: a cache's quarter.
+const PREFETCH_MAX: usize = 32;
+
+/// The tiles a drive will want next: planned from the route ahead (or the
+/// heading, without one) when the drive moves on to another tile or
+/// another zoom, and decoded one at a time while the map has nothing to
+/// show, nearest first.
+#[derive(Default)]
+struct Prefetch {
+    keys: Vec<(u8, i64, i64)>,
+    /// What the keys were planned for: the zoom and the drive's tile.
+    planned: Option<(u8, i64, i64)>,
+}
+
+impl Prefetch {
+    fn pending(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
+    /// The next tile not kept, when there is one.
+    fn next(&mut self, tiles: &Tiles) -> Option<(u8, i64, i64)> {
+        while let Some(k) = self.keys.first().copied() {
+            self.keys.remove(0);
+            if !tiles.kept(k) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    /// Plan afresh when the drive is on another tile of `view`'s zoom, or
+    /// the zoom changed; else nothing.
+    fn plan(
+        &mut self,
+        view: &View,
+        route: Option<&[(i64, i64)]>,
+        progress: Option<Progress>,
+        position: Option<Marker>,
+        top_zoom: u8,
+    ) {
+        let Some(at) = progress.map(|p| p.at).or_else(|| {
+            position.map(|m| match m {
+                Marker::Dot(x, y) | Marker::Arrow(x, y, _) => (x, y),
+            })
+        }) else {
+            return;
+        };
+        let here = tile_of(view.zoom, at);
+        let key = (view.zoom, here.0, here.1);
+        if self.planned == Some(key) {
+            return;
+        }
+        self.planned = Some(key);
+        // The path ahead: the route from where the drive is, else a line
+        // along the heading.
+        let path: Vec<(i64, i64)> = match (route, progress) {
+            (Some(r), Some(p)) if p.step < r.len() => std::iter::once(at)
+                .chain(r[p.step..].iter().copied())
+                .collect(),
+            _ => match position {
+                Some(Marker::Arrow(x, y, h)) if h != (0, 0) => {
+                    // 100 m steps, in world pixels at this height.
+                    let m_px = crate::track::metres_per_px(y);
+                    let step = 100.0 / m_px;
+                    let len = f64::from(h.0).hypot(f64::from(h.1)).max(1.0);
+                    (0..=(PREFETCH_FREE_M / 100.0) as i64)
+                        .map(|i| {
+                            (
+                                x + (f64::from(h.0) / len * step * i as f64) as i64,
+                                y + (f64::from(h.1) / len * step * i as f64) as i64,
+                            )
+                        })
+                        .collect()
+                }
+                _ => vec![at],
+            },
+        };
+        self.keys = plan_tiles(&path, view.zoom, top_zoom);
+    }
+}
+
+/// The tile of zoom `z` that world point `p` lies in.
+fn tile_of(z: u8, p: (i64, i64)) -> (i64, i64) {
+    let s = WORLD_Z - z.min(WORLD_Z);
+    ((p.0 >> s) / TILE, (p.1 >> s) / TILE)
+}
+
+/// The tiles along `path` (world points, the first where the drive is):
+/// at `zoom` for `PREFETCH_M`, and a level closer (up to `top_zoom`) for
+/// `PREFETCH_NEAR_M`, each point's tile and the eight around it (a
+/// panel's width), nearest first, at most `PREFETCH_MAX`.
+fn plan_tiles(path: &[(i64, i64)], zoom: u8, top_zoom: u8) -> Vec<(u8, i64, i64)> {
+    let mut out: Vec<(u8, i64, i64)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut metres = 0.0;
+    let closer = (zoom + 1).min(top_zoom);
+    for (i, &p) in path.iter().enumerate() {
+        if i > 0 {
+            metres += ground_px(path[i - 1], p);
+        }
+        if metres > PREFETCH_M {
+            break;
+        }
+        let mut zooms = vec![zoom];
+        if closer > zoom && metres <= PREFETCH_NEAR_M {
+            zooms.push(closer);
+        }
+        for z in zooms {
+            let (tx, ty) = tile_of(z, p);
+            for (dx, dy) in [
+                (0, 0),
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (-1, 1),
+                (1, -1),
+                (-1, -1),
+            ] {
+                let k = (z, tx + dx, ty + dy);
+                if seen.insert(k) {
+                    out.push(k);
+                    if out.len() >= PREFETCH_MAX {
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// A marker's point, and its heading if it has one.
 fn parts(marker: Marker) -> ((i64, i64), Option<(i64, i64)>) {
     match marker {
@@ -2393,6 +2569,38 @@ mod tests {
         };
         assert_eq!(under(src), under(twice));
         assert_eq!(scaled_src(src, 1.0, PANEL), src);
+    }
+
+    #[test]
+    fn tiles_are_planned_along_the_route_nearest_first() {
+        // East along a row of zoom-16 tiles (3,906 px at zoom 22 each
+        // tile at that zoom... a tile of zoom 16 is 64 x 256 world px).
+        let tile = TILE << (WORLD_Z - 16);
+        let y = AT.y;
+        let x0 = AT.x - AT.x % tile;
+        let m_px = crate::track::metres_per_px(y);
+        // Points every 50 m for 3 km.
+        let path: Vec<(i64, i64)> = (0..60)
+            .map(|i| (x0 + (50.0 * i as f64 / m_px) as i64, y))
+            .collect();
+        let keys = plan_tiles(&path, 16, 18);
+        assert!(!keys.is_empty() && keys.len() <= PREFETCH_MAX);
+        // The drive's own tile first, at the zoom shown.
+        assert_eq!(keys[0], (16, x0 / tile, y / tile));
+        // The zoom a level closer is planned near, not far.
+        let far_closer = keys
+            .iter()
+            .any(|k| k.0 == 17 && k.1 > (x0 + (600.0 / m_px) as i64) / (tile / 2));
+        assert!(!far_closer, "{keys:?}");
+        assert!(keys.iter().any(|k| k.0 == 17));
+        // Nothing beyond 1.5 km at the zoom shown.
+        let reach = (x0 + (1500.0 / m_px) as i64) / tile + 1;
+        assert!(keys.iter().all(|k| k.0 != 16 || k.1 <= reach), "{keys:?}");
+        // No duplicates.
+        let mut sorted = keys.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len());
     }
 
     #[test]
