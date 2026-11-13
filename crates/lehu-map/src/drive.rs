@@ -196,13 +196,24 @@ pub struct Camera {
 
 /// How long the view takes, about, to catch up with the drive: its
 /// position, and its way up.
+/// A spring settling in `t` trails a steady move by about `t`: at 30
+/// degrees a second in a bend, 0.3 s is 9 degrees behind the arrow.
 pub const CAMERA_POS_S: f64 = 0.25;
-pub const CAMERA_UP_S: f64 = 0.6;
+pub const CAMERA_UP_S: f64 = 0.3;
+/// The way up turns no faster than this, degrees a second: a corner takes
+/// about a second, as the car does, however the fixes jump; and the
+/// frames turned meanwhile come at an even rate the drawing keeps up with.
+pub const CAMERA_MAX_DPS: f64 = 90.0;
 /// Further than this from the drive, world pixels (about 250 m at 47
 /// degrees north), the view jumps to it: a drive begun again, a jump.
 const CAMERA_JUMP_PX: f64 = 16_000.0;
 
 impl Camera {
+    /// How fast the way up is turning, degrees a second (signed).
+    pub fn turn_dps(&self) -> f64 {
+        self.turn.to_degrees()
+    }
+
     /// The view's point and way up (about 1024 long) `dt_ms` on, following
     /// the drive at `pos` going `heading` (any length; (0, 0) standing).
     pub fn step(
@@ -237,7 +248,12 @@ impl Camera {
                         self.turn = 0.0;
                         want
                     } else {
-                        let (u, t) = damp(a, a + off, self.turn, CAMERA_UP_S, dt);
+                        let (mut u, mut t) = damp(a, a + off, self.turn, CAMERA_UP_S, dt);
+                        let max = CAMERA_MAX_DPS.to_radians();
+                        if t.abs() > max {
+                            t = max.copysign(t);
+                            u = a + t * dt;
+                        }
                         self.turn = t;
                         u
                     }
@@ -392,15 +408,21 @@ mod tests {
             x = nx;
         }
         assert!((1100 - x).abs() <= 1, "settled at {x}");
-        // A turn of 90 degrees: the way up turns most of the way in a
-        // second and a half, all of it in two and a half, never past it.
+        // A turn of 90 degrees: no faster than 90 degrees a second, so
+        // most of the way in a second, all of it in a second and a half,
+        // never past it.
         let south = (0, 1024);
         let mut last = 0.0f64;
-        for i in 0..150 {
+        for i in 0..90 {
             let (_, up) = c.step((1100, 0), south, 16);
             let (ux, uy) = up.unwrap();
             let a = f64::from(uy).atan2(f64::from(ux)).to_degrees();
             assert!(a >= last - 0.01 && a <= 90.01, "{i}: {a}");
+            assert!(
+                a <= (i + 1) as f64 * 16.0 / 1000.0 * 90.0 + 0.5,
+                "{i}: {a} too fast"
+            );
+            assert!(c.turn_dps().abs() <= CAMERA_MAX_DPS + 0.01);
             last = a;
         }
         assert!(last > 89.0, "{last}");

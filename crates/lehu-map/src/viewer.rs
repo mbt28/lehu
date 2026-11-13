@@ -78,9 +78,15 @@ struct Inner {
     /// Heading-up: the way that is up on the panel (x right, y down),
     /// the view's point at the anchor; None for north-up.
     heading: Option<(i32, i32)>,
-    /// The way up `SOON_MS` from now, while the map turns by itself: a
-    /// frame turned now is drawn for it, being shown about then.
+    /// The way up when a frame turned now will be shown, while the map
+    /// turns by itself: the frame is drawn for it.
     heading_soon: Option<(i32, i32)>,
+    /// How fast the way up is turning, degrees a second: turning, frames
+    /// are made at half resolution, as many as can be.
+    turning: f64,
+    /// What a frame takes from being asked for to being on the panel,
+    /// milliseconds, as measured lately: the way up is predicted that far.
+    turn_ms: u64,
     /// Following: 0, the map moves with the arrow; else held still until
     /// the arrow is this many pixels from its place (`Hold`).
     lead: u32,
@@ -182,6 +188,8 @@ impl Viewer {
                 cameras: None,
                 heading: None,
                 heading_soon: None,
+                turning: 0.0,
+                turn_ms: SOON_MS,
                 lead: 0,
                 stop: false,
                 shown: false,
@@ -417,7 +425,7 @@ struct Held {
 
 /// The route's grey part may end this many pixels behind the marker (the
 /// arrow covers it) before the picture is drawn anew.
-const ROUTE_LAG: i64 = 12;
+const ROUTE_LAG: i64 = 32;
 
 /// A picture's grey part, drawn to `drawn`, still meets the marker at
 /// `now`: within `ROUTE_LAG` pixels at `zoom`. Always, without a route.
@@ -534,11 +542,6 @@ fn drive(shared: &Shared, display: &Display) {
         let heading = steer.step(fix.heading, since);
         // The map: the drive's position and way, smoothed (`Camera`).
         let (view_at, view_up) = camera.step((fix.x, fix.y), fix.heading, since);
-        // Where the way up will be once a frame turned now is shown.
-        let soon = {
-            let mut ahead = camera;
-            ahead.step((fix.x, fix.y), fix.heading, SOON_MS).1
-        };
         let marker = Some(Marker::Arrow(fix.x, fix.y, heading.unwrap_or(fix.heading)));
         let progress = Some(Progress {
             step: fix.step,
@@ -549,6 +552,14 @@ fn drive(shared: &Shared, display: &Display) {
             .ahead(ms)
             .is_some_and(|a| a.metres < NEAR_TURN_M);
         let mut inner = shared.lock();
+        // Where the way up will be once a frame asked for now is shown:
+        // what a frame has been taking, and the refresh it waits for.
+        let soon = {
+            let mut ahead = camera;
+            let by = inner.turn_ms.clamp(16, 200) + period.as_millis() as u64;
+            ahead.step((fix.x, fix.y), fix.heading, by).1
+        };
+        inner.turning = camera.turn_dps();
         // Following, as it is now: the loop may just have stopped it.
         let (want, up, up_soon) = match inner.follow {
             Some(base) => {
@@ -642,6 +653,16 @@ fn run(
     let mut retired: Vec<Canvas> = Vec::new();
     let mut heading: Option<(i32, i32)> = None;
     let mut heading_soon: Option<(i32, i32)>;
+    let mut turning: f64;
+    // What a frame takes, asked for to shown, smoothed; and the last
+    // picture shown, for the trace.
+    let mut turn_ms = SOON_MS;
+    // What the drawing alone takes, by resolution (whole, half, quarter),
+    // smoothed: drawn within a refresh, the frame shown is not moved on
+    // meanwhile, so the new one is not held up by that flip.
+    let mut render_ms = [60u64, 20, 10];
+    let mut last_shown_at: Option<Instant> = None;
+    let trace = std::env::var_os("LEHU_MAP_TRACE").is_some();
     // A change of zoom shown as a frame scaled smoothly, while it lasts.
     let mut zoom_anim: Option<ZoomAnim> = None;
     // What each canvas holds, and the last two shown, newest first: those
@@ -691,6 +712,7 @@ fn run(
                     shown = None;
                 }
                 heading_soon = inner.heading_soon;
+                turning = inner.turning;
                 if inner.heading != heading {
                     heading = inner.heading.filter(|_| !ups.is_empty());
                     shown = None;
@@ -807,6 +829,7 @@ fn run(
                                 scaled_src(src, sc, panel),
                                 panel,
                                 position,
+                                true,
                             ) {
                                 up_stats.shown();
                                 recent_up = [Some(a.frame), recent_up[0].filter(|&r| r != a.frame)];
@@ -824,7 +847,10 @@ fn run(
             // the one shown first: moving along is a commit, no drawing.
             // Without the sprite the marker is in the frame: each is new.
             // A half frame only while steering: then a whole one.
-            let steering = last_turn.is_some_and(|t| t.elapsed() < STEER_MS);
+            // Steering: the way up is turning. Frames are then made at
+            // half resolution, quick, and shown scaled; once it settles a
+            // whole one takes their place.
+            let steering = turning.abs() >= STEER_DPS;
             // The newest frame turned: the only one shown. Two frames
             // turned a little apart, shown by turns, would swing the map
             // to and fro.
@@ -834,13 +860,14 @@ fn run(
             let placed = if sprites.is_some() {
                 newest.and_then(|i| {
                     let u = up_held[i]?;
-                    (!u.half || steering).then_some(())?;
+                    (u.div == 1 || steering).then_some(())?;
                     fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
                     place_up(&u, &want, h, size, panel, UP_TOLERANCE).map(|src| (i, src))
                 })
             } else {
                 None
             };
+            let mut just_drawn: Option<Instant> = None;
             let (i, src) = match placed {
                 Some(p) => p,
                 None => {
@@ -862,23 +889,26 @@ fn run(
                         .filter(|_| sprites.is_some())
                         .and_then(|j| up_held[j].map(|u| (j, u)));
                     // Steering, at the zoom shown: turned at half the
-                    // resolution, four times as quick, scaled up; a whole
-                    // frame once the steering stops.
-                    let half = steering
-                        && want.zoom > 1
-                        && meanwhile.is_some_and(|(_, u)| {
-                            u.zoom == want.zoom || (u.half && u.zoom + 1 == want.zoom)
-                        });
-                    let (frame_size, frame_panel) = if half {
-                        (halved(size), halved(panel))
+                    // resolution, four times as quick, scaled up; in a
+                    // corner a quarter, so that a frame fits a refresh. A
+                    // whole frame once the steering stops.
+                    let div = if !steering
+                        || !meanwhile.is_some_and(|(_, u)| u.for_zoom() == want.zoom)
+                    {
+                        1
+                    } else if turning.abs() >= QUARTER_DPS && want.zoom >= 3 {
+                        4
+                    } else if want.zoom >= 2 {
+                        2
                     } else {
-                        (size, panel)
+                        1
                     };
+                    let (frame_size, frame_panel) = (shrunk(size, div), shrunk(panel, div));
                     // The window low in the frame, the road ahead above.
                     // Turning, the next turn is soon: the panel and a
                     // little more. Else all the room ahead; without the
                     // sprite, the panel alone.
-                    let d = if half { 2 } else { 1 };
+                    let d = div;
                     let window = (UP_SIDE / d, frame_size.1 - frame_panel.1 - UP_BACK / d);
                     let top = if sprites.is_none() {
                         window.1
@@ -888,13 +918,9 @@ fn run(
                         0
                     };
                     let job = UpJob {
-                        view: if half {
-                            View {
-                                zoom: want.zoom - 1,
-                                ..want
-                            }
-                        } else {
-                            want
+                        view: View {
+                            zoom: want.zoom - div.trailing_zeros() as u8,
+                            ..want
                         },
                         // Drawn for the way up when it will be shown.
                         h: heading_soon.map_or(h, unit_up),
@@ -906,7 +932,7 @@ fn run(
                     // Closer: the frame shown is enlarged towards the new
                     // zoom while the new frame is drawn.
                     if let Some((j, u)) = meanwhile
-                        && !u.half
+                        && u.div == 1
                         && want.zoom == u.zoom + 1
                     {
                         zoom_anim = Some(ZoomAnim {
@@ -920,6 +946,7 @@ fn run(
                     let drawn = match meanwhile {
                         Some((j, u)) => {
                             let (to, on) = pair_mut(&mut ups, i, j);
+                            let quick = render_ms[div.trailing_zeros() as usize] < REFRESH_MS;
                             let mut moving = Moving {
                                 shared,
                                 display,
@@ -932,11 +959,12 @@ fn run(
                                 last: Some(want),
                                 any: false,
                                 zoom: zoom_anim.filter(|a| a.frame == j),
+                                show: !quick,
                             };
                             thread::scope(|scope| {
-                                // A half frame without the names: they
-                                // would be twice their size.
-                                let names = names.as_mut().filter(|_| !half);
+                                // A reduced frame without the names: they
+                                // would be scaled up with it.
+                                let names = names.as_mut().filter(|_| div == 1);
                                 let tiles = &mut tiles;
                                 let (route, cameras) = (route.as_deref(), cameras.as_deref());
                                 let cost = &mut cost;
@@ -961,10 +989,27 @@ fn run(
                                             job.progress,
                                             job.anchor,
                                             job.top,
+                                            i64::from(div),
                                             cost,
                                         );
-                                        held.half = half;
+                                        held.div = div;
                                         shared.wake.notify_one();
+                                        // The next resolution down's tiles
+                                        // made ready meanwhile, for a bend
+                                        // (whole: the half's) or a corner
+                                        // (half: the quarter's) to come.
+                                        if div <= 2 && job.view.zoom >= 2 {
+                                            let q = View {
+                                                zoom: job.view.zoom - 1,
+                                                ..job.view
+                                            };
+                                            let layout = Layout::around(&q, panel, cols, rows);
+                                            for _ in 0..4 {
+                                                if !tiles.prepare(&layout) {
+                                                    break;
+                                                }
+                                            }
+                                        }
                                         held
                                     });
                                 match turner {
@@ -977,7 +1022,7 @@ fn run(
                                         }
                                         if !moving.any {
                                             up_stats.blind += 1;
-                                            if u.zoom != want.zoom && !u.half {
+                                            if u.zoom != want.zoom && u.div == 1 {
                                                 up_stats.blind_zoom += 1;
                                             }
                                         }
@@ -1004,6 +1049,7 @@ fn run(
                                 job.progress,
                                 job.anchor,
                                 job.top,
+                                1,
                                 &mut cost,
                             )
                         }),
@@ -1011,18 +1057,20 @@ fn run(
                     let Some(drawn) = drawn else {
                         break;
                     };
+                    let r = &mut render_ms[drawn.div.trailing_zeros() as usize];
+                    *r = (*r * 3 + (cost.tiles + cost.rotate + cost.draw).as_millis() as u64) / 4;
                     up_held[i] = Some(drawn);
                     turns_drawn += 1;
                     up_seq[i] = turns_drawn;
                     last_turn = Some(Instant::now());
                     up_stats.turned(started.elapsed(), cost);
-                    if drawn.half {
+                    if drawn.div > 1 {
                         up_stats.halves += 1;
                     }
                     // Further out: the new frame shown at the old scale,
                     // shrinking to its own.
-                    if !drawn.half
-                        && meanwhile.is_some_and(|(_, u)| !u.half && drawn.zoom + 1 == u.zoom)
+                    if drawn.div == 1
+                        && meanwhile.is_some_and(|(_, u)| u.div == 1 && drawn.zoom + 1 == u.zoom)
                     {
                         zoom_anim = Some(ZoomAnim {
                             frame: i,
@@ -1047,6 +1095,7 @@ fn run(
                             want = now.0;
                             position = now.2;
                             progress = now.3;
+                            just_drawn = Some(started);
                             (i, src)
                         }
                         None => {
@@ -1059,11 +1108,44 @@ fn run(
             up_stats.frame();
             let held_i = up_held[i];
             if let Some(u) = held_i
-                && show_up_src(display, &mut sprites, &ups[i], &u, src, panel, position)
+                && show_up_src(
+                    display,
+                    &mut sprites,
+                    &ups[i],
+                    &u,
+                    src,
+                    panel,
+                    position,
+                    true,
+                )
             {
                 up_stats.shown();
                 recent_up = [Some(i), recent_up[0].filter(|&r| r != i)];
-                shared.lock().shown = true;
+                let shown_at = Instant::now();
+                let mut inner = shared.lock();
+                inner.shown = true;
+                if let Some(started) = just_drawn {
+                    // Asked for to on the panel, smoothed over a few.
+                    let cycle = shown_at.duration_since(started).as_millis() as u64;
+                    turn_ms = (turn_ms * 3 + cycle) / 4;
+                    inner.turn_ms = turn_ms;
+                    if trace {
+                        let h_now = inner.heading.map_or(h, unit_up);
+                        let off = degrees_between(u.h, h_now);
+                        let gap =
+                            last_shown_at.map_or(0, |t| shown_at.duration_since(t).as_millis());
+                        log::info!(
+                            "map: turn {} in {cycle} ms, {off:+.1} deg ahead of the way up, turning {turning:.0} deg/s, {gap} ms after the last picture",
+                            match u.div {
+                                1 => "whole",
+                                2 => "half",
+                                _ => "quarter",
+                            }
+                        );
+                    }
+                }
+                drop(inner);
+                last_shown_at = Some(shown_at);
             }
             shown = Some(want);
             continue;
@@ -1255,6 +1337,8 @@ struct Moving<'a> {
     any: bool,
     /// Its change of zoom, when it is being enlarged towards a closer one.
     zoom: Option<ZoomAnim>,
+    /// Moved on at all: not while the new frame comes within a refresh.
+    show: bool,
 }
 
 impl Moving<'_> {
@@ -1274,7 +1358,7 @@ impl Moving<'_> {
             (inner.want, inner.heading, inner.position, inner.progress)
         };
         let scaling = self.zoom.filter(|a| want.zoom == a.zoom);
-        if self.last == Some(want) && scaling.is_none() {
+        if !self.show || (self.last == Some(want) && scaling.is_none()) {
             return false;
         }
         let Some(h) = heading.map(unit_up) else {
@@ -1284,10 +1368,10 @@ impl Moving<'_> {
         if !fresh_within(u.progress, progress, self.route, u.zoom, ROUTE_LAG_LOOSE) {
             return false;
         }
-        // A half frame serves the zoom past its own. A whole one at
+        // A reduced frame serves the zoom past its own. A whole one at
         // another zoom: enlarged towards a closer one, else (further out,
         // a level) as it is until the new frame shrinks in.
-        let (at, scale) = if u.half {
+        let (at, scale) = if u.div > 1 {
             (want, 1.0)
         } else {
             let scale = match scaling {
@@ -1307,6 +1391,8 @@ impl Moving<'_> {
             return false;
         };
         stats.frame();
+        // A flip still pending: not waited for, so that a frame turned
+        // meanwhile is seen at once; the next refresh wakes this again.
         if show_up_src(
             self.display,
             self.sprites,
@@ -1315,6 +1401,7 @@ impl Moving<'_> {
             scaled_src(src, scale, self.panel),
             self.panel,
             position,
+            false,
         ) {
             stats.shown();
             self.last = Some(want);
@@ -1338,9 +1425,14 @@ struct ZoomAnim {
     start: Instant,
 }
 
-/// A turn this recent means the map is steering: frames are turned at
-/// half the resolution (quick) until it stops.
-const STEER_MS: Duration = Duration::from_millis(300);
+/// The way up turning this fast, degrees a second, is steering: frames
+/// are turned at half the resolution (quick) until it settles; this
+/// fast, a corner, at a quarter.
+const STEER_DPS: f64 = 2.0;
+const QUARTER_DPS: f64 = 40.0;
+/// A refresh at 60 Hz, about: a frame drawn quicker is shown at the next
+/// one without the frame before being moved on meanwhile.
+const REFRESH_MS: u64 = 15;
 
 /// How long a change of zoom is shown taking.
 const ZOOM_MS: f32 = 250.0;
@@ -1358,9 +1450,16 @@ impl ZoomAnim {
     }
 }
 
-/// A frame or panel size halved, kept even.
-fn halved((w, h): (u32, u32)) -> (u32, u32) {
-    ((w / 2) & !1, (h / 2) & !1)
+/// The signed angle from `b` to `a`, degrees (both ways about 65536 long).
+fn degrees_between(a: (i64, i64), b: (i64, i64)) -> f64 {
+    let cross = (b.0 * a.1 - b.1 * a.0) as f64;
+    let dot = (a.0 * b.0 + a.1 * b.1) as f64;
+    cross.atan2(dot).to_degrees()
+}
+
+/// A frame or panel size divided by `div`, kept even.
+fn shrunk((w, h): (u32, u32), div: u32) -> (u32, u32) {
+    ((w / div) & !1, (h / div) & !1)
 }
 
 /// Where `view`, `h` up, lies on frame `u` (of `size`): the part of it the
@@ -1375,8 +1474,8 @@ fn place_up(
     panel: (u32, u32),
     tolerance: i64,
 ) -> Option<[f32; 4]> {
-    let (at, size, panel) = if u.half {
-        if u.zoom + 1 != view.zoom {
+    let (at, size, panel) = if u.div > 1 {
+        if u.for_zoom() != view.zoom {
             return None;
         }
         (
@@ -1384,8 +1483,8 @@ fn place_up(
                 zoom: u.zoom,
                 ..*view
             },
-            halved(size),
-            halved(panel),
+            shrunk(size, u.div),
+            shrunk(panel, u.div),
         )
     } else {
         (*view, size, panel)
@@ -1417,6 +1516,7 @@ fn scaled_src(src: [f32; 4], scale: f32, panel: (u32, u32)) -> [f32; 4] {
 /// Show the part `src` of the heading-up frame `canvas` (holding `u`) on
 /// the whole panel, scaled when it is not the panel's size, the marker on
 /// its sprite; a pending flip tried again a moment later. True when shown.
+#[allow(clippy::too_many_arguments)]
 fn show_up_src(
     display: &Display,
     sprites: &mut Option<Sprites>,
@@ -1425,6 +1525,7 @@ fn show_up_src(
     src: [f32; 4],
     panel: (u32, u32),
     position: Option<Marker>,
+    patient: bool,
 ) -> bool {
     let [sx, sy, sw, sh] = src;
     if sx < 0.0
@@ -1454,7 +1555,7 @@ fn show_up_src(
     loop {
         match display.show_canvas_scaled(canvas, src, sprite) {
             Show::Shown => return true,
-            Show::Busy if tries < 50 => {
+            Show::Busy if patient && tries < 50 => {
                 tries += 1;
                 thread::sleep(BUSY_WAIT);
             }
@@ -1547,7 +1648,7 @@ impl UpStats {
         if self.since.elapsed() >= UP_STATS_EVERY {
             let each = |d: Duration| d.as_millis() / u128::from(self.turned.max(1));
             log::info!(
-                "map: {} frames heading up in {} s, {} turned ({} at half resolution), {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
+                "map: {} frames heading up in {} s, {} turned ({} at reduced resolution), {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
                 self.frames,
                 self.since.elapsed().as_secs(),
                 self.turned,
@@ -1659,9 +1760,17 @@ pub(crate) struct UpHeld {
     anchor: (i64, i64),
     top: u32,
     progress: Option<Progress>,
-    /// Turned at half the resolution, a zoom further out, for the zoom
-    /// past it: shown scaled twice (while steering, as it is quick).
-    half: bool,
+    /// Turned at a fraction of the resolution (1 whole, 2 half, 4 a
+    /// quarter): one or two zooms further out, for the zoom past them,
+    /// shown scaled up by the display (while steering, as it is quick).
+    div: u32,
+}
+
+impl UpHeld {
+    /// The zoom this frame stands in for on the panel.
+    fn for_zoom(&self) -> u8 {
+        self.zoom + self.div.trailing_zeros() as u8
+    }
 }
 
 impl UpHeld {
@@ -1766,6 +1875,7 @@ pub(crate) fn render_up(
     progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
+    shrink: i64,
     cost: &mut UpCost,
 ) -> UpHeld {
     let size = out.size;
@@ -1778,7 +1888,7 @@ pub(crate) fn render_up(
         anchor,
         top,
         progress,
-        half: false,
+        div: 1,
     };
     let (p, across, down) = (held.p, held.across(), held.down());
     // The drawn part's corners on the map, for the tiles under them.
@@ -1831,6 +1941,7 @@ pub(crate) fn render_up(
             (0, t, w, ht),
             &points,
             split,
+            shrink,
         );
     }
     // The part drawn, on the map, in world pixels.
@@ -1900,11 +2011,12 @@ fn draw_route(
 ) {
     let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
     let split = progress.map(|p| (p.step, layout.sixteenth(p.at)));
-    draw_split(dst, pitch, chroma, size, clip, &points, split);
+    draw_split(dst, pitch, chroma, size, clip, &points, split, 1);
 }
 
 /// The route's points (1/16 px of the canvas), grey behind the split: the
 /// points before `step`, then `at`.
+#[allow(clippy::too_many_arguments)]
 fn draw_split(
     dst: &mut [u8],
     pitch: usize,
@@ -1913,6 +2025,7 @@ fn draw_split(
     clip: (i64, i64, i64, i64),
     points: &[(i64, i64)],
     split: Option<(usize, (i64, i64))>,
+    shrink: i64,
 ) {
     match split {
         Some((step, at)) if 0 < step && step < points.len() => {
@@ -1920,10 +2033,10 @@ fn draw_split(
             behind.push(at);
             let mut ahead = vec![at];
             ahead.extend_from_slice(&points[step..]);
-            nv12::route_behind(dst, pitch, chroma, size, clip, &behind);
-            nv12::route(dst, pitch, chroma, size, clip, &ahead);
+            nv12::route_behind_by(dst, pitch, chroma, size, clip, &behind, shrink);
+            nv12::route_by(dst, pitch, chroma, size, clip, &ahead, shrink);
         }
-        _ => nv12::route(dst, pitch, chroma, size, clip, points),
+        _ => nv12::route_by(dst, pitch, chroma, size, clip, points, shrink),
     }
 }
 
@@ -2091,7 +2204,7 @@ mod tests {
             anchor: anchor_on(PANEL, WINDOW),
             top,
             progress: None,
-            half: false,
+            div: 1,
         }
     }
 
@@ -2164,11 +2277,11 @@ mod tests {
 
     #[test]
     fn a_half_frame_serves_the_zoom_past_its_own_at_half_the_size() {
-        let (hs, hp) = (halved(SIZE), halved(PANEL));
+        let (hs, hp) = (shrunk(SIZE, 2), shrunk(PANEL, 2));
         let window = (UP_SIDE / 2, hs.1 - hp.1 - UP_BACK / 2);
         let out = View { zoom: 16, ..AT };
         let f = UpHeld {
-            half: true,
+            div: 2,
             anchor: anchor_on(hp, window),
             ..frame(&out, turned(0.0), 0)
         };

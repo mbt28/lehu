@@ -843,34 +843,55 @@ a town's turns change nothing. The - and + keys change the zoom chosen.
 
 Following a drive, the map's view is the drive's position and way up
 smoothed, each following it like a critically damped spring (a quarter
-of a second for the position, over half a second for the way up): a
-position from a GPS is a straight piece a second and its heading jumps at
-each fix, and the picture should not. The arrow keeps the drive's own
-position and way, so in a bend it may sit a little off its place and turn
-before the map. With `map.pointer-lead` set (pixels), the map holds still
-while the arrow moves on it, until the arrow is that far from its place
-or the road has turned 6 degrees, then glides after it in 0.4 s.
+of a second for the position, 0.3 s for the way up, which trails a steady
+bend by that much): a position from a GPS is a straight piece a second
+and its heading jumps at each fix, and the picture should not. The way up
+turns no faster than 90 degrees a second, so a corner takes about a
+second, as the car does. The arrow keeps the drive's own position and
+way, so in a bend it may sit a little off its place and turn before the
+map. With `map.pointer-lead` set (pixels), the map holds still while the
+arrow moves on it, until the arrow is that far from its place or the road
+has turned 6 degrees, then glides after it in 0.4 s.
 
 Heading up, the map is turned on the CPU into a picture a little larger
 than the panel, with some road ahead; driving on moves the window over it,
 and the map is turned anew when the heading has changed by most of a
-degree, the road ahead runs out, or the route's driven part falls behind
-the arrow. Turning one takes 40 to 70 ms on the F1C200s, longer than a
-refresh, so it is done on a thread of its own, below the pictures shown,
-for the heading expected 60 ms on: meanwhile the frame shown keeps
-moving, up to 8 degrees off and with its driven part up to 48 pixels
-behind. While steering (a frame turned in the last 0.3 s), frames are
-turned at half the resolution from the next zoom out's tiles, a quarter
-of the pixels, and shown scaled twice by the display, so the map turns in
-small steps many times a second; without the names, which would be twice
-their size. Once the steering stops, a whole frame takes their place. On the board, on a city drive with many bends, the map then shows
-about 59 pictures a second and misses 1 to 12 in 30 s; before, it showed
-29 and missed up to 154, each turn a hitch of a refresh or more. A change
+degree, the road ahead runs out, or the route's driven part falls 32
+pixels behind the arrow. The display cannot rotate, so between two turned
+frames the map only slides: the angle steps by however far the way up
+turned while a frame was made, and the pace of the frames is what makes
+a bend smooth or not. A whole frame takes 40 to 70 ms on the F1C200s, so
+it is drawn on a thread of its own, below the pictures shown, for the way
+up predicted at the moment it will be on the panel (what a frame has been
+taking, plus a refresh); meanwhile the frame shown keeps moving, up to 8
+degrees off and with its driven part up to 48 pixels behind. Only the
+newest frame is ever shown, so a turn never swings back to an older one.
+While the way up is turning (2 degrees a second or more) frames are made
+at half the resolution from the next zoom out's tiles and shown scaled
+twice by the display; from 40 degrees a second, a corner, at a quarter,
+from two zooms out, which takes about 10 ms and so gives a frame every
+refresh: at 90 degrees a second the map then turns in steps of a degree
+and a half, sixty times a second. A reduced frame has no names (they
+would be scaled up with it) and the route drawn thinner to match; the
+whole frame comes back once the way up settles. While a frame will be
+ready within a refresh the frame shown is not moved on meanwhile, since
+that flip would hold the new one up by a refresh. The tiles of the next
+resolution down are decoded while the current one is drawn, so a bend or
+a corner does not start with a stall. `LEHU_MAP_TRACE=1` in LEHU's
+environment logs every turned frame: how long it took, how far ahead of
+the way up it landed, and the turn rate.
+
+On the board, on a city drive with many bends, the map shows about 59
+pictures a second and misses 2 to 15 in 30 s; in a corner it draws a
+frame every 15 to 17 ms. Before this work it showed 29 a second, missed up
+to 154, and a bend was a series of hitches. A change
 of zoom is shown by the display's scaler: closer, the frame shown is
 enlarged smoothly to twice its size about the arrow over a quarter of a
 second while the new one is drawn, which then takes its place; further
 out, the frame shown moves on as it is until the new one is drawn, which
-then comes in at twice its size and shrinks to its own. The arrow is on a display plane of its
+then comes in at twice its size and shrinks to its own.
+
+The arrow is on a display plane of its
 own above the map, so the map moves under it without being redrawn; on a
 display without such a plane it is drawn into the map instead. The phone's decoder makes way while the map is shown,
 since both need video memory.

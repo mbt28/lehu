@@ -552,15 +552,20 @@ const ROUTE_EDGE_R: i64 = 6 * 16;
 
 /// Draw the route through `points` (canvas pixels times 16) on an NV12
 /// canvas, only inside `clip` (left, top, right, bottom, in pixels): a
-/// line with a darker edge, round where it turns.
-pub fn route(
+/// line with a darker edge, round where it turns; its widths divided by
+/// `shrink`, for a picture drawn at a fraction of the panel's resolution
+/// and scaled up to it.
+#[allow(clippy::too_many_arguments)]
+pub fn route_by(
     dst: &mut [u8],
     pitch: usize,
     chroma: usize,
     size: (u32, u32),
     clip: (i64, i64, i64, i64),
     points: &[(i64, i64)],
+    shrink: i64,
 ) {
+    let shrink = shrink.max(1);
     thick(
         dst,
         pitch,
@@ -568,21 +573,9 @@ pub fn route(
         size,
         clip,
         points,
-        ROUTE_EDGE_R,
+        ROUTE_EDGE_R / shrink,
         ROUTE_EDGE,
     );
-    thick(dst, pitch, chroma, size, clip, points, ROUTE_R, ROUTE);
-}
-
-/// The route already driven: as `route`, in grey.
-pub fn route_behind(
-    dst: &mut [u8],
-    pitch: usize,
-    chroma: usize,
-    size: (u32, u32),
-    clip: (i64, i64, i64, i64),
-    points: &[(i64, i64)],
-) {
     thick(
         dst,
         pitch,
@@ -590,10 +583,43 @@ pub fn route_behind(
         size,
         clip,
         points,
-        ROUTE_EDGE_R,
+        ROUTE_R / shrink,
+        ROUTE,
+    );
+}
+
+/// The route already driven: as `route_by`, in grey.
+#[allow(clippy::too_many_arguments)]
+pub fn route_behind_by(
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    clip: (i64, i64, i64, i64),
+    points: &[(i64, i64)],
+    shrink: i64,
+) {
+    let shrink = shrink.max(1);
+    thick(
+        dst,
+        pitch,
+        chroma,
+        size,
+        clip,
+        points,
+        ROUTE_EDGE_R / shrink,
         BEHIND_EDGE,
     );
-    thick(dst, pitch, chroma, size, clip, points, ROUTE_R, BEHIND);
+    thick(
+        dst,
+        pitch,
+        chroma,
+        size,
+        clip,
+        points,
+        ROUTE_R / shrink,
+        BEHIND,
+    );
 }
 
 /// Every pixel (by its middle) and chroma pair (by its block's) within

@@ -757,7 +757,7 @@ fn the_route_line_has_its_width_and_keeps_to_its_clip() {
     let mut canvas = vec![0u8; chroma + pitch * h as usize / 2];
     // Across the canvas at y = 16, in sixteenths.
     let line = [(0, 16 * 16), (64 * 16, 16 * 16)];
-    nv12::route(&mut canvas, pitch, chroma, (w, h), (0, 0, 32, 32), &line);
+    nv12::route_by(&mut canvas, pitch, chroma, (w, h), (0, 0, 32, 32), &line, 1);
     let (fill, _, _) = ycc([66, 133, 244]);
     let (edge, _, _) = ycc([24, 82, 190]);
     let at = |x: usize, y: usize| canvas[y * pitch + x];
@@ -1090,13 +1090,14 @@ fn heading_up_cost() {
         let layout = Layout::around(&view, (w, h), 3, 2);
         let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
         let started = Instant::now();
-        nv12::route(
+        nv12::route_by(
             &mut out,
             pitch,
             chroma,
             (w, h),
             (0, 0, i64::from(w), i64::from(h)),
             &points,
+            1,
         );
         let took = started.elapsed().as_secs_f64() * 1000.0;
         worst = worst.max(took);
@@ -1404,6 +1405,7 @@ fn labelled_shot() {
                         None,
                         UP_ANCHOR,
                         0,
+                        1,
                         &mut Default::default(),
                     );
                     let rgb = nv12_rgb(&buf, pitch, chroma, UP_WINDOW, (800, 480));
@@ -1577,6 +1579,7 @@ fn labels_cost() {
                     None,
                     UP_ANCHOR,
                     0,
+                    1,
                     &mut Default::default(),
                 );
             };
