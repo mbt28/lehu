@@ -1405,6 +1405,7 @@ fn labelled_shot() {
                         None,
                         UP_ANCHOR,
                         0,
+                        0,
                         1,
                         &mut Default::default(),
                     );
@@ -1579,6 +1580,7 @@ fn labels_cost() {
                     None,
                     UP_ANCHOR,
                     0,
+                    0,
                     1,
                     &mut Default::default(),
                 );
@@ -1674,5 +1676,76 @@ fn a_camera_sign_is_drawn_inside_its_clip() {
             }
         }
         save_png(&Path::new(&dir).join("camera-sign.png"), &big, (128, 128));
+    }
+}
+
+/// What turning a frame and drawing a route cost, on the machine this
+/// runs on (cross-built for the board, it says what the CPU there does):
+/// `LEHU_MAP_DIR=<region> cargo test -p lehu-map turn_bench -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn turn_bench() {
+    use std::time::Instant;
+    let dir = std::env::var("LEHU_MAP_DIR").unwrap();
+    let set = TileSet::open(Path::new(&dir)).unwrap();
+    let center = set.center;
+    let mut tiles = Tiles::new(set, None, None);
+    let zoom = 16u8;
+    let s = WORLD_Z - zoom;
+    let (px, py) = ((center.0 >> s) << 16, (center.1 >> s) << 16);
+    let (w, hgt) = (864u32, 528u32);
+    let pitch = w as usize;
+    let chroma = pitch * hgt as usize;
+    let mut out = vec![0u8; chroma + pitch * hgt as usize / 2];
+    let anchor = (432i64, 331i64);
+    let tile = TILE << 16;
+    let (tx0, ty0) = ((px >> 16) / TILE - 3, (py >> 16) / TILE - 3);
+    // The tiles decoded first.
+    let _ = tiles.grid(zoom, (tx0, ty0), 7, 7);
+    for degrees in [0.0f64, 10.0, 30.0, 45.0, 60.0, 90.0, 135.0] {
+        let r = degrees.to_radians();
+        let h = ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64);
+        let (across, down) = ((-h.1, h.0), (-h.0, -h.1));
+        let origin = (px - tx0 * tile, py - ty0 * tile);
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let grid = tiles.grid(zoom, (tx0, ty0), 7, 7);
+            let t = Instant::now();
+            nv12::rotate(
+                &grid,
+                &mut out,
+                pitch,
+                chroma,
+                (w, hgt),
+                origin,
+                anchor,
+                across,
+                down,
+            );
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms");
+    }
+    // A route: a serpentine across the frame, `n` points, in 1/16 px.
+    for (n, amp) in [(100usize, 150.0f64), (400, 150.0), (400, 2000.0)] {
+        let points: Vec<(i64, i64)> = (0..n)
+            .map(|i| {
+                let x = i as f64 / (n - 1) as f64 * 1600.0 - 400.0;
+                let y = 264.0 + amp * (i as f64 * 0.3).sin();
+                ((x * 16.0) as i64, (y * 16.0) as i64)
+            })
+            .collect();
+        let clip = (0, 0, i64::from(w), i64::from(hgt));
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = Instant::now();
+            nv12::route_by(&mut out, pitch, chroma, (w, hgt), clip, &points, 1);
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let inside = points
+            .iter()
+            .filter(|p| (0..i64::from(hgt) * 16).contains(&p.1))
+            .count();
+        println!("route of {n} points ({inside} in view, amplitude {amp} px): {best:.1} ms");
     }
 }

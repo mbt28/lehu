@@ -860,31 +860,35 @@ degree, the road ahead runs out, or the route's driven part falls 32
 pixels behind the arrow. The display cannot rotate, so between two turned
 frames the map only slides: the angle steps by however far the way up
 turned while a frame was made, and the pace of the frames is what makes
-a bend smooth or not. A whole frame takes 40 to 70 ms on the F1C200s, so
-it is drawn on a thread of its own, below the pictures shown, for the way
-up predicted at the moment it will be on the panel (what a frame has been
-taking, plus a refresh); meanwhile the frame shown keeps moving, up to 8
-degrees off and with its driven part up to 48 pixels behind. Only the
-newest frame is ever shown, so a turn never swings back to an older one.
-While the way up is turning (2 degrees a second or more) frames are made
-at half the resolution from the next zoom out's tiles and shown scaled
-twice by the display; from 40 degrees a second, a corner, at a quarter,
-from two zooms out, which takes about 10 ms and so gives a frame every
-refresh: at 90 degrees a second the map then turns in steps of a degree
-and a half, sixty times a second. A reduced frame has no names (they
-would be scaled up with it) and the route drawn thinner to match; the
-whole frame comes back once the way up settles. While a frame will be
-ready within a refresh the frame shown is not moved on meanwhile, since
-that flip would hold the new one up by a refresh. The tiles of the next
-resolution down are decoded while the current one is drawn, so a bend or
-a corner does not start with a stall. `LEHU_MAP_TRACE=1` in LEHU's
-environment logs every turned frame: how long it took, how far ahead of
-the way up it landed, and the turn rate.
+a bend smooth or not. On the F1C200s the turning itself takes 28 ms at
+864 x 528 (37 ms at a right angle; it is bound by the CPU, not the
+cache), the route a few ms and the names about 12, so a frame is drawn
+on a thread of its own, below the pictures shown, for the way up
+predicted at the moment it will be on the panel (what a frame has been
+taking, plus a refresh). Meanwhile the frame shown keeps moving, up to 8
+degrees off and with its driven part up to 48 pixels behind, except at
+the refresh the new frame will make, so that the flip does not hold it
+up. Only the newest frame is ever shown, so a turn never swings back to
+an older one. While steering, only the window and a little each side are
+drawn, and in a corner (20 degrees a second or more) the names are left
+out. `LEHU_MAP_TRACE=1` in LEHU's environment logs every turned frame:
+how long it took, when it was drawn and joined, how far ahead of the way
+up it landed, and the turn rate. (Frames at a fraction of the resolution,
+scaled up by the display, were tried for bends and corners: quicker, but
+pixelated; the code is there, off.)
 
-On the board, on a city drive with many bends, the map shows about 59
-pictures a second and misses 2 to 15 in 30 s; in a corner it draws a
-frame every 15 to 17 ms. Before this work it showed 29 a second, missed up
-to 154, and a bend was a series of hitches. A change
+The route is drawn as a line simplified to the pixel first, so a straight
+road of points every few metres is one segment, and each segment's
+capsule is filled row by row from the span it covers, worked out in
+integers (the CPU has no float). `scripts/rotation-gpx.py` makes a drive
+of straights, corners, S-bends and a U-turn to test the turning with.
+
+On the board, on that course, a turned frame comes every 35 to 38 ms (two
+refreshes), a step of just over a degree at the 60 degrees a second the
+way up turns at most; on a winding road with names, every 50 to 55 ms.
+Turning all the time takes 55 to 70 % of the CPU. Before this work a
+frame came every 65 to 90 ms, and the map's own turn rate was unbounded.
+A change
 of zoom is shown by the display's scaler: closer, the frame shown is
 enlarged smoothly to twice its size about the arrow over a quarter of a
 second while the new one is drawn, which then takes its place; further

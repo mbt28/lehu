@@ -623,7 +623,11 @@ pub fn route_behind_by(
 }
 
 /// Every pixel (by its middle) and chroma pair (by its block's) within
-/// `r` of the line through `points`, inside `clip`, set to `colour`.
+/// `r` of the line through `points`, inside `clip`, set to `colour`: the
+/// line simplified to the pixel first (points every few pixels along a
+/// straight road become one segment), then each segment's capsule filled
+/// row by row as the span it covers, worked out from its ends and its
+/// band, not tested pixel by pixel over its box.
 #[allow(clippy::too_many_arguments)]
 fn thick(
     dst: &mut [u8],
@@ -642,26 +646,9 @@ fn thick(
         return;
     }
     let (y_val, cb_val, cr_val) = ycc(colour);
-    // Within r of the segment p-q: by the ends, or across the middle. In
-    // i64 (no 128-bit library calls a pixel): the segments are cut to at
-    // most `PIECE`, so no square overflows.
-    let near = |p: (i64, i64), q: (i64, i64), c: (i64, i64)| {
-        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
-        let (cx, cy) = (c.0 - p.0, c.1 - p.1);
-        let r2 = r * r;
-        let len2 = dx * dx + dy * dy;
-        let dot = cx * dx + cy * dy;
-        if dot <= 0 || len2 == 0 {
-            return cx * cx + cy * cy <= r2;
-        }
-        if dot >= len2 {
-            let (ex, ey) = (c.0 - q.0, c.1 - q.1);
-            return ex * ex + ey * ey <= r2;
-        }
-        let cross = cx * dy - cy * dx;
-        cross * cross <= r2 * len2
-    };
-    // The segments, the long ones cut (1/16 px: 256 pixels a piece).
+    let points = simplified(points, SIMPLIFY_TOL);
+    // The segments, the long ones cut (1/16 px: 256 pixels a piece), so
+    // that no square overflows an i64.
     const PIECE: i64 = 256 * 16;
     let mut pieces = Vec::with_capacity(points.len());
     for pair in points.windows(2) {
@@ -680,7 +667,9 @@ fn thick(
             pieces.push((at(k), at(k + 1)));
         }
     }
+    let halves = disc_halves(r);
     for (p, q) in pieces {
+        let cap = Capsule::new(p, q, r, &halves);
         // The segment's box, widened by r, in pixels, inside the clip.
         let x0 = ((p.0.min(q.0) - r) >> 4).max(cl);
         let x1 = (((p.0.max(q.0) + r) >> 4) + 1).min(cr);
@@ -690,17 +679,23 @@ fn thick(
             continue;
         }
         for y in y0..y1 {
-            for x in x0..x1 {
-                if near(p, q, (x * 16 + 8, y * 16 + 8))
-                    && let Some(v) = dst.get_mut(y as usize * pitch + x as usize)
+            // The pixels whose middles lie in the capsule's span.
+            if let Some((l, rt)) = cap.span(y * 16 + 8) {
+                let xa = ((l - 8 + 15).div_euclid(16)).max(x0);
+                let xb = ((rt - 8).div_euclid(16) + 1).min(x1);
+                if xa < xb
+                    && let Some(row) = dst.get_mut(y as usize * pitch + xa as usize..)
                 {
-                    *v = y_val;
+                    let n = ((xb - xa) as usize).min(row.len());
+                    row[..n].fill(y_val);
                 }
             }
         }
         for by in (y0 / 2)..((y1 + 1) / 2) {
-            for bx in (x0 / 2)..((x1 + 1) / 2) {
-                if near(p, q, (bx * 32 + 16, by * 32 + 16)) {
+            if let Some((l, rt)) = cap.span(by * 32 + 16) {
+                let ba = ((l - 16 + 31).div_euclid(32)).max(x0 / 2);
+                let bb = ((rt - 16).div_euclid(32) + 1).min((x1 + 1) / 2);
+                for bx in ba..bb {
                     let at = chroma + by as usize * pitch + 2 * bx as usize;
                     if let Some(v) = dst.get_mut(at..at + 2) {
                         v.copy_from_slice(&[cb_val, cr_val]);
@@ -709,6 +704,183 @@ fn thick(
             }
         }
     }
+}
+
+/// How far a point may be from the line through its neighbours, 1/16
+/// px, to be left out when a line is drawn: a pixel.
+const SIMPLIFY_TOL: i64 = 16;
+
+/// `points` with those left out that lie within `tol` of the line between
+/// the ones kept (Douglas and Peucker's way, without recursion).
+fn simplified(points: &[(i64, i64)], tol: i64) -> Vec<(i64, i64)> {
+    let n = points.len();
+    if n < 3 {
+        return points.to_vec();
+    }
+    let mut keep = vec![false; n];
+    keep[0] = true;
+    keep[n - 1] = true;
+    let mut stack = vec![(0usize, n - 1)];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (p, q) = (points[a], points[b]);
+        let (dx, dy) = (i128::from(q.0 - p.0), i128::from(q.1 - p.1));
+        let len2 = dx * dx + dy * dy;
+        // The point furthest from the line p-q, by its distance squared
+        // times len2 (no division, no float: the CPU has none).
+        let mut worst = (0i128, a);
+        for (i, &c) in points.iter().enumerate().take(b).skip(a + 1) {
+            let (cx, cy) = (i128::from(c.0 - p.0), i128::from(c.1 - p.1));
+            let d = if len2 > 0 {
+                let cross = cx * dy - cy * dx;
+                cross * cross
+            } else {
+                (cx * cx + cy * cy) * len2.max(1)
+            };
+            if d > worst.0 {
+                worst = (d, i);
+            }
+        }
+        let tol2 = i128::from(tol) * i128::from(tol) * len2.max(1);
+        if worst.0 > tol2 {
+            keep[worst.1] = true;
+            stack.push((a, worst.1));
+            stack.push((worst.1, b));
+        }
+    }
+    points
+        .iter()
+        .zip(&keep)
+        .filter_map(|(&p, &k)| k.then_some(p))
+        .collect()
+}
+
+/// A segment p-q widened by r (1/16 px): the discs at its ends and the
+/// band between, whose span on a row is worked out, not tested.
+struct Capsule<'a> {
+    p: (i64, i64),
+    q: (i64, i64),
+    r: i64,
+    /// A disc's half width at each offset from its middle, 0..=r.
+    halves: &'a [i64],
+    /// The band's edges, from its corners (p and q each moved by the
+    /// normal of length r, either way): each from `ya` to `yb` (`ya` <=
+    /// `yb`), its x at `ya` and its x a unit of y further, both in
+    /// 1/65536 (so a row costs a multiply, not a division, which this CPU
+    /// has not); an edge along a row is its two x's with no slope.
+    edges: [Edge; 4],
+}
+
+#[derive(Clone, Copy)]
+struct Edge {
+    ya: i64,
+    yb: i64,
+    x_at_ya: i64,
+    slope: i64,
+    /// Along a row: from x_at_ya to this.
+    x_end: i64,
+}
+
+/// A disc of radius `r`'s half width at each offset 0..=r from its
+/// middle, worked out once for a line.
+fn disc_halves(r: i64) -> Vec<i64> {
+    (0..=r).map(|dy| isqrt(r * r - dy * dy)).collect()
+}
+
+impl<'a> Capsule<'a> {
+    fn new(p: (i64, i64), q: (i64, i64), r: i64, halves: &'a [i64]) -> Self {
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let len = isqrt(dx * dx + dy * dy).max(1);
+        let n = (-dy * r / len, dx * r / len);
+        let corners = [
+            (p.0 + n.0, p.1 + n.1),
+            (q.0 + n.0, q.1 + n.1),
+            (q.0 - n.0, q.1 - n.1),
+            (p.0 - n.0, p.1 - n.1),
+        ];
+        let edges = std::array::from_fn(|i| {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            let (a, b) = if a.1 <= b.1 { (a, b) } else { (b, a) };
+            if a.1 == b.1 {
+                Edge {
+                    ya: a.1,
+                    yb: b.1,
+                    x_at_ya: a.0.min(b.0) << 16,
+                    slope: 0,
+                    x_end: a.0.max(b.0) << 16,
+                }
+            } else {
+                Edge {
+                    ya: a.1,
+                    yb: b.1,
+                    x_at_ya: a.0 << 16,
+                    slope: ((b.0 - a.0) << 16) / (b.1 - a.1),
+                    x_end: b.0 << 16,
+                }
+            }
+        });
+        Self {
+            p,
+            q,
+            r,
+            halves,
+            edges,
+        }
+    }
+
+    /// The x-span (1/16 px, both ends in) the capsule covers at `y`
+    /// (1/16 px), when any.
+    fn span(&self, y: i64) -> Option<(i64, i64)> {
+        let mut lo = i64::MAX;
+        let mut hi = i64::MIN;
+        for c in [self.p, self.q] {
+            let dy = y - c.1;
+            if dy.abs() <= self.r {
+                let half = self.halves[dy.unsigned_abs() as usize];
+                lo = lo.min(c.0 - half);
+                hi = hi.max(c.0 + half);
+            }
+        }
+        // The band: where each of its edges crosses the row.
+        for e in &self.edges {
+            if y < e.ya || y > e.yb {
+                continue;
+            }
+            if e.ya == e.yb {
+                // Along the row: both ends.
+                lo = lo.min(e.x_at_ya >> 16);
+                hi = hi.max(e.x_end >> 16);
+                continue;
+            }
+            let x = (e.x_at_ya + e.slope * (y - e.ya)) >> 16;
+            lo = lo.min(x);
+            hi = hi.max(x);
+        }
+        (lo <= hi).then_some((lo, hi))
+    }
+}
+
+/// The integer square root (floor), bit by bit: no float, the CPU has
+/// none.
+fn isqrt(v: i64) -> i64 {
+    if v <= 0 {
+        return 0;
+    }
+    let mut x = 0i64;
+    let mut bit = 1i64 << ((63 - v.leading_zeros() as i64) & !1);
+    let mut rest = v;
+    while bit != 0 {
+        if rest >= x + bit {
+            rest -= x + bit;
+            x = (x >> 1) + bit;
+        } else {
+            x >>= 1;
+        }
+        bit >>= 2;
+    }
+    x
 }
 
 /// Tiles laid out around a point for a rotated view: `cols` x `rows`
@@ -1045,4 +1217,65 @@ fn columns(a: i64, k: i64, rec: i64, limit: i64, (x0, x1): (i64, i64)) -> (i64, 
     let q = ((limit - a) * rec) >> 32;
     let (lo, hi) = if k > 0 { (p, q) } else { (-q, -p) };
     ((lo - 1).max(x0), (hi + 2).min(x1))
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    #[test]
+    fn the_integer_root_is_the_floor() {
+        for v in [
+            0i64,
+            1,
+            2,
+            3,
+            4,
+            15,
+            16,
+            17,
+            99,
+            100,
+            1 << 40,
+            (1 << 40) + 1,
+        ] {
+            let r = isqrt(v);
+            assert!(r * r <= v && (r + 1) * (r + 1) > v, "{v}: {r}");
+        }
+    }
+
+    #[test]
+    fn a_line_is_simplified_to_the_pixel_and_no_further() {
+        // A straight road, points every 6 px, with one kink.
+        let mut pts: Vec<(i64, i64)> = (0..20).map(|i| (i * 96, 0)).collect();
+        pts[10].1 = 40; // 2.5 px aside
+        let kept = simplified(&pts, 16);
+        assert!(kept.contains(&(960, 40)) && kept.len() <= 5, "{kept:?}");
+        assert_eq!(kept[0], (0, 0));
+        assert_eq!(kept[kept.len() - 1], (19 * 96, 0));
+        // Within a pixel: one segment.
+        pts[10].1 = 12;
+        assert_eq!(simplified(&pts, 16), [(0, 0), (19 * 96, 0)]);
+        assert_eq!(simplified(&pts[..2], 16), pts[..2]);
+    }
+
+    #[test]
+    fn a_capsule_s_span_on_a_row_is_its_ends_and_its_band() {
+        let r = 64; // 4 px
+        let halves = disc_halves(r);
+        // Horizontal from (160, 160) to (800, 160): on its row, end to end
+        // with the caps; 3 px above, narrower; 5 px above, nothing.
+        let c = Capsule::new((160, 160), (800, 160), r, &halves);
+        assert_eq!(c.span(160), Some((96, 864)));
+        let (l, rt) = c.span(160 + 48).unwrap();
+        assert!(l > 96 && l < 160 && rt > 800 && rt < 864, "{l} {rt}");
+        assert_eq!(c.span(160 + 80), None);
+        // Vertical: a constant width.
+        let c = Capsule::new((400, 0), (400, 1600), r, &halves);
+        assert_eq!(c.span(800), Some((336, 464)));
+        // Diagonal: the span is wider than 2r by root two, about.
+        let c = Capsule::new((0, 0), (1600, 1600), r, &halves);
+        let (l, rt) = c.span(800).unwrap();
+        assert!((rt - l - 181).abs() <= 4, "{l} {rt}");
+    }
 }

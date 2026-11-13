@@ -87,6 +87,10 @@ struct Inner {
     /// What a frame takes from being asked for to being on the panel,
     /// milliseconds, as measured lately: the way up is predicted that far.
     turn_ms: u64,
+    /// When the next refresh is, as the drive thread last worked it out:
+    /// a frame done before it is shown at it, so the one shown is not
+    /// moved on meanwhile (that flip would hold the new one up).
+    next_refresh: Option<Instant>,
     /// Following: 0, the map moves with the arrow; else held still until
     /// the arrow is this many pixels from its place (`Hold`).
     lead: u32,
@@ -190,6 +194,7 @@ impl Viewer {
                 heading_soon: None,
                 turning: 0.0,
                 turn_ms: SOON_MS,
+                next_refresh: None,
                 lead: 0,
                 stop: false,
                 shown: false,
@@ -524,7 +529,16 @@ fn drive(shared: &Shared, display: &Display) {
                 }
                 seen = Some((n, at));
                 let woke = Instant::now();
-                let ahead = (at + period).checked_sub(monotonic()).unwrap_or_default();
+                let mono = monotonic();
+                let ahead = (at + period).checked_sub(mono).unwrap_or_default();
+                if n % 3600 == 0 {
+                    log::debug!(
+                        "map: refresh {n} stamped {} ms before now, period {} ms, next in {} ms",
+                        mono.saturating_sub(at).as_millis(),
+                        period.as_micros() as f64 / 1000.0,
+                        ahead.as_millis()
+                    );
+                }
                 woke + ahead
             }
             Err(_) => {
@@ -560,6 +574,7 @@ fn drive(shared: &Shared, display: &Display) {
             ahead.step((fix.x, fix.y), fix.heading, by).1
         };
         inner.turning = camera.turn_dps();
+        inner.next_refresh = Some(now);
         // Following, as it is now: the loop may just have stopped it.
         let (want, up, up_soon) = match inner.follow {
             Some(base) => {
@@ -867,7 +882,7 @@ fn run(
             } else {
                 None
             };
-            let mut just_drawn: Option<Instant> = None;
+            let mut just_drawn: Option<(Instant, u32, u32)> = None;
             let (i, src) = match placed {
                 Some(p) => p,
                 None => {
@@ -883,6 +898,7 @@ fn run(
                     };
                     let started = Instant::now();
                     let mut cost = UpCost::default();
+                    let (mut render_done_ms, mut joined_ms) = (0u32, 0u32);
                     // The frame shown, moved along meanwhile: with the
                     // marker on its sprite, the pictures need not change.
                     let meanwhile = newest
@@ -892,7 +908,9 @@ fn run(
                     // resolution, four times as quick, scaled up; in a
                     // corner a quarter, so that a frame fits a refresh. A
                     // whole frame once the steering stops.
-                    let div = if !steering
+                    let corner = turning.abs() >= CORNER_DPS;
+                    let div = if !REDUCE_WHILE_TURNING
+                        || !steering
                         || !meanwhile.is_some_and(|(_, u)| u.for_zoom() == want.zoom)
                     {
                         1
@@ -928,6 +946,12 @@ fn run(
                         progress,
                         anchor: anchor_on(frame_panel, window),
                         top,
+                        // Steering: the window and a little each side.
+                        sides: if steering {
+                            (UP_SIDE / d).saturating_sub(4)
+                        } else {
+                            0
+                        },
                     };
                     // Closer: the frame shown is enlarged towards the new
                     // zoom while the new frame is drawn.
@@ -946,7 +970,12 @@ fn run(
                     let drawn = match meanwhile {
                         Some((j, u)) => {
                             let (to, on) = pair_mut(&mut ups, i, j);
-                            let quick = render_ms[div.trailing_zeros() as usize] < REFRESH_MS;
+                            // Spawning the thread and joining it are not
+                            // in the render's time.
+                            let expect_done = started
+                                + Duration::from_millis(
+                                    render_ms[div.trailing_zeros() as usize] + 2,
+                                );
                             let mut moving = Moving {
                                 shared,
                                 display,
@@ -959,12 +988,15 @@ fn run(
                                 last: Some(want),
                                 any: false,
                                 zoom: zoom_anim.filter(|a| a.frame == j),
-                                show: !quick,
+                                expect_done,
                             };
+                            let done_at = std::sync::atomic::AtomicU32::new(0);
+                            let done_at = &done_at;
                             thread::scope(|scope| {
                                 // A reduced frame without the names: they
-                                // would be scaled up with it.
-                                let names = names.as_mut().filter(|_| div == 1);
+                                // would be scaled up with it; nor in a
+                                // corner, where a frame is wanted quickly.
+                                let names = names.as_mut().filter(|_| div == 1 && !corner);
                                 let tiles = &mut tiles;
                                 let (route, cameras) = (route.as_deref(), cameras.as_deref());
                                 let cost = &mut cost;
@@ -989,10 +1021,15 @@ fn run(
                                             job.progress,
                                             job.anchor,
                                             job.top,
+                                            job.sides,
                                             i64::from(div),
                                             cost,
                                         );
                                         held.div = div;
+                                        done_at.store(
+                                            (started.elapsed().as_millis() as u32).max(1),
+                                            std::sync::atomic::Ordering::Release,
+                                        );
                                         shared.wake.notify_one();
                                         // The next resolution down's tiles
                                         // made ready meanwhile, for a bend
@@ -1014,7 +1051,14 @@ fn run(
                                     });
                                 match turner {
                                     Ok(t) => {
-                                        while !t.is_finished() {
+                                        // Done is the flag, set before the
+                                        // wake: the thread's own end comes a
+                                        // moment later, and a wake seen
+                                        // before it would wait a refresh.
+                                        while done_at.load(std::sync::atomic::Ordering::Relaxed)
+                                            == 0
+                                            && !t.is_finished()
+                                        {
                                             if moving.step(&mut up_stats) {
                                                 recent_up =
                                                     [Some(j), recent_up[0].filter(|&r| r != j)];
@@ -1026,7 +1070,11 @@ fn run(
                                                 up_stats.blind_zoom += 1;
                                             }
                                         }
-                                        t.join().ok()
+                                        let r = t.join().ok();
+                                        render_done_ms =
+                                            done_at.load(std::sync::atomic::Ordering::Relaxed);
+                                        joined_ms = started.elapsed().as_millis() as u32;
+                                        r
                                     }
                                     Err(e) => {
                                         log::warn!("map: no thread to turn the map on: {e}");
@@ -1049,6 +1097,7 @@ fn run(
                                 job.progress,
                                 job.anchor,
                                 job.top,
+                                job.sides,
                                 1,
                                 &mut cost,
                             )
@@ -1095,7 +1144,7 @@ fn run(
                             want = now.0;
                             position = now.2;
                             progress = now.3;
-                            just_drawn = Some(started);
+                            just_drawn = Some((started, render_done_ms, joined_ms));
                             (i, src)
                         }
                         None => {
@@ -1124,7 +1173,7 @@ fn run(
                 let shown_at = Instant::now();
                 let mut inner = shared.lock();
                 inner.shown = true;
-                if let Some(started) = just_drawn {
+                if let Some((started, render_done_ms, joined_ms)) = just_drawn {
                     // Asked for to on the panel, smoothed over a few.
                     let cycle = shown_at.duration_since(started).as_millis() as u64;
                     turn_ms = (turn_ms * 3 + cycle) / 4;
@@ -1135,7 +1184,7 @@ fn run(
                         let gap =
                             last_shown_at.map_or(0, |t| shown_at.duration_since(t).as_millis());
                         log::info!(
-                            "map: turn {} in {cycle} ms, {off:+.1} deg ahead of the way up, turning {turning:.0} deg/s, {gap} ms after the last picture",
+                            "map: turn {} in {cycle} ms (drawn by {render_done_ms}, joined by {joined_ms}), {off:+.1} deg ahead of the way up, turning {turning:.0} deg/s, {gap} ms after the last picture",
                             match u.div {
                                 1 => "whole",
                                 2 => "half",
@@ -1306,6 +1355,7 @@ struct UpJob {
     progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
+    sides: u32,
 }
 
 /// Two canvases of `all`, the first to draw on and the second to show.
@@ -1337,15 +1387,16 @@ struct Moving<'a> {
     any: bool,
     /// Its change of zoom, when it is being enlarged towards a closer one.
     zoom: Option<ZoomAnim>,
-    /// Moved on at all: not while the new frame comes within a refresh.
-    show: bool,
+    /// When the new frame is expected done: not moved on for a refresh
+    /// it will make.
+    expect_done: Instant,
 }
 
 impl Moving<'_> {
     /// Waits for the next view (or the turn's end, or a while), and shows
     /// it when this frame can. True when a picture was shown.
     fn step(&mut self, stats: &mut UpStats) -> bool {
-        let (want, heading, position, progress) = {
+        let (want, heading, position, progress, next_refresh) = {
             let inner = self.shared.lock();
             let (inner, _) = self
                 .shared
@@ -1355,10 +1406,23 @@ impl Moving<'_> {
             if inner.stop {
                 return false;
             }
-            (inner.want, inner.heading, inner.position, inner.progress)
+            (
+                inner.want,
+                inner.heading,
+                inner.position,
+                inner.progress,
+                inner.next_refresh,
+            )
         };
+        // The new frame will be done (and committed) before the next
+        // refresh: left to it, so that this flip does not hold it up a
+        // refresh. The estimate errs on the late side: a refresh with
+        // nothing shown is seen more than a step a refresh later.
+        if next_refresh.is_some_and(|r| self.expect_done + COMMIT_MS <= r) {
+            return false;
+        }
         let scaling = self.zoom.filter(|a| want.zoom == a.zoom);
-        if !self.show || (self.last == Some(want) && scaling.is_none()) {
+        if self.last == Some(want) && scaling.is_none() {
             return false;
         }
         let Some(h) = heading.map(unit_up) else {
@@ -1430,9 +1494,16 @@ struct ZoomAnim {
 /// fast, a corner, at a quarter.
 const STEER_DPS: f64 = 2.0;
 const QUARTER_DPS: f64 = 40.0;
-/// A refresh at 60 Hz, about: a frame drawn quicker is shown at the next
-/// one without the frame before being moved on meanwhile.
-const REFRESH_MS: u64 = 15;
+/// Turning this fast is a corner: frames are drawn without the names,
+/// which take a quarter of a frame's time, so that they come quicker.
+const CORNER_DPS: f64 = 20.0;
+/// What committing a picture takes, with some to spare for a frame
+/// slower than estimated.
+const COMMIT_MS: Duration = Duration::from_millis(3);
+/// Whether frames are made at a reduced resolution while turning at all.
+/// Off: the scaled frames looked pixelated in a bend (the owner, 2026-11-13);
+/// whole frames only, at the pace the CPU turns them.
+const REDUCE_WHILE_TURNING: bool = false;
 
 /// How long a change of zoom is shown taking.
 const ZOOM_MS: f32 = 250.0;
@@ -1875,6 +1946,7 @@ pub(crate) fn render_up(
     progress: Option<Progress>,
     anchor: (i64, i64),
     top: u32,
+    sides: u32,
     shrink: i64,
     cost: &mut UpCost,
 ) -> UpHeld {
@@ -1898,8 +1970,12 @@ pub(crate) fn render_up(
             p.1 + (u - anchor.0) * across.1 + (v - anchor.1) * down.1,
         )
     };
-    let (w, ht, t) = (i64::from(size.0), i64::from(size.1), i64::from(top));
-    let corners = [corner(0, t), corner(w, t), corner(0, ht), corner(w, ht)];
+    // `sides` columns at each side are left as they are (even, for the
+    // chroma): while steering, the window alone, for a quicker frame.
+    let sides = (sides & !1).min(size.0 / 4);
+    let (l, r) = (i64::from(sides), i64::from(size.0 - sides));
+    let (ht, t) = (i64::from(size.1), i64::from(top));
+    let corners = [corner(l, t), corner(r, t), corner(l, ht), corner(r, ht)];
     let tile = TILE << 16;
     let xs = corners.iter().map(|c| c.0);
     let ys = corners.iter().map(|c| c.1);
@@ -1915,15 +1991,15 @@ pub(crate) fn render_up(
         let clock = Instant::now();
         let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
         // From row `top`: its luma, and its chroma's place from there.
-        let skip = top as usize * pitch;
+        let skip = top as usize * pitch + sides as usize;
         nv12::rotate(
             &grid,
             &mut out.pixels[skip..],
             pitch,
             chroma - (top as usize / 2) * pitch,
-            (size.0, size.1 - top),
+            (size.0 - 2 * sides, size.1 - top),
             origin,
-            (anchor.0, anchor.1 - t),
+            (anchor.0 - l, anchor.1 - t),
             across,
             down,
         );
@@ -1938,7 +2014,7 @@ pub(crate) fn render_up(
             pitch,
             chroma,
             size,
-            (0, t, w, ht),
+            (l, t, r, ht),
             &points,
             split,
             shrink,
@@ -1960,7 +2036,7 @@ pub(crate) fn render_up(
     if let Some(n) = names {
         n.draw(
             out,
-            (0, t, w, ht),
+            (l, t, r, ht),
             view.zoom,
             area,
             tiles.night(),
@@ -1969,7 +2045,7 @@ pub(crate) fn render_up(
         );
     }
     if let Some(c) = cameras {
-        signs(out, (0, t, w, ht), view.zoom, area, c, |q| {
+        signs(out, (l, t, r, ht), view.zoom, area, c, |q| {
             held.sixteenth(q)
         });
     }

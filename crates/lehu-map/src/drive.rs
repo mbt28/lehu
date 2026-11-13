@@ -201,9 +201,9 @@ pub struct Camera {
 pub const CAMERA_POS_S: f64 = 0.25;
 pub const CAMERA_UP_S: f64 = 0.3;
 /// The way up turns no faster than this, degrees a second: a corner takes
-/// about a second, as the car does, however the fixes jump; and the
-/// frames turned meanwhile come at an even rate the drawing keeps up with.
-pub const CAMERA_MAX_DPS: f64 = 90.0;
+/// a second and a half, however the fixes jump; and a whole frame turned
+/// every 45 ms on the board then steps by under 3 degrees.
+pub const CAMERA_MAX_DPS: f64 = 60.0;
 /// Further than this from the drive, world pixels (about 250 m at 47
 /// degrees north), the view jumps to it: a drive begun again, a jump.
 const CAMERA_JUMP_PX: f64 = 16_000.0;
@@ -408,18 +408,17 @@ mod tests {
             x = nx;
         }
         assert!((1100 - x).abs() <= 1, "settled at {x}");
-        // A turn of 90 degrees: no faster than 90 degrees a second, so
-        // most of the way in a second, all of it in a second and a half,
-        // never past it.
+        // A turn of 90 degrees: no faster than the cap, so all of it in
+        // two seconds, never past it.
         let south = (0, 1024);
         let mut last = 0.0f64;
-        for i in 0..90 {
+        for i in 0..125 {
             let (_, up) = c.step((1100, 0), south, 16);
             let (ux, uy) = up.unwrap();
             let a = f64::from(uy).atan2(f64::from(ux)).to_degrees();
             assert!(a >= last - 0.01 && a <= 90.01, "{i}: {a}");
             assert!(
-                a <= (i + 1) as f64 * 16.0 / 1000.0 * 90.0 + 0.5,
+                a <= (i + 1) as f64 * 16.0 / 1000.0 * CAMERA_MAX_DPS + 0.5,
                 "{i}: {a} too fast"
             );
             assert!(c.turn_dps().abs() <= CAMERA_MAX_DPS + 0.01);
