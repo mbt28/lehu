@@ -235,10 +235,15 @@ impl Viewer {
             // picture, when asked for (`LEHU_RANGE_TEST`: full, limited,
             // or scale, which holds the map at twice its size).
             let test = std::env::var("LEHU_RANGE_TEST").unwrap_or_default();
+            // LEHU_FULL_RANGE=0 keeps the mapping and tells the plane
+            // limited, as before, should the plane's conversion look wrong.
+            let allowed = std::env::var("LEHU_FULL_RANGE")
+                .ok()
+                .is_none_or(|v| v != "0");
             let full = match test.as_str() {
                 "full" => true,
                 "limited" => false,
-                _ => display.has_color_range(),
+                _ => allowed && display.has_color_range(),
             };
             if full && !display.has_color_range() {
                 log::warn!(
