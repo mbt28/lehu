@@ -196,14 +196,16 @@ pub struct Camera {
 
 /// How long the view takes, about, to catch up with the drive: its
 /// position, and its way up.
-/// A spring settling in `t` trails a steady move by about `t`: at 30
-/// degrees a second in a bend, 0.3 s is 9 degrees behind the arrow.
+/// A spring settling in `t` trails a steady move by about `t`. The map
+/// turns slowly on purpose, slower than the arrow (the owner, 2026-11-13):
+/// the arrow shows the car's way at once, the map comes round after it.
 pub const CAMERA_POS_S: f64 = 0.25;
-pub const CAMERA_UP_S: f64 = 0.3;
-/// The way up turns no faster than this, degrees a second: a corner takes
-/// a second and a half, however the fixes jump; and a whole frame turned
-/// every 45 ms on the board then steps by under 3 degrees.
-pub const CAMERA_MAX_DPS: f64 = 60.0;
+pub const CAMERA_UP_S: f64 = 0.6;
+/// The way up turns no faster than this, degrees a second: a right-angle
+/// corner comes round over two seconds and a half, however the fixes
+/// jump; a whole frame turned every 35 ms on the board then steps by
+/// under a degree and a half.
+pub const CAMERA_MAX_DPS: f64 = 40.0;
 /// Further than this from the drive, world pixels (about 250 m at 47
 /// degrees north), the view jumps to it: a drive begun again, a jump.
 const CAMERA_JUMP_PX: f64 = 16_000.0;
@@ -409,10 +411,10 @@ mod tests {
         }
         assert!((1100 - x).abs() <= 1, "settled at {x}");
         // A turn of 90 degrees: no faster than the cap, so all of it in
-        // two seconds, never past it.
+        // four seconds, never past it.
         let south = (0, 1024);
         let mut last = 0.0f64;
-        for i in 0..125 {
+        for i in 0..250 {
             let (_, up) = c.step((1100, 0), south, 16);
             let (ux, uy) = up.unwrap();
             let a = f64::from(uy).atan2(f64::from(ux)).to_degrees();

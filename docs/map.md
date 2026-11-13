@@ -843,13 +843,14 @@ a town's turns change nothing. The - and + keys change the zoom chosen.
 
 Following a drive, the map's view is the drive's position and way up
 smoothed, each following it like a critically damped spring (a quarter
-of a second for the position, 0.3 s for the way up, which trails a steady
+of a second for the position, 0.6 s for the way up, which trails a steady
 bend by that much): a position from a GPS is a straight piece a second
 and its heading jumps at each fix, and the picture should not. The way up
-turns no faster than 90 degrees a second, so a corner takes about a
-second, as the car does. The arrow keeps the drive's own position and
-way, so in a bend it may sit a little off its place and turn before the
-map. With `map.pointer-lead` set (pixels), the map holds still while the
+turns no faster than 40 degrees a second, so a right-angle corner comes
+round over two seconds and a half, on purpose slower than the car: the
+arrow keeps the drive's own way (smoothed over a third of a second) and
+shows the turn at once, the map comes round after it. In a bend the arrow
+may sit a little off its place and point across the road for a moment. With `map.pointer-lead` set (pixels), the map holds still while the
 arrow moves on it, until the arrow is that far from its place or the road
 has turned 6 degrees, then glides after it in 0.4 s.
 
@@ -884,7 +885,7 @@ integers (the CPU has no float). `scripts/rotation-gpx.py` makes a drive
 of straights, corners, S-bends and a U-turn to test the turning with.
 
 On the board, on that course, a turned frame comes every 35 to 38 ms (two
-refreshes), a step of just over a degree at the 60 degrees a second the
+refreshes), a step of under a degree and a half at the 40 degrees a second the
 way up turns at most; on a winding road with names, every 50 to 55 ms.
 Turning all the time takes 55 to 70 % of the CPU. Before this work a
 frame came every 65 to 90 ms, and the map's own turn rate was unbounded.
