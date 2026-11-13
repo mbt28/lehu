@@ -911,7 +911,23 @@ names add a few milliseconds to a frame.
 The canvas is NV12, the video plane's own format, so the display's scaler
 does the colour conversion. Tiles are decoded by the video engine when the
 kernel's cedrus driver has JPEG support (about a millisecond a tile on the
-F1C200s), then copied out of its tiled layout. A tile the engine refuses,
+F1C200s), then copied out of its tiled layout. Measured on the board, a
+cold tile costs about 7 ms all told: 1.2 ms to read from the card, 2.6 ms
+for the engine and the copy out of its uncached buffer, 2.3 ms to untile
+it and map its levels from JPEG's full range to the limited range the
+display expects, 0.5 ms for its buffer. So: a tile's buffer is reused
+from one let go rather than allocated anew; while nothing is to be shown,
+the tiles the drive will want next are decoded ahead (the route for the
+next 1.5 km at the zoom shown and 500 m at the zoom a turn switches to,
+or 800 m along the heading without a route, nearest first, up to 32), so
+a frame finds them kept; and where the kernel's video plane has the
+`COLOR_RANGE` property, the plane is told the tiles are full range and
+the mapping is left out (the phone's video and the camera are told
+limited). Queuing two tiles in the engine at once was tried and gained
+nothing measurable: the engine's own share is small beside the CPU's.
+`LEHU_RANGE_TEST=full|limited|scale` in LEHU's environment shows a test
+picture (a grey ramp and colour bars) at either range, or holds the map
+at twice its size, to check the display's conversion and filter by eye. A tile the engine refuses,
 such as a progressive or 4:4:4 JPEG, or any tile on a system without the
 engine, is decoded in software, which on the F1C200s takes about a quarter
 of a second. `scripts/map-tiles.py` writes baseline 4:2:0 tiles, which the
