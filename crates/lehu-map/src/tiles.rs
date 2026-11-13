@@ -84,6 +84,10 @@ pub struct Tiles {
     pub enlarged: u32,
     /// How many enlargements deep `load` is now.
     depth: u8,
+    /// Every tile a test picture instead (`LEHU_RANGE_TEST`): a grey ramp
+    /// and colour bars, at full range (true) or limited (false), to check
+    /// the display's conversion by eye.
+    test_tile: Option<bool>,
 }
 
 impl Tiles {
@@ -109,7 +113,15 @@ impl Tiles {
             failed: 0,
             enlarged: 0,
             depth: 0,
+            test_tile: None,
         }
+    }
+
+    /// Every tile the test picture (`LEHU_RANGE_TEST`), full range or
+    /// limited.
+    pub fn set_test_tile(&mut self, full: Option<bool>) {
+        self.test_tile = full;
+        self.entries.clear();
     }
 
     /// The tile's slot in `entries`, decoded now if it is not kept.
@@ -194,6 +206,11 @@ impl Tiles {
 
     /// The tile, and how many times it was enlarged.
     fn load(&mut self, (z, x, y): Key) -> Option<(Box<[u8]>, u8)> {
+        if let Some(full) = self.test_tile {
+            let mut out = self.buffer();
+            nv12::test_picture(&mut out, SIDE, full);
+            return Some((out, 0));
+        }
         match self.set.read(z, x, y, &mut self.path, &mut self.file) {
             Ok(true) => {}
             Ok(false) => return self.enlarge((z, x, y)),

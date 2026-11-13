@@ -85,6 +85,9 @@ struct PlaneProps {
     crtc_h: u32,
     /// Not every driver has it.
     zpos: Option<u32>,
+    /// `COLOR_RANGE`, where the driver has it: its id, and the values for
+    /// "YCbCr limited range" and "YCbCr full range".
+    color_range: Option<(u32, u64, u64)>,
 }
 
 /// The overlay plane the UI goes on, fixed at open.
@@ -312,6 +315,10 @@ struct State {
     cache: FbCache,
     /// The camera owns the video plane: the decoder's frames wait.
     video_held: bool,
+    /// A map canvas on the video plane is full-range YCbCr (the JPEG
+    /// tiles as the engine decodes them), told to the plane when it has
+    /// `COLOR_RANGE`; the phone's video and the camera are limited range.
+    canvas_full_range: bool,
     /// Black buffer for the video plane. Some drivers refuse to enable the
     /// CRTC with no primary plane, so a UI-only modeset (the home screen
     /// before any video) may need the primary enabled with something. Freed
@@ -370,6 +377,31 @@ fn prop(card: &Card, handle: impl ResourceHandle, name: &'static str) -> Result<
         .ok_or(Error::Property(name))
 }
 
+/// An enum property of `handle` by `name`, with the raw values of two of
+/// its choices by their names; None unless all three are there.
+fn enum_prop(
+    card: &Card,
+    handle: impl ResourceHandle,
+    name: &str,
+    a: &str,
+    b: &str,
+) -> Option<(u32, u64, u64)> {
+    let id = find_prop(card, handle, name)?;
+    let info = card.get_property(id).ok()?;
+    let property::ValueType::Enum(values) = info.value_type() else {
+        return None;
+    };
+    let (raw, names) = values.values();
+    let of = |want: &str| {
+        names
+            .iter()
+            .zip(raw)
+            .find(|(e, _)| e.name().to_bytes() == want.as_bytes())
+            .map(|(_, &v)| v)
+    };
+    Some((u32::from(id), of(a)?, of(b)?))
+}
+
 fn plane_props(card: &Card, plane: plane::Handle) -> Result<PlaneProps, Error> {
     Ok(PlaneProps {
         fb: prop(card, plane, "FB_ID")?,
@@ -383,6 +415,13 @@ fn plane_props(card: &Card, plane: plane::Handle) -> Result<PlaneProps, Error> {
         crtc_w: prop(card, plane, "CRTC_W")?,
         crtc_h: prop(card, plane, "CRTC_H")?,
         zpos: find_prop(card, plane, "zpos").map(u32::from),
+        color_range: enum_prop(
+            card,
+            plane,
+            "COLOR_RANGE",
+            "YCbCr limited range",
+            "YCbCr full range",
+        ),
     })
 }
 
@@ -609,6 +648,7 @@ impl Display {
                 band: Band::default(),
                 cache: FbCache::with_capacity(CACHE_CAPACITY),
                 video_held: false,
+                canvas_full_range: false,
                 placeholder: None,
                 placeholder_live: 0,
                 sprite_on: false,
@@ -724,6 +764,9 @@ impl Display {
         req.add(plane, p.crtc_y, 0);
         req.add(plane, p.crtc_w, u64::from(self.width));
         req.add(plane, p.crtc_h, u64::from(self.height));
+        if let Some((id, limited, _)) = p.color_range {
+            req.add(plane, id, limited);
+        }
     }
 
     /// The UI plane over `r` only, the same pixels of the buffer as of the
@@ -958,6 +1001,19 @@ impl Display {
     pub fn show_camera(&self, frame: &Frame) -> Show {
         let mut st = self.lock();
         self.show_locked(&mut st, frame, true)
+    }
+
+    /// The video plane can be told its YCbCr range (`COLOR_RANGE`): with
+    /// it, a map canvas may be left full range as the JPEG engine decodes
+    /// it, and the display converts accordingly.
+    pub fn has_color_range(&self) -> bool {
+        self.video_props.color_range.is_some()
+    }
+
+    /// Map canvases shown from now are full-range YCbCr (true) or limited
+    /// (false); nothing happens without `has_color_range`.
+    pub fn set_canvas_full_range(&self, full: bool) {
+        self.lock().canvas_full_range = full;
     }
 
     /// While held, `show_video` returns `Busy` without touching the plane.
@@ -1446,6 +1502,7 @@ impl Display {
         let flags = self.add_modeset(&mut st);
         let p = &self.video_props;
         let plane = self.video_plane;
+        let full_range = st.canvas_full_range;
         let req = &mut st.request;
         req.add(plane, p.fb, u64::from(u32::from(canvas.dumb.fb)));
         req.add(plane, p.crtc, u64::from(self.crtc));
@@ -1457,6 +1514,9 @@ impl Display {
         req.add(plane, p.crtc_y, 0);
         req.add(plane, p.crtc_w, u64::from(self.width));
         req.add(plane, p.crtc_h, u64::from(self.height));
+        if let Some((id, limited, full)) = p.color_range {
+            req.add(plane, id, if full_range { full } else { limited });
+        }
         let sprite = sprite.filter(|_| !st.sprite_refused);
         let sprite_on = match sprite {
             Some(s) => self.add_sprite(&mut st.request, s),

@@ -230,7 +230,35 @@ impl Viewer {
         let thread = {
             let shared = Arc::clone(&shared);
             let display = Arc::clone(&display);
-            let tiles = Tiles::new(set, night, hw);
+            // The tiles as the engine decodes them, full range, when the
+            // plane can be told so: no mapping while untiling. The test
+            // picture, when asked for (`LEHU_RANGE_TEST`: full, limited,
+            // or scale, which holds the map at twice its size).
+            let test = std::env::var("LEHU_RANGE_TEST").unwrap_or_default();
+            let full = match test.as_str() {
+                "full" => true,
+                "limited" => false,
+                _ => display.has_color_range(),
+            };
+            if full && !display.has_color_range() {
+                log::warn!(
+                    "map: the plane has no COLOR_RANGE; the full-range test picture will look wrong"
+                );
+            }
+            display.set_canvas_full_range(full);
+            if full {
+                log::info!("map: the tiles stay full range; the plane converts them");
+            }
+            let mut hw = hw;
+            if let Some(h) = hw.as_mut() {
+                h.set_full_range(full);
+            }
+            let mut tiles = Tiles::new(set, night, hw);
+            match test.as_str() {
+                "full" => tiles.set_test_tile(Some(true)),
+                "limited" => tiles.set_test_tile(Some(false)),
+                _ => {}
+            }
             let frames = Frames {
                 canvases,
                 ups,
@@ -1350,7 +1378,20 @@ fn run(
             }
             _ => None,
         };
-        match display.show_canvas_with(&canvases[index], x, y, sprite) {
+        let scale_hold = std::env::var("LEHU_RANGE_TEST").is_ok_and(|v| v == "scale");
+        let shown_now = if scale_hold {
+            // The filter test: the middle of the window at twice its size.
+            let src = [
+                (x + panel.0 / 4) << 16,
+                (y + panel.1 / 4) << 16,
+                (panel.0 / 2) << 16,
+                (panel.1 / 2) << 16,
+            ];
+            display.show_canvas_scaled(&canvases[index], src, sprite)
+        } else {
+            display.show_canvas_with(&canvases[index], x, y, sprite)
+        };
+        match shown_now {
             Show::Shown => {
                 shown = Some(want);
                 if recent[0] != Some(index) {

@@ -56,6 +56,9 @@ pub struct HwJpeg {
     luma: usize,
     /// The picture, copied out of the uncached buffer.
     staging: Vec<u8>,
+    /// The levels left as the engine made them (full range: the display
+    /// is told so), not mapped to the limited range while untiling.
+    full_range: bool,
 }
 
 // SAFETY: the session is a descriptor and two mappings, used by one owner
@@ -109,8 +112,15 @@ impl HwJpeg {
             side,
             luma,
             staging: vec![0; luma + luma / 2],
+            full_range: false,
         };
         Ok((hw, path))
+    }
+
+    /// Leave the tiles full range (the display converts them so), or map
+    /// them to the limited range while untiling (the default).
+    pub fn set_full_range(&mut self, full: bool) {
+        self.full_range = full;
     }
 
     /// Decode `data` into `dst`: a linear NV12 tile, limited range,
@@ -144,7 +154,18 @@ impl HwJpeg {
         // One copy out of the uncached buffer, in bursts; every read after
         // it is from cached memory.
         self.staging.copy_from_slice(picture);
-        untile(&self.staging, self.side, self.luma, dst);
+        if self.full_range {
+            untile_with(
+                &self.staging,
+                self.side,
+                self.luma,
+                dst,
+                &IDENTITY,
+                &IDENTITY,
+            );
+        } else {
+            untile(&self.staging, self.side, self.luma, dst);
+        }
         Ok(())
     }
 }
@@ -160,9 +181,33 @@ impl Drop for HwJpeg {
 /// `side` picture whose luma is `luma` bytes, to linear NV12, limited
 /// range.
 pub fn untile(src: &[u8], side: usize, luma: usize, dst: &mut [u8]) {
+    untile_with(src, side, luma, dst, &FULL_TO_LIMITED_Y, &FULL_TO_LIMITED_C);
+}
+
+/// Each level as it is.
+const IDENTITY: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = i as u8;
+        i += 1;
+    }
+    t
+};
+
+/// `untile`, the luma and chroma levels mapped through `y_map` and
+/// `c_map`.
+fn untile_with(
+    src: &[u8],
+    side: usize,
+    luma: usize,
+    dst: &mut [u8],
+    y_map: &[u8; 256],
+    c_map: &[u8; 256],
+) {
     let (dst_y, dst_c) = dst.split_at_mut(side * side);
-    plane(&src[..luma], side, side, dst_y, &FULL_TO_LIMITED_Y);
-    plane(&src[luma..], side, side / 2, dst_c, &FULL_TO_LIMITED_C);
+    plane(&src[..luma], side, side, dst_y, y_map);
+    plane(&src[luma..], side, side / 2, dst_c, c_map);
 }
 
 /// One plane of `width` bytes x `rows`, its tiles 32 bytes x 32 rows.

@@ -33,6 +33,64 @@ pub fn ycc([r, g, b]: [u8; 3]) -> (u8, u8, u8) {
     )
 }
 
+/// A test picture in an NV12 tile `side` a side: a grey ramp of 16 steps
+/// across the top half (black to white) and the eight colour bars at 100 %
+/// across the bottom, at full range (`full`: 0..255, as a JPEG) or the
+/// limited range the display expects by default (16..235). Shown on a
+/// plane told the same range, the ramp's ends are pure black and white
+/// and the bars their colours; told the other, black and white are grey
+/// (limited on a full-range plane) or the steps crush (full on limited).
+pub fn test_picture(tile: &mut [u8], side: usize, full: bool) {
+    let (luma, chroma) = tile.split_at_mut(side * side);
+    let to_ycc = |[r, g, b]: [u8; 3]| -> (u8, u8, u8) {
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        let y = 0.299 * r + 0.587 * g + 0.114 * b;
+        let cb = 128.0 + (b - y) * 0.564;
+        let cr = 128.0 + (r - y) * 0.713;
+        let (y, cb, cr) = (y.round() as u8, cb.round() as u8, cr.round() as u8);
+        if full {
+            (y, cb, cr)
+        } else {
+            (
+                FULL_TO_LIMITED_Y[usize::from(y)],
+                FULL_TO_LIMITED_C[usize::from(cb)],
+                FULL_TO_LIMITED_C[usize::from(cr)],
+            )
+        }
+    };
+    const BARS: [[u8; 3]; 8] = [
+        [255, 255, 255],
+        [255, 255, 0],
+        [0, 255, 255],
+        [0, 255, 0],
+        [255, 0, 255],
+        [255, 0, 0],
+        [0, 0, 255],
+        [0, 0, 0],
+    ];
+    let colour_at = |x: usize, y: usize| -> (u8, u8, u8) {
+        if y < side / 2 {
+            let step = (x * 16 / side) as u8;
+            let v = step * 17;
+            to_ycc([v, v, v])
+        } else {
+            to_ycc(BARS[(x * 8 / side).min(7)])
+        }
+    };
+    for y in 0..side {
+        for x in 0..side {
+            luma[y * side + x] = colour_at(x, y).0;
+        }
+    }
+    for by in 0..side / 2 {
+        for bx in 0..side / 2 {
+            let (_, cb, cr) = colour_at(2 * bx, 2 * by);
+            chroma[by * side + 2 * bx] = cb;
+            chroma[by * side + 2 * bx + 1] = cr;
+        }
+    }
+}
+
 /// A `side` x `side` RGB picture (three bytes a pixel) as an NV12 tile;
 /// each chroma sample from the mean of its two by two pixels.
 pub fn from_rgb(rgb: &[u8], side: usize, dst: &mut [u8]) {
