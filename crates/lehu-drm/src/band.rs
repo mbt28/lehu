@@ -68,6 +68,11 @@ impl Band {
         self.shown.is_some()
     }
 
+    /// The rectangle the plane shows, when it shows one.
+    pub fn shown(self) -> Option<Rect> {
+        self.shown
+    }
+
     /// A commit for `r` would change nothing: the plane shows exactly this.
     pub fn same(self, r: Rect) -> bool {
         self.shown == Some(r)

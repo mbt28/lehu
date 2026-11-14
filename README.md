@@ -45,6 +45,9 @@ Linux.
 - **Calls and voice assistants**, with the microphone back to the phone.
 - **Now playing** with album art, and **turn-by-turn** guidance on the
   head unit's own screens.
+- **Offline map** from the SD card, with no phone and no internet:
+  destinations by name, routes found on the head unit, spoken prompts,
+  speed cameras and a night map.
 - **Audio**: a fixed-point mixer with per-stream levels, a jitter buffer
   for music over Wi-Fi, and ducking for voice.
 - **Controls**: the whole head unit works by touch alone or by a rotary
@@ -61,6 +64,8 @@ Linux.
 | Home | Now playing and navigation |
 | ![Settings](docs/images/settings.png) | ![Update](docs/images/update.png) |
 | Settings | Update |
+| ![Following a route on the map](docs/images/map-turn.png) | ![The map over a city](docs/images/map-city.png) |
+| The offline map, following a route | The map over a city, with its speed cameras |
 
 ## Requirements
 
@@ -80,6 +85,7 @@ real-time priority, BlueZ and hostapd) is in
 |---|---|
 | [User guide](docs/user-guide.md) | the screens, the controls, phones and Bluetooth devices |
 | [CarPlay Ultra](docs/carplay-ultra.md) | what it adds, themes, and how to check it |
+| [The offline map](docs/map.md) | the map from the SD card: routes, prompts, speed cameras, making a map |
 | [Install on a Raspberry Pi](packaging/debian/README.md) | the apt repository, starting at login, setup |
 | [Building](docs/building.md) | the F1C200s, Raspberry Pi and x86 builds, packages, tests, on-board tools |
 | [Packaging](packaging) | Buildroot external tree, Yocto layer, Debian packaging |

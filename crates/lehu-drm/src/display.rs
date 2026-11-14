@@ -360,6 +360,11 @@ pub struct Display {
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
     state: Mutex<State>,
+    /// LEHU_SHOT_DIR in the environment: a folder where, whenever a file
+    /// `take` appears in it, the next canvas shown is written out with the
+    /// sprite and the UI over it (for screenshots of the map, which no
+    /// tool reads off the video plane; scripts/map-shot.py composes them).
+    shot_dir: Option<std::path::PathBuf>,
 }
 
 fn find_prop(card: &Card, handle: impl ResourceHandle, name: &str) -> Option<property::Handle> {
@@ -641,6 +646,7 @@ impl Display {
             sprite_plane: sprite,
             ui_pitch,
             video_frames: AtomicU32::new(0),
+            shot_dir: std::env::var_os("LEHU_SHOT_DIR").map(std::path::PathBuf::from),
             state: Mutex::new(State {
                 request: Request::new(),
                 modeset_done: false,
@@ -1529,6 +1535,12 @@ impl Display {
             return match self.commit(&mut st, flags | NONBLOCK) {
                 Ok(()) => {
                     st.sprite_on = sprite_on;
+                    if let Some(dir) = &self.shot_dir
+                        && std::fs::remove_file(dir.join("take")).is_ok()
+                        && let Err(e) = self.write_shot(dir, &st, canvas, src, sprite)
+                    {
+                        log::warn!("shot: {e}");
+                    }
                     Show::Shown
                 }
                 Err(e) if e.kind() == io::ErrorKind::ResourceBusy => Show::Busy,
@@ -1552,6 +1564,63 @@ impl Display {
                 Show::Failed
             }
         }
+    }
+
+    /// What the panel shows, to `dir`: `shot.txt` with the sizes and
+    /// places, and the bytes of the canvas (`shot-canvas.bin`), the sprite
+    /// shown (`shot-sprite.bin`) and the UI buffer (`shot-ui.bin`).
+    fn write_shot(
+        &self,
+        dir: &std::path::Path,
+        st: &State,
+        canvas: &Canvas,
+        src: [u32; 4],
+        sprite: Option<&Sprite<'_>>,
+    ) -> io::Result<()> {
+        use std::io::Write;
+        let bytes = |d: &Dumb| -> &[u8] {
+            // SAFETY: the mapping made in `Dumb::create`, `size` bytes,
+            // alive while the buffer is; read under the display's lock.
+            unsafe { std::slice::from_raw_parts(d.map.as_ptr(), d.size) }
+        };
+        let mut head = String::new();
+        head += &format!("panel {} {}\n", self.width, self.height);
+        head += &format!(
+            "canvas {} {} {} {} {:?} {}\n",
+            canvas.width,
+            canvas.height,
+            canvas.dumb.pitch,
+            canvas.chroma_offset(),
+            canvas.format,
+            st.canvas_full_range
+        );
+        head += &format!("src {} {} {} {}\n", src[0], src[1], src[2], src[3]);
+        std::fs::write(dir.join("shot-canvas.bin"), bytes(&canvas.dumb))?;
+        if let Some(s) = sprite.filter(|_| st.sprite_on) {
+            head += &format!(
+                "sprite {} {} {} {} {} {} {} {} {}\n",
+                s.canvas.width,
+                s.canvas.height,
+                s.canvas.dumb.pitch,
+                s.sx,
+                s.sy,
+                s.w,
+                s.h,
+                s.x,
+                s.y
+            );
+            std::fs::write(dir.join("shot-sprite.bin"), bytes(&s.canvas.dumb))?;
+        }
+        if let (Some(ui), Some(r), Some(p)) = (&st.ui, st.band.shown(), &self.ui_plane) {
+            head += &format!(
+                "ui {} {} {} {} {} {:?} {}\n",
+                r.x0, r.y0, r.x1, r.y1, ui.pitch, p.format, p.bpp
+            );
+            std::fs::write(dir.join("shot-ui.bin"), bytes(ui))?;
+        }
+        std::fs::File::create(dir.join("shot.txt"))?.write_all(head.as_bytes())?;
+        log::info!("shot: written to {}", dir.display());
+        Ok(())
     }
 
     /// Free a canvas. If it is still on the plane the kernel takes it off.
