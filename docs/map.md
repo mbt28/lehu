@@ -878,10 +878,15 @@ up it landed, and the turn rate. (Frames at a fraction of the resolution,
 scaled up by the display, were tried for bends and corners: quicker, but
 pixelated; the code is there, off.)
 
-The route is drawn as a line simplified to the pixel first, so a straight
+The route is drawn as a line simplified to the pixel of the zoom shown,
+once per zoom (drawn as it comes, a long route's thousands of points cost
+tens of milliseconds a frame: 69 ms at 5,000 on the board), so a straight
 road of points every few metres is one segment, and each segment's
 capsule is filled row by row from the span it covers, worked out in
-integers (the CPU has no float). `scripts/rotation-gpx.py` makes a drive
+integers (the CPU has no float). The names along the route ahead are made
+ready the same way as the tiles, after them, in idle time: their blocks
+read (about 30 ms a new area) and their pictures laid out (about a
+millisecond a name), a few at a time. `scripts/rotation-gpx.py` makes a drive
 of straights, corners, S-bends and a U-turn to test the turning with.
 
 On the board, on that course, a turned frame comes every 35 to 38 ms (two

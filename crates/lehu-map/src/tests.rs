@@ -1916,3 +1916,111 @@ fn decode_bench() {
     other.copy_from_slice(&canvas);
     println!("the same memcpy, pages warm: {:.1} ms", ms(t));
 }
+
+/// What the names cost, cold and warm, on this machine (cross-built for
+/// the board, it says what the chip there does):
+/// `LEHU_MAP_DIR=<region> cargo test -p lehu-map names_bench -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn names_bench() {
+    use std::time::Instant;
+    let dir = std::env::var("LEHU_MAP_DIR").unwrap();
+    let set = TileSet::open(Path::new(&dir)).unwrap();
+    let center = set.center;
+    let Some(mut names) = crate::labels::Names::open(set.dir()) else {
+        println!("no names in {dir}");
+        return;
+    };
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+    let (w, h) = (864u32, 528u32);
+    let pitch = w as usize;
+    let chroma = pitch * h as usize;
+    let mut buf = vec![0u8; chroma + pitch * h as usize / 2];
+    // Budapest, where the names are dense: 47.4979 N, 19.0402 E.
+    let (bx, by) = crate::world_from_degrees(47.4979, 19.0402).unwrap();
+    for (what, x, y) in [
+        ("the region's centre", center.0, center.1),
+        ("Budapest", bx, by),
+    ] {
+        for zoom in [14u8, 16] {
+            let view = View { zoom, x, y };
+            let layout = Layout::around(&view, (800, 480), 5, 3);
+            let whole = (0, 0, i64::from(w), i64::from(h));
+            let mut times = Vec::new();
+            let before = names.drawn;
+            for _ in 0..3 {
+                let t = Instant::now();
+                crate::viewer::draw_names(
+                    &mut names,
+                    &mut nv12::Surface {
+                        pixels: &mut buf,
+                        pitch,
+                        chroma,
+                        size: (w, h),
+                    },
+                    &layout,
+                    whole,
+                    false,
+                );
+                times.push(ms(t));
+            }
+            let drawn = (names.drawn - before) / 3;
+            println!(
+                "{what} zoom {zoom}: {drawn} names; cold {:.1} ms, warm {:.1} ms, {:.1} ms",
+                times[0], times[1], times[2]
+            );
+            // The same area a little further on: new blocks, some names new.
+            let s = WORLD_Z - zoom;
+            let moved = View {
+                zoom,
+                x: x + (600i64 << s),
+                y,
+            };
+            let layout2 = Layout::around(&moved, (800, 480), 5, 3);
+            let t = Instant::now();
+            crate::viewer::draw_names(
+                &mut names,
+                &mut nv12::Surface {
+                    pixels: &mut buf,
+                    pitch,
+                    chroma,
+                    size: (w, h),
+                },
+                &layout2,
+                whole,
+                false,
+            );
+            println!("  600 px on: {:.1} ms", ms(t));
+        }
+    }
+}
+
+/// What drawing a long route costs a frame, by its length in points.
+#[test]
+#[ignore]
+fn route_bench() {
+    use std::time::Instant;
+    let (w, h) = (864u32, 528u32);
+    let pitch = w as usize;
+    let chroma = pitch * h as usize;
+    let mut out = vec![0u8; chroma + pitch * h as usize / 2];
+    let clip = (0, 0, i64::from(w), i64::from(h));
+    for n in [200usize, 1000, 5000, 20000] {
+        // A road wandering off across the country, points every 6 px as a
+        // route at zoom 17 has them, only the first few hundred in view.
+        let points: Vec<(i64, i64)> = (0..n)
+            .map(|i| {
+                let x = 100.0 + i as f64 * 5.0 + 30.0 * (i as f64 * 0.05).sin();
+                let y = 260.0 + i as f64 * 1.5 + 20.0 * (i as f64 * 0.11).cos();
+                ((x * 16.0) as i64, (y * 16.0) as i64)
+            })
+            .collect();
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = Instant::now();
+            nv12::route_by(&mut out, pitch, chroma, (w, h), clip, &points, 1);
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("route of {n} points: {best:.1} ms a frame");
+    }
+}

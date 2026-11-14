@@ -141,6 +141,11 @@ impl Glyphs {
         }
     }
 
+    /// The picture of `text` at `size` pixels is kept.
+    pub fn has(&self, text: &str, size: u8) -> bool {
+        self.kept.iter().any(|k| k.size == size && *k.text == *text)
+    }
+
     /// The picture of `text` at `size` pixels, made if it is not kept.
     pub fn sprite(&mut self, text: &str, size: u8) -> &Sprite {
         self.clock += 1;

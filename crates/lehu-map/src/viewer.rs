@@ -728,6 +728,9 @@ fn run(
     // along it, and day or night.
     let mut position: Option<Marker> = None;
     let mut route: Option<Route> = None;
+    // The route simplified to the pixel of a zoom, once that zoom is
+    // wanted: what is drawn.
+    let mut route_simple: Option<(u8, Route)> = None;
     let mut cameras: Option<CameraMarks> = None;
     let mut progress: Option<Progress> = None;
     let mut night = false;
@@ -746,6 +749,7 @@ fn run(
                 if new_route {
                     // Every canvas has the old one: all composed afresh.
                     route = inner.route.clone();
+                    route_simple = None;
                     held.fill(None);
                     ahead = None;
                     shown = None;
@@ -818,6 +822,21 @@ fn run(
         }
         // The marker as the pictures hold it: none while it has a plane.
         let baked = if sprites.is_some() { None } else { position };
+        // The route as drawn at the zoom wanted: simplified once for it.
+        if let Some(r) = &route {
+            let zoom = want.map_or_else(|| shown.map_or(0, |s| s.zoom), |w| w.zoom);
+            if zoom > 0 && route_simple.as_ref().is_none_or(|(z, _)| *z != zoom) {
+                let tol = 1i64 << (WORLD_Z - zoom.min(WORLD_Z));
+                let pts: Route = nv12::simplified(r, tol).into();
+                log::debug!(
+                    "map: the route at zoom {zoom}: {} of {} points drawn",
+                    pts.len(),
+                    r.len()
+                );
+                route_simple = Some((zoom, pts));
+            }
+        }
+        let drawn_route: Option<&[(i64, i64)]> = route_simple.as_ref().map(|(_, p)| p.as_ref());
         let Some(mut want) = want else {
             // Nothing new to show: a step towards the canvas ahead.
             if let Some(layout) = ahead
@@ -834,7 +853,7 @@ fn run(
                     &recent,
                     &layout,
                     baked,
-                    route.as_deref(),
+                    drawn_route,
                     cameras.as_deref(),
                     progress,
                 ) {
@@ -862,13 +881,30 @@ fn run(
                         started.elapsed().as_millis()
                     );
                 }
+            } else if ahead.is_none()
+                && let Some((zoom, area)) = prefetch.names_todo()
+            {
+                // Then the names along the way: their blocks read and a
+                // few pictures laid out at a time.
+                let started = Instant::now();
+                let did = names.as_mut().is_some_and(|n| n.prepare(zoom, area, 4));
+                if did {
+                    if trace {
+                        log::info!(
+                            "map: names made ready ahead in {} ms",
+                            started.elapsed().as_millis()
+                        );
+                    }
+                } else {
+                    prefetch.names_done();
+                }
             }
             continue;
         };
         // Where the drive is going, for the tiles to decode ahead.
         prefetch.plan(
             &want,
-            route.as_deref(),
+            drawn_route,
             progress,
             position,
             drive_top_zoom(shared),
@@ -1063,7 +1099,7 @@ fn run(
                                 // corner, where a frame is wanted quickly.
                                 let names = names.as_mut().filter(|_| div == 1 && !corner);
                                 let tiles = &mut tiles;
-                                let (route, cameras) = (route.as_deref(), cameras.as_deref());
+                                let (route, cameras) = (drawn_route, cameras.as_deref());
                                 let cost = &mut cost;
                                 let turner = thread::Builder::new()
                                     .name("map-turn".into())
@@ -1157,7 +1193,7 @@ fn run(
                                 &job.view,
                                 job.h,
                                 job.marker,
-                                route.as_deref(),
+                                drawn_route,
                                 cameras.as_deref(),
                                 job.progress,
                                 job.anchor,
@@ -1305,7 +1341,7 @@ fn run(
                         (rect.3 + 1) & !1,
                     );
                     tiles.compose_rect(&h.layout, canvas.pixels(), pitch, chroma, rect);
-                    if let Some(line) = route.as_deref() {
+                    if let Some(line) = drawn_route {
                         draw_route(
                             canvas.pixels(),
                             pitch,
@@ -1346,7 +1382,7 @@ fn run(
                     &recent,
                     &layout,
                     baked,
-                    route.as_deref(),
+                    drawn_route,
                     cameras.as_deref(),
                     progress,
                 ) else {
@@ -1736,11 +1772,23 @@ struct Prefetch {
     keys: Vec<(u8, i64, i64)>,
     /// What the keys were planned for: the zoom and the drive's tile.
     planned: Option<(u8, i64, i64)>,
+    /// The names of this zoom and area (world pixels) to make ready once
+    /// the tiles are, until none is left to do.
+    names: Option<(u8, (i64, i64, i64, i64))>,
 }
 
 impl Prefetch {
     fn pending(&self) -> bool {
-        !self.keys.is_empty()
+        !self.keys.is_empty() || self.names.is_some()
+    }
+
+    /// The names still to make ready, after the tiles.
+    fn names_todo(&self) -> Option<(u8, (i64, i64, i64, i64))> {
+        self.keys.is_empty().then_some(self.names).flatten()
+    }
+
+    fn names_done(&mut self) {
+        self.names = None;
     }
 
     /// The next tile not kept, when there is one.
@@ -1802,6 +1850,20 @@ impl Prefetch {
             },
         };
         self.keys = plan_tiles(&path, view.zoom, top_zoom);
+        // The names along the same stretch, at the zoom shown.
+        let (mut metres, mut l, mut t, mut r, mut b) = (0.0, at.0, at.1, at.0, at.1);
+        for (i, &p) in path.iter().enumerate() {
+            if i > 0 {
+                metres += ground_px(path[i - 1], p);
+            }
+            if metres > PREFETCH_M {
+                break;
+            }
+            (l, t, r, b) = (l.min(p.0), t.min(p.1), r.max(p.0), b.max(p.1));
+        }
+        // A panel's reach around the stretch.
+        let reach = 512i64 << (WORLD_Z - view.zoom.min(WORLD_Z));
+        self.names = Some((view.zoom, (l - reach, t - reach, r + reach, b + reach)));
     }
 }
 

@@ -681,11 +681,11 @@ pub fn route_behind_by(
 }
 
 /// Every pixel (by its middle) and chroma pair (by its block's) within
-/// `r` of the line through `points`, inside `clip`, set to `colour`: the
-/// line simplified to the pixel first (points every few pixels along a
-/// straight road become one segment), then each segment's capsule filled
-/// row by row as the span it covers, worked out from its ends and its
-/// band, not tested pixel by pixel over its box.
+/// `r` of the line through `points`, inside `clip`, set to `colour`: each
+/// segment's capsule filled row by row as the span it covers, worked out
+/// from its ends and its band, not tested pixel by pixel over its box.
+/// The line is best simplified first (`simplified`): points every few
+/// pixels along a straight road are one segment then.
 #[allow(clippy::too_many_arguments)]
 fn thick(
     dst: &mut [u8],
@@ -704,7 +704,6 @@ fn thick(
         return;
     }
     let (y_val, cb_val, cr_val) = ycc(colour);
-    let points = simplified(points, SIMPLIFY_TOL);
     // The segments, the long ones cut (1/16 px: 256 pixels a piece), so
     // that no square overflows an i64.
     const PIECE: i64 = 256 * 16;
@@ -764,13 +763,12 @@ fn thick(
     }
 }
 
-/// How far a point may be from the line through its neighbours, 1/16
-/// px, to be left out when a line is drawn: a pixel.
-const SIMPLIFY_TOL: i64 = 16;
-
 /// `points` with those left out that lie within `tol` of the line between
-/// the ones kept (Douglas and Peucker's way, without recursion).
-fn simplified(points: &[(i64, i64)], tol: i64) -> Vec<(i64, i64)> {
+/// the ones kept (Douglas and Peucker's way, without recursion). A route
+/// is simplified once a zoom, to the pixel, before it is drawn (the
+/// viewer): drawn as it comes, its thousands of points would cost tens of
+/// milliseconds a frame.
+pub fn simplified(points: &[(i64, i64)], tol: i64) -> Vec<(i64, i64)> {
     let n = points.len();
     if n < 3 {
         return points.to_vec();

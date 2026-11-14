@@ -509,6 +509,32 @@ impl Names {
     /// `turn` lies it on `out` (65536 long), the right way up; a place
     /// level. In the night's colours when `night`.
     #[allow(clippy::too_many_arguments)]
+    /// The names that can show in `area` (world pixels) of `zoom` made
+    /// ready for a frame to come: their blocks read, and up to `most` of
+    /// their pictures laid out. True when something was done; false when
+    /// every one was ready already.
+    pub fn prepare(&mut self, zoom: u8, area: (i64, i64, i64, i64), most: usize) -> bool {
+        let wanted: Vec<(String, u8)> = self
+            .store
+            .near(zoom, area)
+            .into_iter()
+            .map(|l| (l.text.to_string(), l.size))
+            .collect();
+        let mut done = 0;
+        for (text, size) in wanted {
+            if self.glyphs.has(&text, size) {
+                continue;
+            }
+            self.glyphs.sprite(&text, size);
+            done += 1;
+            if done >= most {
+                break;
+            }
+        }
+        done > 0
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         out: &mut Surface<'_>,
