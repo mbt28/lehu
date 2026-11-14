@@ -2024,3 +2024,26 @@ fn route_bench() {
         println!("route of {n} points: {best:.1} ms a frame");
     }
 }
+
+/// The drive's step is an index into the whole route; the line drawn is
+/// the simplified one, so the grey part must end at the point kept that
+/// the step maps to, not at the step's number of drawn points.
+#[test]
+fn the_route_split_follows_the_simplified_line() {
+    // A straight road of 20 points (every one but the ends left out), a
+    // corner, 20 more.
+    let mut pts: Vec<(i64, i64)> = (0..20).map(|i| (i * 1000, 0)).collect();
+    pts.extend((1..=20).map(|i| (19_000, i * 1000)));
+    let kept = nv12::simplified_kept(&pts, 16);
+    assert_eq!(kept, [0, 19, 39]);
+    let drawn = crate::viewer::DrawnRoute::for_test(&pts, &kept);
+    // Heading for point 5 on the first straight: nothing kept is behind
+    // but the start.
+    assert_eq!(drawn.step(5), 1);
+    // Heading for the corner itself: the corner is ahead.
+    assert_eq!(drawn.step(19), 1);
+    // Past the corner: the corner is behind.
+    assert_eq!(drawn.step(20), 2);
+    assert_eq!(drawn.step(39), 2);
+    assert_eq!(drawn.step(40), 3);
+}

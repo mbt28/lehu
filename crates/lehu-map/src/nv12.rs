@@ -764,14 +764,26 @@ fn thick(
 }
 
 /// `points` with those left out that lie within `tol` of the line between
-/// the ones kept (Douglas and Peucker's way, without recursion). A route
-/// is simplified once a zoom, to the pixel, before it is drawn (the
-/// viewer): drawn as it comes, its thousands of points would cost tens of
-/// milliseconds a frame.
+/// the ones kept.
+#[cfg(test)]
 pub fn simplified(points: &[(i64, i64)], tol: i64) -> Vec<(i64, i64)> {
+    simplified_kept(points, tol)
+        .into_iter()
+        .map(|i| points[i])
+        .collect()
+}
+
+/// The indices, in order, of the points that may stay when `points` is
+/// simplified: those left out lie within `tol` of the line between the
+/// ones kept (Douglas and Peucker's way, without recursion). A route is
+/// simplified once a zoom, to the pixel, before it is drawn (the viewer):
+/// drawn as it comes, its thousands of points would cost tens of
+/// milliseconds a frame. The indices let the drive's step, an index into
+/// the whole route, find its place in the line drawn.
+pub fn simplified_kept(points: &[(i64, i64)], tol: i64) -> Vec<usize> {
     let n = points.len();
     if n < 3 {
-        return points.to_vec();
+        return (0..n).collect();
     }
     let mut keep = vec![false; n];
     keep[0] = true;
@@ -806,10 +818,9 @@ pub fn simplified(points: &[(i64, i64)], tol: i64) -> Vec<(i64, i64)> {
             stack.push((worst.1, b));
         }
     }
-    points
-        .iter()
-        .zip(&keep)
-        .filter_map(|(&p, &k)| k.then_some(p))
+    keep.iter()
+        .enumerate()
+        .filter_map(|(i, &k)| k.then_some(i))
         .collect()
 }
 

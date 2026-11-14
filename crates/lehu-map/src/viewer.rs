@@ -13,6 +13,28 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 /// The route to draw: world pixels at `WORLD_Z`.
 pub type Route = Arc<[(i64, i64)]>;
+
+/// The route as drawn: simplified to the pixel of a zoom, with each
+/// point kept known by its index in the whole route, so that the drive's
+/// step (an index into the whole) splits the drawn line in its place.
+#[derive(Clone, Copy)]
+pub(crate) struct DrawnRoute<'a> {
+    points: &'a [(i64, i64)],
+    kept: &'a [usize],
+}
+
+impl DrawnRoute<'_> {
+    /// `step` of the whole route as an index into the points drawn: the
+    /// first kept point not behind it.
+    pub(crate) fn step(&self, step: usize) -> usize {
+        self.kept.partition_point(|&i| i < step)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test<'a>(points: &'a [(i64, i64)], kept: &'a [usize]) -> DrawnRoute<'a> {
+        DrawnRoute { points, kept }
+    }
+}
 /// The speed cameras to draw: world pixels at `WORLD_Z`, in the order of
 /// their x.
 pub type CameraMarks = Arc<[(i64, i64)]>;
@@ -729,8 +751,8 @@ fn run(
     let mut position: Option<Marker> = None;
     let mut route: Option<Route> = None;
     // The route simplified to the pixel of a zoom, once that zoom is
-    // wanted: what is drawn.
-    let mut route_simple: Option<(u8, Route)> = None;
+    // wanted: what is drawn, and the index in the route of each point kept.
+    let mut route_simple: Option<(u8, Route, Vec<usize>)> = None;
     let mut cameras: Option<CameraMarks> = None;
     let mut progress: Option<Progress> = None;
     let mut night = false;
@@ -825,18 +847,21 @@ fn run(
         // The route as drawn at the zoom wanted: simplified once for it.
         if let Some(r) = &route {
             let zoom = want.map_or_else(|| shown.map_or(0, |s| s.zoom), |w| w.zoom);
-            if zoom > 0 && route_simple.as_ref().is_none_or(|(z, _)| *z != zoom) {
+            if zoom > 0 && route_simple.as_ref().is_none_or(|(z, ..)| *z != zoom) {
                 let tol = 1i64 << (WORLD_Z - zoom.min(WORLD_Z));
-                let pts: Route = nv12::simplified(r, tol).into();
+                let kept = nv12::simplified_kept(r, tol);
+                let pts: Route = kept.iter().map(|&i| r[i]).collect();
                 log::debug!(
                     "map: the route at zoom {zoom}: {} of {} points drawn",
                     pts.len(),
                     r.len()
                 );
-                route_simple = Some((zoom, pts));
+                route_simple = Some((zoom, pts, kept));
             }
         }
-        let drawn_route: Option<&[(i64, i64)]> = route_simple.as_ref().map(|(_, p)| p.as_ref());
+        let drawn_route: Option<DrawnRoute<'_>> = route_simple
+            .as_ref()
+            .map(|(_, p, kept)| DrawnRoute { points: p, kept });
         let Some(mut want) = want else {
             // Nothing new to show: a step towards the canvas ahead.
             if let Some(layout) = ahead
@@ -1807,7 +1832,7 @@ impl Prefetch {
     fn plan(
         &mut self,
         view: &View,
-        route: Option<&[(i64, i64)]>,
+        route: Option<DrawnRoute<'_>>,
         progress: Option<Progress>,
         position: Option<Marker>,
         top_zoom: u8,
@@ -1828,8 +1853,8 @@ impl Prefetch {
         // The path ahead: the route from where the drive is, else a line
         // along the heading.
         let path: Vec<(i64, i64)> = match (route, progress) {
-            (Some(r), Some(p)) if p.step < r.len() => std::iter::once(at)
-                .chain(r[p.step..].iter().copied())
+            (Some(r), Some(p)) if r.step(p.step) < r.points.len() => std::iter::once(at)
+                .chain(r.points[r.step(p.step)..].iter().copied())
                 .collect(),
             _ => match position {
                 Some(Marker::Arrow(x, y, h)) if h != (0, 0) => {
@@ -2225,7 +2250,7 @@ pub(crate) fn render_up(
     view: &View,
     h: (i64, i64),
     marker: Option<Marker>,
-    route: Option<&[(i64, i64)]>,
+    route: Option<DrawnRoute<'_>>,
     cameras: Option<&[(i64, i64)]>,
     progress: Option<Progress>,
     anchor: (i64, i64),
@@ -2291,8 +2316,8 @@ pub(crate) fn render_up(
     }
     let drawing = Instant::now();
     if let Some(line) = route {
-        let points: Vec<(i64, i64)> = line.iter().map(|&q| held.sixteenth(q)).collect();
-        let split = progress.map(|q| (q.step, held.sixteenth(q.at)));
+        let points: Vec<(i64, i64)> = line.points.iter().map(|&q| held.sixteenth(q)).collect();
+        let split = progress.map(|q| (line.step(q.step), held.sixteenth(q.at)));
         draw_split(
             out.pixels,
             pitch,
@@ -2366,11 +2391,11 @@ fn draw_route(
     size: (u32, u32),
     layout: &Layout,
     clip: (i64, i64, i64, i64),
-    line: &[(i64, i64)],
+    line: DrawnRoute<'_>,
     progress: Option<Progress>,
 ) {
-    let points: Vec<(i64, i64)> = line.iter().map(|&p| layout.sixteenth(p)).collect();
-    let split = progress.map(|p| (p.step, layout.sixteenth(p.at)));
+    let points: Vec<(i64, i64)> = line.points.iter().map(|&p| layout.sixteenth(p)).collect();
+    let split = progress.map(|p| (line.step(p.step), layout.sixteenth(p.at)));
     draw_split(dst, pitch, chroma, size, clip, &points, split, 1);
 }
 
@@ -2508,7 +2533,7 @@ fn compose_free(
     recent: &[Option<usize>; 2],
     layout: &Layout,
     position: Option<Marker>,
-    route: Option<&[(i64, i64)]>,
+    route: Option<DrawnRoute<'_>>,
     cameras: Option<&[(i64, i64)]>,
     progress: Option<Progress>,
 ) -> Option<usize> {
