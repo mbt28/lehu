@@ -627,7 +627,13 @@ every 35 to 45 ms, a step of under two degrees at the most the way up
 turns. A change of zoom is shown by the display's scaler, the frame shown
 enlarged or shrunk smoothly about the arrow while the new one is drawn.
 The arrow is on a display plane of its own above the map, so the map
-moves under it without being redrawn.
+moves under it without being redrawn. Where the display has a hardware
+cursor (the F1C200s has a 32 x 32 one of 16 colours), the arrow is on the
+cursor, drawn a little smaller to fit its square and its colours; a new
+heading is drawn into a second buffer while the cursor shows the first.
+The cursor is above everything, the screens too, so it is turned off
+while a screen's window, the bar or the menu, covers it. Otherwise the
+arrow is on a plane of its own, at its full size.
 
 The route is drawn as a line simplified to the pixel of the zoom shown,
 once per zoom, so a straight road of points every few metres is one
@@ -659,7 +665,8 @@ For development, in LEHU's environment: `LEHU_MAP_TRACE=1` logs every
 turned frame, how long it took and how far off the way up it landed;
 `LEHU_RANGE_TEST=full|limited|scale` shows a test picture at either
 colour range, or holds the map at twice its size, to check the display's
-conversion by eye; and `LEHU_SHOT_DIR=DIR` writes what the panel shows,
+conversion by eye; `LEHU_MAP_CURSOR=0` keeps the arrow off the hardware
+cursor; and `LEHU_SHOT_DIR=DIR` writes what the panel shows,
 map, arrow and screens, to DIR whenever a file `take` appears there,
 which `scripts/map-shot.py` composes into a PNG (no screenshot tool reads
 the video plane). The pictures here were taken that way.

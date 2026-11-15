@@ -56,11 +56,16 @@ def main():
         pic = pic.resize((pw, ph), Image.BILINEAR)
     pic = pic.convert("RGBA")
     if "sprite" in head:
-        w, h, spitch, ssx, ssy, sw, sh, x, y = (int(v) for v in head["sprite"])
+        f = head["sprite"]
+        w, h, spitch, ssx, ssy, sw, sh, x, y = (int(v) for v in f[:9])
+        # The cursor's pixels are premultiplied, the sprite plane's not.
+        mode = "BGRa" if len(f) > 9 and f[9] == "premultiplied" else "BGRA"
         raw = open(f"{d}/shot-sprite.bin", "rb").read()
-        spr = Image.frombytes("RGBA", (w, h), raw[: h * spitch], "raw", "BGRA", spitch)
-        part = spr.crop((ssx, ssy, ssx + sw, ssy + sh))
-        pic.alpha_composite(part, (x, y))
+        spr = Image.frombytes("RGBA", (w, h), raw[: h * spitch], "raw", mode, spitch)
+        # Cut to the panel: the cursor can stand partly off it.
+        cx, cy = max(0, -x), max(0, -y)
+        part = spr.crop((ssx + cx, ssy + cy, ssx + sw, ssy + sh))
+        pic.alpha_composite(part, (x + cx, y + cy))
     if "ui" in head:
         x0, y0, x1, y1, upitch, ufmt, bpp = head["ui"]
         x0, y0, x1, y1, upitch = int(x0), int(y0), int(x1), int(y1), int(upitch)

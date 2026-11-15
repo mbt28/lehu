@@ -245,8 +245,8 @@ impl Viewer {
         // The marker on a plane of its own, when there is one: the map
         // then moves under it without a redraw.
         let sprites = Sprites::new(&display);
-        if sprites.is_some() {
-            log::info!("map: the marker is on the sprite plane");
+        if let Some(s) = &sprites {
+            log::info!("map: the marker is on {}", s.plane());
         }
         display.hold_video(true);
         let thread = {
@@ -833,10 +833,10 @@ fn run(
             }
             (shown != Some(inner.want) || zoom_anim.is_some()).then_some(inner.want)
         };
-        // The sprite plane can be refused at its first commit: from then
-        // on the marker is drawn into the pictures.
-        if sprites.is_some() && !display.has_sprite() {
-            retired.extend(sprites.take().map(Sprites::into_canvas));
+        // The marker's plane can be refused at its first commit: from
+        // then on the marker is drawn into the pictures.
+        if sprites.as_ref().is_some_and(|s| !s.usable(display)) {
+            retired.extend(sprites.take().into_iter().flat_map(Sprites::into_canvases));
             held.fill(None);
             up_held.fill(None);
             shown = None;
@@ -1440,7 +1440,7 @@ fn run(
             (Some(sp), Some(m), Some(h)) => {
                 let (at, heading) = parts(m);
                 let c = h.layout.pixel(at);
-                Some(sp.at(heading, (c.0 - i64::from(x), c.1 - i64::from(y))))
+                Some(sp.at(display, heading, (c.0 - i64::from(x), c.1 - i64::from(y))))
             }
             _ => None,
         };
@@ -1479,7 +1479,7 @@ fn run(
     }
     canvases.extend(ups);
     canvases.extend(retired);
-    canvases.extend(sprites.map(Sprites::into_canvas));
+    canvases.extend(sprites.into_iter().flat_map(Sprites::into_canvases));
     canvases
 }
 
@@ -1756,7 +1756,7 @@ fn show_up_src(
                 ((c.0 as f32 / 16.0 - sx) * k).round() as i64,
                 ((c.1 as f32 / 16.0 - sy) * k).round() as i64,
             );
-            Some(sp.at(heading.map(|m| u.turn(m)), on_panel))
+            Some(sp.at(display, heading.map(|m| u.turn(m)), on_panel))
         }
         _ => None,
     };

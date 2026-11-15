@@ -331,8 +331,30 @@ struct State {
     sprite_on: bool,
     /// The driver refused the sprite plane once: never asked again.
     sprite_refused: bool,
+    /// The marker the map wants on the cursor plane, shown or, while the
+    /// UI covers it, not: the cursor is above every plane, the UI's too,
+    /// so a UI window over it takes it down and its going brings it back.
+    cursor_want: Option<CursorAt>,
+    /// The framebuffer the cursor plane's committed state holds, 0 off.
+    /// The driver turns a framebuffer into the cursor's palette and
+    /// pattern only when the plane gets a new one.
+    cursor_fb: u32,
+    /// The driver refused the cursor plane once: never asked again.
+    cursor_refused: bool,
     warned: Warned,
 }
+
+/// A cursor canvas at (`x`, `y`) of the panel, its top left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CursorAt {
+    fb: u32,
+    x: i32,
+    y: i32,
+}
+
+/// The cursor plane's side, in pixels. The F1C200s's pattern memory holds
+/// 16 colours at 32 x 32 (4 at 64 x 32, 2 at 64 x 64).
+pub const CURSOR_SIZE: u32 = 32;
 
 /// The panel. Shared between threads through an `Arc`: every method takes
 /// `&self`.
@@ -356,6 +378,9 @@ pub struct Display {
     /// A plane with per-pixel alpha between the video and the UI (the
     /// map's marker): its id and properties.
     sprite_plane: Option<(u32, PlaneProps)>,
+    /// The cursor plane, above all the others (the map's marker, when
+    /// there is one): its id and properties. None with LEHU_MAP_CURSOR=0.
+    cursor_plane: Option<(u32, PlaneProps)>,
     ui_pitch: u32,
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
@@ -444,6 +469,18 @@ fn plane_type(card: &Card, plane: plane::Handle) -> Option<PlaneType> {
     [PlaneType::Overlay, PlaneType::Primary, PlaneType::Cursor]
         .into_iter()
         .find(|t| *t as u64 == value)
+}
+
+/// A `size` square at `a` shows on a `width` x `height` panel: some of it
+/// on the panel, none of it under the UI window `ui`.
+fn cursor_visible(a: CursorAt, size: u32, width: u32, height: u32, ui: Option<Rect>) -> bool {
+    let (x0, y0) = (i64::from(a.x), i64::from(a.y));
+    let (x1, y1) = (x0 + i64::from(size), y0 + i64::from(size));
+    let on_panel = x1 > 0 && y1 > 0 && x0 < i64::from(width) && y0 < i64::from(height);
+    let under_ui = ui.is_some_and(|r| {
+        x1 > i64::from(r.x0) && x0 < i64::from(r.x1) && y1 > i64::from(r.y0) && y0 < i64::from(r.y1)
+    });
+    on_panel && !under_ui
 }
 
 /// What libdrm's drmIsMaster does: AUTH_MAGIC is a master-only ioctl, so
@@ -586,6 +623,29 @@ impl Display {
             }
         }
 
+        // The cursor plane: one that takes ARGB8888 on our CRTC.
+        let mut cursor = None;
+        if std::env::var("LEHU_MAP_CURSOR").is_ok_and(|v| v == "0") {
+            log::info!("{path}: LEHU_MAP_CURSOR=0: the cursor plane is left alone");
+        } else {
+            for p in card
+                .plane_handles()
+                .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+            {
+                let Ok(pi) = card.get_plane(p) else { continue };
+                if !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
+                    || plane_type(&card, p) != Some(PlaneType::Cursor)
+                    || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
+                {
+                    continue;
+                }
+                if let Ok(props) = plane_props(&card, p) {
+                    cursor = Some((u32::from(p), props));
+                    break;
+                }
+            }
+        }
+
         let video_props = plane_props(&card, video_plane)?;
         let ui_plane = match ui {
             Some((p, format)) => Some(UiPlane {
@@ -644,6 +704,7 @@ impl Display {
             video_rgb565,
             ui_plane,
             sprite_plane: sprite,
+            cursor_plane: cursor,
             ui_pitch,
             video_frames: AtomicU32::new(0),
             shot_dir: std::env::var_os("LEHU_SHOT_DIR").map(std::path::PathBuf::from),
@@ -659,6 +720,9 @@ impl Display {
                 placeholder_live: 0,
                 sprite_on: false,
                 sprite_refused: false,
+                cursor_want: None,
+                cursor_fb: 0,
+                cursor_refused: false,
                 warned: Warned::default(),
             }),
         })
@@ -886,6 +950,7 @@ impl Display {
         st.request.clear();
         let flags = self.add_modeset(st);
         self.add_ui_window(&mut st.request, ui, fb, r);
+        let mut cursor_fb = self.add_cursor(st, Some(r));
 
         // Once the mode is up, commit without waiting for the flip: a
         // blocking commit parks the caller for a vblank (about 16 ms) on
@@ -924,6 +989,7 @@ impl Display {
                 st.request.clear();
                 let flags = self.add_modeset(st);
                 self.add_ui_window(&mut st.request, ui, fb, r);
+                cursor_fb = self.add_cursor(st, Some(r));
                 self.add_plane_full(
                     &mut st.request,
                     self.video_plane,
@@ -951,6 +1017,7 @@ impl Display {
         }
         st.modeset_done = true;
         st.band.set(r);
+        st.cursor_fb = cursor_fb;
         true
     }
 
@@ -967,11 +1034,13 @@ impl Display {
         st.request.clear();
         st.request.add(ui.id, ui.props.fb, 0);
         st.request.add(ui.id, ui.props.crtc, 0);
+        let cursor_fb = self.add_cursor(&mut st, None);
         let flags = if wait { 0 } else { NONBLOCK };
         if self.commit(&mut st, flags).is_err() {
             return false;
         }
         st.band.clear();
+        st.cursor_fb = cursor_fb;
         true
     }
 
@@ -1085,6 +1154,8 @@ impl Display {
         if st.sprite_on {
             self.add_sprite_off(&mut st.request);
         }
+        st.cursor_want = None;
+        let cursor_fb = self.add_cursor(st, None);
         self.add_plane_full(
             &mut st.request,
             self.video_plane,
@@ -1125,6 +1196,7 @@ impl Display {
         }
         st.modeset_done = true;
         st.sprite_on = false;
+        st.cursor_fb = cursor_fb;
         // Only the phone's frames say "video is flowing".
         if !camera {
             self.video_frames.fetch_add(1, Ordering::Relaxed);
@@ -1236,6 +1308,9 @@ pub struct Canvas {
     width: u32,
     height: u32,
     format: CanvasFormat,
+    /// For the cursor plane: ARGB8888 with premultiplied alpha, as DRM
+    /// planes take it unless told otherwise.
+    cursor: bool,
 }
 
 /// A canvas's pixels.
@@ -1329,6 +1404,7 @@ impl Display {
             width,
             height,
             format,
+            cursor: false,
         })
     }
 
@@ -1347,7 +1423,80 @@ impl Display {
             width,
             height,
             format: CanvasFormat::Argb8888,
+            cursor: false,
         })
+    }
+
+    /// There is a cursor plane, and the driver has not refused it.
+    pub fn has_cursor(&self) -> bool {
+        self.cursor_plane.is_some() && !self.lock().cursor_refused
+    }
+
+    /// A transparent `CURSOR_SIZE` square for the cursor plane: ARGB8888,
+    /// alpha premultiplied. A `Sprite` of it is its whole, at any place,
+    /// partly off the panel too.
+    pub fn cursor_canvas(&self) -> Result<Canvas, Error> {
+        let dumb = Dumb::create(&self.card, CURSOR_SIZE, CURSOR_SIZE, DrmFourcc::Argb8888, 4)?;
+        Ok(Canvas {
+            dumb,
+            width: CURSOR_SIZE,
+            height: CURSOR_SIZE,
+            format: CanvasFormat::Argb8888,
+            cursor: true,
+        })
+    }
+
+    /// The cursor plane holds `canvas` now: drawing into it would not
+    /// show, the driver having taken its pixels already.
+    pub fn cursor_holds(&self, canvas: &Canvas) -> bool {
+        self.lock().cursor_fb == u32::from(canvas.dumb.fb)
+    }
+
+    /// The cursor's place for a sprite of a cursor canvas.
+    fn cursor_at(s: &Sprite<'_>) -> CursorAt {
+        CursorAt {
+            fb: u32::from(s.canvas.dumb.fb),
+            x: s.x,
+            y: s.y,
+        }
+    }
+
+    /// The cursor plane as `want` and the UI window `ui` have it, in the
+    /// request; the framebuffer it then holds (0: off). Nothing is added
+    /// when it stays off.
+    fn add_cursor(&self, st: &mut State, ui: Option<Rect>) -> u32 {
+        let Some((id, p)) = &self.cursor_plane else {
+            return 0;
+        };
+        let at = st
+            .cursor_want
+            .filter(|a| cursor_visible(*a, CURSOR_SIZE, self.width, self.height, ui));
+        let req = &mut st.request;
+        match at {
+            Some(a) => {
+                let size = u64::from(CURSOR_SIZE);
+                req.add(*id, p.fb, u64::from(a.fb));
+                req.add(*id, p.crtc, u64::from(self.crtc));
+                req.add(*id, p.src_x, 0);
+                req.add(*id, p.src_y, 0);
+                req.add(*id, p.src_w, size << 16);
+                req.add(*id, p.src_h, size << 16);
+                // CRTC_X and CRTC_Y are signed: off the left or top edge
+                // is a negative number, as the property's 64 bits.
+                req.add(*id, p.crtc_x, i64::from(a.x) as u64);
+                req.add(*id, p.crtc_y, i64::from(a.y) as u64);
+                req.add(*id, p.crtc_w, size);
+                req.add(*id, p.crtc_h, size);
+                a.fb
+            }
+            None => {
+                if st.cursor_fb != 0 {
+                    req.add(*id, p.fb, 0);
+                    req.add(*id, p.crtc, 0);
+                }
+                0
+            }
+        }
     }
 
     /// The sprite plane off, in the request.
@@ -1427,13 +1576,18 @@ impl Display {
     /// Take the sprite down, waiting for the flip.
     pub fn hide_sprite(&self) {
         let mut st = self.lock();
-        if !st.sprite_on {
+        st.cursor_want = None;
+        if !st.sprite_on && st.cursor_fb == 0 {
             return;
         }
         st.request.clear();
-        self.add_sprite_off(&mut st.request);
+        if st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
+        let cursor_fb = self.add_cursor(&mut st, None);
         if self.commit(&mut st, 0).is_ok() {
             st.sprite_on = false;
+            st.cursor_fb = cursor_fb;
         }
     }
 
@@ -1480,11 +1634,17 @@ impl Display {
         if shown != Show::Failed || sprite.is_none() {
             return shown;
         }
-        // Without it, then: if that is shown, the sprite was the trouble.
+        // Without it, then: if that is shown, the sprite (or the cursor)
+        // was the trouble.
         let again = self.show_canvas_once(canvas, src, None);
         if again == Show::Shown {
-            self.lock().sprite_refused = true;
-            log::warn!("the sprite plane was refused; the map draws its marker itself");
+            if sprite.is_some_and(|s| s.canvas.cursor) {
+                self.lock().cursor_refused = true;
+                log::warn!("the cursor plane was refused; the map draws its marker itself");
+            } else {
+                self.lock().sprite_refused = true;
+                log::warn!("the sprite plane was refused; the map draws its marker itself");
+            }
         }
         again
     }
@@ -1523,7 +1683,14 @@ impl Display {
         if let Some((id, limited, full)) = p.color_range {
             req.add(plane, id, if full_range { full } else { limited });
         }
-        let sprite = sprite.filter(|_| !st.sprite_refused);
+        let on_cursor = sprite.is_some_and(|s| s.canvas.cursor);
+        let shot_sprite = sprite;
+        st.cursor_want = sprite
+            .filter(|_| on_cursor && !st.cursor_refused)
+            .map(Self::cursor_at);
+        let ui = st.band.shown();
+        let cursor_fb = self.add_cursor(&mut st, ui);
+        let sprite = sprite.filter(|_| !on_cursor && !st.sprite_refused);
         let sprite_on = match sprite {
             Some(s) => self.add_sprite(&mut st.request, s),
             None => false,
@@ -1535,9 +1702,10 @@ impl Display {
             return match self.commit(&mut st, flags | NONBLOCK) {
                 Ok(()) => {
                     st.sprite_on = sprite_on;
+                    st.cursor_fb = cursor_fb;
                     if let Some(dir) = &self.shot_dir
                         && std::fs::remove_file(dir.join("take")).is_ok()
-                        && let Err(e) = self.write_shot(dir, &st, canvas, src, sprite)
+                        && let Err(e) = self.write_shot(dir, &st, canvas, src, shot_sprite)
                     {
                         log::warn!("shot: {e}");
                     }
@@ -1557,6 +1725,7 @@ impl Display {
             Ok(()) => {
                 st.modeset_done = true;
                 st.sprite_on = sprite_on;
+                st.cursor_fb = cursor_fb;
                 Show::Shown
             }
             Err(e) => {
@@ -1596,9 +1765,18 @@ impl Display {
         );
         head += &format!("src {} {} {} {}\n", src[0], src[1], src[2], src[3]);
         std::fs::write(dir.join("shot-canvas.bin"), bytes(&canvas.dumb))?;
-        if let Some(s) = sprite.filter(|_| st.sprite_on) {
+        let shown = |s: &&Sprite<'_>| {
+            if s.canvas.cursor {
+                st.cursor_fb != 0
+            } else {
+                st.sprite_on
+            }
+        };
+        if let Some(s) = sprite.filter(shown) {
+            // The cursor's pixels are premultiplied; it is hidden where
+            // the UI would cover it, so the order of the two is moot.
             head += &format!(
-                "sprite {} {} {} {} {} {} {} {} {}\n",
+                "sprite {} {} {} {} {} {} {} {} {} {}\n",
                 s.canvas.width,
                 s.canvas.height,
                 s.canvas.dumb.pitch,
@@ -1607,7 +1785,12 @@ impl Display {
                 s.w,
                 s.h,
                 s.x,
-                s.y
+                s.y,
+                if s.canvas.cursor {
+                    "premultiplied"
+                } else {
+                    "straight"
+                }
             );
             std::fs::write(dir.join("shot-sprite.bin"), bytes(&s.canvas.dumb))?;
         }
@@ -1652,6 +1835,28 @@ mod tests {
     fn a_display_is_shared_between_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Display>();
+    }
+
+    #[test]
+    fn the_cursor_hides_under_the_ui_and_off_the_panel() {
+        let at = |x, y| CursorAt { fb: 1, x, y };
+        let bar = Rect {
+            x0: 0,
+            y0: 396,
+            x1: 800,
+            y1: 480,
+        };
+        assert!(cursor_visible(at(384, 314), 32, 800, 480, Some(bar)));
+        assert!(cursor_visible(at(384, 314), 32, 800, 480, None));
+        // Touching the bar's top row: under it.
+        assert!(!cursor_visible(at(384, 365), 32, 800, 480, Some(bar)));
+        // One row above it: clear.
+        assert!(cursor_visible(at(384, 364), 32, 800, 480, Some(bar)));
+        // Partly off the left and top: shown; wholly off: not.
+        assert!(cursor_visible(at(-31, -31), 32, 800, 480, None));
+        assert!(!cursor_visible(at(-32, 10), 32, 800, 480, None));
+        assert!(!cursor_visible(at(800, 10), 32, 800, 480, None));
+        assert!(!cursor_visible(at(10, 480), 32, 800, 480, None));
     }
 
     #[test]
