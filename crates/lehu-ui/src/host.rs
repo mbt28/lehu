@@ -597,6 +597,11 @@ pub trait Host {
     fn map_cursor_available(&self) -> bool {
         false
     }
+    /// The display has a cursor plane to show a mouse pointer on:
+    /// Settings > System offers the mouse.
+    fn mouse_available(&self) -> bool {
+        false
+    }
     /// There is a position and the map was moved off it: the bar's Me key
     /// and the menu's My position are there.
     fn map_away(&self) -> bool {

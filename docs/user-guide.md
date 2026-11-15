@@ -45,7 +45,7 @@ not, the card shows the map's next turn instead, also with the map closed.
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
 | Video | Night (Day, Night or Auto, for the phone's projection; Night, and Auto once the sun is down, also dim LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
 | Map | **Region**: the map shown, from those on the card. **Voice**: the spoken prompts' voice. **Hardware cursor**: the position arrow on the display's hardware cursor, where it has one, and its **Cursor size** (Small, Medium or Large) |
-| System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
+| System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Mouse** and **Hide pointer**: a mouse as a pointer, and the pointer going when still. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,
 power off) ask first and open on Cancel.
@@ -91,6 +91,16 @@ finish. Turning fast moves volume and levels in larger steps.
 
 The ring appears only after a key or the knob is used; touch never shows
 it. When you come back to a page, the ring is on the row you left.
+
+**Mouse**: with Settings › System › **Mouse** on, a mouse, or a Bluetooth
+keyboard's touchpad, moves a pointer over the screens and the phone's
+picture. The left button touches where it points, so a drag drags. The
+right button is Back. The wheel and its click stay the knob's. The pointer
+is shown on the display's hardware cursor, so the rows appear only where
+the display has one. With **Hide pointer** on, the pointer goes after 3
+seconds without a move and comes back with the next. While the pointer
+shows over the map, the position arrow leaves the hardware cursor for a
+plane of its own, and returns when the pointer goes.
 
 ## Bluetooth keyboards and remotes
 

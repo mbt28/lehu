@@ -87,6 +87,14 @@ impl<H: Host> State<H> {
             bridge.set_map_cursor(cursor.1);
             bridge.set_cursor_size_choice(cursor.2);
         }
+        let m = &self.host.settings().mouse;
+        let mouse = (self.host.mouse_available(), m.enabled, m.autohide);
+        if Some(mouse) != self.p_mouse {
+            self.p_mouse = Some(mouse);
+            bridge.set_mouse_available(mouse.0);
+            bridge.set_mouse_on(mouse.1);
+            bridge.set_mouse_autohide(mouse.2);
+        }
 
         // Volume keys change it from another thread: one load per tick.
         // Every change after the first look brings the volume bar up.

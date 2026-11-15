@@ -10,6 +10,7 @@ mod host;
 mod input;
 mod media;
 mod mem;
+mod pointer;
 mod run;
 mod session;
 mod status;

@@ -492,6 +492,10 @@ impl Host for TestHost {
         true
     }
 
+    fn mouse_available(&self) -> bool {
+        true
+    }
+
     fn map_away(&self) -> bool {
         self.map_away
     }

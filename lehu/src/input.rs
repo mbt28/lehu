@@ -34,6 +34,11 @@ pub enum Event {
     Mute,
     CameraToggle,
     KeyLearned(u16),
+    /// The mouse pointer: where it points, ten-thousandths of the panel.
+    Pointer {
+        x: u16,
+        y: u16,
+    },
     /// From the USB watcher thread, not the input thread; it rides the same
     /// queue so the loop has one wake to drain.
     Usb(lehu_usb::Event),
@@ -139,5 +144,9 @@ impl Sink for Hub {
 
     fn key_learned(&mut self, code: u16) {
         self.push(Event::KeyLearned(code));
+    }
+
+    fn pointer(&mut self, x: u16, y: u16) {
+        self.push(Event::Pointer { x, y });
     }
 }

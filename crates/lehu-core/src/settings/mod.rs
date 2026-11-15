@@ -35,6 +35,7 @@ use toml::{Table, Value};
 pub struct Settings {
     pub display: Display,
     pub touch: Touch,
+    pub mouse: Mouse,
     pub carplay: CarPlay,
     pub android_auto: AndroidAuto,
     pub wifi: Wifi,
@@ -123,6 +124,29 @@ pub struct Touch {
     pub swap_xy: bool,
     pub invert_x: bool,
     pub invert_y: bool,
+}
+
+/// A mouse, or a keyboard's touchpad: a pointer on the display's hardware
+/// cursor. Its left button touches where it points, its right button is
+/// Back. Settings > System > Mouse.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct Mouse {
+    /// Read mice as a pointer. Off: a mouse's wheel and middle button are
+    /// still the knob, as before.
+    pub enabled: bool,
+    /// The pointer goes after a few seconds without a move, and comes back
+    /// with the next. Settings > System > Hide pointer.
+    pub autohide: bool,
+}
+
+impl Default for Mouse {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            autohide: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1134,6 +1158,14 @@ mod tests {
             (RouteBy::Shortest, true)
         );
         assert!(toml::from_str::<Settings>("[map]\nroute-by = \"scenic\"").is_err());
+    }
+
+    #[test]
+    fn the_mouse_is_off_unless_asked_and_hides_its_pointer() {
+        let m = Settings::default().mouse;
+        assert_eq!((m.enabled, m.autohide), (false, true));
+        let s: Settings = toml::from_str("[mouse]\nenabled = true\nautohide = false\n").unwrap();
+        assert_eq!((s.mouse.enabled, s.mouse.autohide), (true, false));
     }
 
     #[test]

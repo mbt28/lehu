@@ -231,6 +231,8 @@ pub struct AppHost {
     /// The map: the display it goes on, the viewer while its screen is up,
     /// the tile set and the view it shows.
     map_display: Option<Arc<Display>>,
+    /// The mouse pointer shows on the cursor plane.
+    pointer_shown: bool,
     map: Option<Viewer>,
     map_set: Option<TileSet>,
     map_view: View,
@@ -332,6 +334,7 @@ impl AppHost {
         // moment, as FastCarPlay did, so the Video screen knows its rows.
         let camera_present = display.is_some() && lehu_camera::present(&settings.camera.device);
         let map_display = display.clone();
+        let pointer_shown = false;
         let camera = display.map(Camera::new);
         Self {
             settings,
@@ -385,6 +388,7 @@ impl AppHost {
             update_install: false,
             video_bytes: 0,
             map_display,
+            pointer_shown,
             map: None,
             map_set: None,
             map_view: View {
@@ -1307,12 +1311,19 @@ impl AppHost {
         }
     }
 
+    /// The mouse pointer shows on the cursor plane (the loop says so each
+    /// turn): the map's marker leaves the cursor for a plane of its own.
+    pub fn set_pointer_shown(&mut self, shown: bool) {
+        self.pointer_shown = shown;
+    }
+
     /// Where the map's marker goes: the hardware cursor at its size
     /// (map.cursor, map.cursor-size), or a plane of its own.
     fn map_marker_plane(&self) -> lehu_map::MarkerPlane {
         use lehu_core::settings::CursorSize;
         use lehu_map::MarkerPlane;
-        if !self.settings.map.cursor {
+        // The mouse pointer has the cursor while it shows.
+        if !self.settings.map.cursor || self.pointer_shown {
             return MarkerPlane::Sprite;
         }
         match self.settings.map.cursor_size {
@@ -2037,6 +2048,10 @@ impl Host for AppHost {
 
     fn map_has_position(&self) -> bool {
         self.map_position.is_some()
+    }
+
+    fn mouse_available(&self) -> bool {
+        self.map_cursor_available()
     }
 
     fn map_cursor_available(&self) -> bool {

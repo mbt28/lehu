@@ -743,6 +743,31 @@ fn settings_and_links_reach_the_screens_on_change() {
 }
 
 #[test]
+fn the_system_rows_switch_the_mouse_and_its_auto_hide() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SYSTEM);
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_mouse_available());
+    assert!(!b.get_mouse_on(), "off unless asked");
+    b.invoke_mouse_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("mouse.enabled"),
+        Some(&toml::Value::Boolean(true))
+    );
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_mouse_on());
+    assert!(b.get_mouse_autohide(), "the pointer hides unless asked");
+    b.invoke_mouse_autohide_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("mouse.autohide"),
+        Some(&toml::Value::Boolean(false))
+    );
+    assert!(!osd.ui.global::<Bridge<'_>>().get_mouse_autohide());
+}
+
+#[test]
 fn the_map_rows_switch_the_hardware_cursor_and_pick_its_size() {
     let mut osd = osd(TestHost::new());
     goto(&mut osd, MAP_SETTINGS);
@@ -2287,8 +2312,8 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
 fn a_dialog_closing_puts_the_ring_back_on_its_row() {
     let mut osd = osd(TestHost::new());
     goto(&mut osd, SYSTEM);
-    // Back, Update, Info, Power.
-    for _ in 0..4 {
+    // Back, Update, Info, Mouse, Power.
+    for _ in 0..5 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "power");

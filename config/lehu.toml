@@ -35,6 +35,18 @@ swap-xy = false
 invert-x = false
 invert-y = false
 
+[mouse]
+# A mouse, or a Bluetooth keyboard's touchpad, as a pointer on the display's
+# hardware cursor (Settings > System > Mouse): the left button touches where
+# it points, on the screens and on the phone's picture; the right button is
+# Back; the wheel and the middle button stay the knob's. While the pointer
+# shows over the map, the position arrow leaves the cursor for a plane of
+# its own. Off: a mouse's wheel and middle button are still the knob.
+enabled = false
+# The pointer goes after 3 seconds without a move, and comes back with the
+# next (Settings > System > Hide pointer).
+autohide = true
+
 [carplay]
 # The MFi authentication coprocessor: its bus, or "auto" to look on every
 # /dev/i2c-N (empty: none).

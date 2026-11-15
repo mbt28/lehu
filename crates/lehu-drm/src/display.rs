@@ -341,6 +341,10 @@ struct State {
     cursor_fb: u32,
     /// The driver refused the cursor plane once: never asked again.
     cursor_refused: bool,
+    /// The mouse pointer, shown: it has the cursor plane before the
+    /// marker, over the UI too. Its picture, made when first shown.
+    pointer: Option<CursorAt>,
+    pointer_buf: Option<Dumb>,
     warned: Warned,
 }
 
@@ -386,6 +390,9 @@ pub struct Display {
     cursor_plane: Option<(u32, PlaneProps)>,
     /// The largest square the cursor takes: 32 or 64.
     cursor_max: u32,
+    /// The map's marker may take the cursor plane (not with
+    /// LEHU_MAP_CURSOR=0); the mouse pointer always may.
+    map_cursor: bool,
     ui_pitch: u32,
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
@@ -628,27 +635,28 @@ impl Display {
             }
         }
 
-        // The cursor plane: one that takes ARGB8888 on our CRTC.
+        // The cursor plane: one that takes ARGB8888 on our CRTC. The mouse
+        // pointer's; the map's marker's too, unless LEHU_MAP_CURSOR=0.
         let mut cursor = None;
-        if std::env::var("LEHU_MAP_CURSOR").is_ok_and(|v| v == "0") {
-            log::info!("{path}: LEHU_MAP_CURSOR=0: the cursor plane is left alone");
-        } else {
-            for p in card
-                .plane_handles()
-                .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+        for p in card
+            .plane_handles()
+            .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+        {
+            let Ok(pi) = card.get_plane(p) else { continue };
+            if !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
+                || plane_type(&card, p) != Some(PlaneType::Cursor)
+                || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
             {
-                let Ok(pi) = card.get_plane(p) else { continue };
-                if !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
-                    || plane_type(&card, p) != Some(PlaneType::Cursor)
-                    || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
-                {
-                    continue;
-                }
-                if let Ok(props) = plane_props(&card, p) {
-                    cursor = Some((u32::from(p), props));
-                    break;
-                }
+                continue;
             }
+            if let Ok(props) = plane_props(&card, p) {
+                cursor = Some((u32::from(p), props));
+                break;
+            }
+        }
+        let map_cursor = !std::env::var("LEHU_MAP_CURSOR").is_ok_and(|v| v == "0");
+        if cursor.is_some() && !map_cursor {
+            log::info!("{path}: LEHU_MAP_CURSOR=0: the map's marker keeps off the cursor plane");
         }
         // As the driver says, both ways; 64 x 64 squares only where it is.
         let cap = |c| card.get_driver_capability(c).unwrap_or(0);
@@ -719,6 +727,7 @@ impl Display {
             sprite_plane: sprite,
             cursor_plane: cursor,
             cursor_max,
+            map_cursor,
             ui_pitch,
             video_frames: AtomicU32::new(0),
             shot_dir: std::env::var_os("LEHU_SHOT_DIR").map(std::path::PathBuf::from),
@@ -737,6 +746,8 @@ impl Display {
                 cursor_want: None,
                 cursor_fb: 0,
                 cursor_refused: false,
+                pointer: None,
+                pointer_buf: None,
                 warned: Warned::default(),
             }),
         })
@@ -1442,13 +1453,82 @@ impl Display {
     }
 
     /// There is a cursor plane (refused or not): without taking the lock.
+    /// The mouse pointer is shown on it.
     pub fn has_cursor_plane(&self) -> bool {
         self.cursor_plane.is_some()
     }
 
-    /// There is a cursor plane, and the driver has not refused it.
+    /// The map's marker may use the cursor plane: there is one, the driver
+    /// has not refused it, and LEHU_MAP_CURSOR=0 does not keep it off.
     pub fn has_cursor(&self) -> bool {
-        self.cursor_plane.is_some() && !self.lock().cursor_refused
+        self.cursor_plane.is_some() && self.map_cursor && !self.lock().cursor_refused
+    }
+
+    /// The mouse pointer with its tip at (`x`, `y`) of the panel, or none.
+    /// It takes the cursor plane from the map's marker and shows above
+    /// everything, the screens too. Committed at once when nothing else
+    /// is pending, else carried by the next commit; false then: call again
+    /// a moment later, so it lands while the panel is still.
+    pub fn set_pointer(&self, at: Option<(i32, i32)>) -> bool {
+        if self.cursor_plane.is_none() {
+            return true;
+        }
+        let mut st = self.lock();
+        if st.cursor_refused || !st.modeset_done {
+            return true;
+        }
+        st.pointer = match at {
+            Some((x, y)) => match self.pointer_fb(&mut st) {
+                Some(fb) => Some(CursorAt {
+                    fb,
+                    size: crate::pointer::SIZE,
+                    x: x - crate::pointer::HOT.0,
+                    y: y - crate::pointer::HOT.1,
+                }),
+                None => return true,
+            },
+            None => None,
+        };
+        let ui = st.band.shown();
+        st.request.clear();
+        let cursor_fb = self.add_cursor(&mut st, ui);
+        if st.request.is_empty() {
+            return true;
+        }
+        // No flip event: the loop's flips are the planes' own.
+        match self.commit(&mut st, drm_ffi::DRM_MODE_ATOMIC_NONBLOCK) {
+            Ok(()) => {
+                st.cursor_fb = cursor_fb;
+                true
+            }
+            Err(e) if e.kind() == io::ErrorKind::ResourceBusy => false,
+            Err(e) => {
+                log::warn!("the pointer's commit failed: {e}");
+                true
+            }
+        }
+    }
+
+    /// The pointer's framebuffer, its picture drawn the first time.
+    fn pointer_fb(&self, st: &mut State) -> Option<u32> {
+        if st.pointer_buf.is_none() {
+            let size = crate::pointer::SIZE;
+            match Dumb::create(&self.card, size, size, DrmFourcc::Argb8888, 4) {
+                Ok(d) => {
+                    // SAFETY: the mapping made in `Dumb::create`, `size`
+                    // bytes, alive as long as the buffer; the lock makes
+                    // this the only view of it.
+                    let px = unsafe { std::slice::from_raw_parts_mut(d.map.as_ptr(), d.size) };
+                    crate::pointer::draw(px, d.pitch as usize);
+                    st.pointer_buf = Some(d);
+                }
+                Err(e) => {
+                    log::warn!("no memory for the mouse pointer: {e}");
+                    return None;
+                }
+            }
+        }
+        st.pointer_buf.as_ref().map(|d| u32::from(d.fb))
     }
 
     /// The largest square the cursor plane takes, `CURSOR_SIZE` or 64.
@@ -1494,9 +1574,12 @@ impl Display {
         let Some((id, p)) = &self.cursor_plane else {
             return 0;
         };
-        let at = st
-            .cursor_want
-            .filter(|a| cursor_visible(*a, self.width, self.height, ui));
+        // The pointer first, wherever it is; the marker where the UI leaves
+        // it room.
+        let at = st.pointer.or_else(|| {
+            st.cursor_want
+                .filter(|a| cursor_visible(*a, self.width, self.height, ui))
+        });
         let req = &mut st.request;
         match at {
             Some(a) => {
@@ -1845,6 +1928,9 @@ impl Drop for Display {
             ui.destroy(&self.card);
         }
         if let Some(p) = st.placeholder.take() {
+            p.destroy(&self.card);
+        }
+        if let Some(p) = st.pointer_buf.take() {
             p.destroy(&self.card);
         }
         st.cache.flush(&self.card);

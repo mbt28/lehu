@@ -108,6 +108,11 @@ export global Bridge {
     in property <bool> cursor-available;
     in property <bool> map-cursor;
     in property <int> cursor-size-choice;
+    // Settings > System: a mouse as a pointer (mouse.enabled), where the
+    // display has a cursor plane to show it on, and its auto-hide.
+    in property <bool> mouse-available;
+    in property <bool> mouse-on;
+    in property <bool> mouse-autohide;
     in property <bool> volume-bar;            // up for a moment after a change
     // How the phone is connected right now (the bar's icons).
     in property <bool> link-usb;
@@ -340,6 +345,8 @@ export global Bridge {
                                               // 9 Avoid motorways, 10 Speed cameras
     callback map-voice-on();                  // the bar's muted key: the voice on again
     callback map-cursor-toggle();             // Settings > Map > Hardware cursor
+    callback mouse-toggle();                  // Settings > System > Mouse
+    callback mouse-autohide-toggle();         // Settings > System > Hide pointer
     callback map-preview-start();             // the route shown whole: drive it
     callback map-preview-cancel();            // or not
     callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
@@ -1794,7 +1801,8 @@ component ScreenConnection inherits ListPage {
     }
 }
 
-// The system: its updates, what it is and does, and turning it off.
+// The system: its updates, what it is and does, a mouse, and turning it
+// off.
 component ScreenSystem inherits ListPage {
     title: "System";
     // LEHU OS updates, from the phone. Without the installer (another
@@ -1816,6 +1824,22 @@ component ScreenSystem inherits ListPage {
         icon: "info";
         label: "Info";
         clicked => { Bridge.screen = 18; }
+    }
+    // A mouse as a pointer on the cursor plane, and the pointer going
+    // after a few seconds still.
+    if Bridge.mouse-available: SwitchRow {
+        ring-key: "mouse";
+        icon: "locate";
+        label: "Mouse";
+        on: Bridge.mouse-on;
+        clicked => { Bridge.mouse-toggle(); }
+    }
+    if Bridge.mouse-available && Bridge.mouse-on: SwitchRow {
+        ring-key: "mouse-autohide";
+        icon: "locate";
+        label: "Hide pointer";
+        on: Bridge.mouse-autohide;
+        clicked => { Bridge.mouse-autohide-toggle(); }
     }
     // Each asks first, in the dialog; the app then closes down cleanly and
     // the system's own reboot / poweroff takes over. It opens on Cancel.

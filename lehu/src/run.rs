@@ -231,7 +231,11 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     let (width, height) = display
         .as_ref()
         .map_or((800, 480), |d| (d.width(), d.height()));
-    let input_config = InputConfig::from_settings(&settings);
+    let mut input_config = InputConfig::from_settings(&settings);
+    // The pointer moves over the panel, and only where it can be shown.
+    input_config.panel = (width, height);
+    let has_pointer = display.as_ref().is_some_and(|d| d.has_cursor_plane());
+    input_config.mouse &= has_pointer;
     let mut camera_key = settings.camera.key;
     // The audio runs for the program's lifetime, shared by the screens and
     // the sessions. The protocols' state (pairings, identities) lives
@@ -356,6 +360,8 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     // the loop looked this turn: it looks again at once, not at whatever
     // wakes it next.
     let mut again = false;
+    // The mouse pointer on the cursor plane.
+    let mut pointer = crate::pointer::Pointer::default();
 
     log::info!("running");
     let mut exit = Exit::Done(ExitCode::SUCCESS);
@@ -368,10 +374,15 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             Some(std::time::Duration::ZERO)
         } else {
             screens.as_ref().and_then(|(osd, _)| {
+                let now = lehu_core::clock::now_ms();
+                let pointer_due = pointer
+                    .next_due(osd.host().settings().mouse.autohide, now)
+                    .map(|t| std::time::Duration::from_millis(t.saturating_sub(now)));
                 [
                     lehu_ui::next_timer_due(),
                     osd.next_due(),
                     osd.host().map_due(),
+                    pointer_due,
                 ]
                 .into_iter()
                 .flatten()
@@ -417,6 +428,11 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
                         osd.host_mut().request_camera(CameraRequest::Toggle);
                     }
                     (Some((osd, _)), Event::KeyLearned(code)) => osd.host_mut().key_learned(code),
+                    (_, Event::Pointer { x, y }) => pointer.moved(
+                        (u32::from(x) * width / u32::from(TOUCH_SCALE)) as i32,
+                        (u32::from(y) * height / u32::from(TOUCH_SCALE)) as i32,
+                        lehu_core::clock::now_ms(),
+                    ),
                     (_, Event::Phone { button, value }) => driver.button(button, value),
                     (
                         _,
@@ -455,6 +471,9 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             driver.set_android_fps(s.android_auto.fps);
             if let Some(bt) = &bt {
                 bt.set_name(&s.bluetooth.name);
+            }
+            if let Some(input) = &input {
+                input.set_mouse(s.mouse.enabled && has_pointer);
             }
         }
         let due = driver.next_due();
@@ -561,6 +580,14 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
                     driver.unpark();
                 }
             }
+            // The pointer first: while it shows, the map's marker keeps
+            // off the cursor plane.
+            if let Some(d) = &display {
+                let mouse = &osd.host().settings().mouse;
+                let (enabled, autohide) = (mouse.enabled && has_pointer, mouse.autohide);
+                pointer.tick(d, enabled, autohide, lehu_core::clock::now_ms());
+            }
+            osd.host_mut().set_pointer_shown(pointer.shown());
             osd.host_mut().map_tick();
             map_shown = osd.host().map_started();
             map_ready = osd.host().map_ready();

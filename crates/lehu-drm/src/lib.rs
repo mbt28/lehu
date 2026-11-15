@@ -30,6 +30,7 @@ mod cache;
 mod display;
 mod error;
 mod frame;
+mod pointer;
 mod request;
 
 pub use display::{CURSOR_SIZE, Canvas, CanvasFormat, Display, Show, Sprite};

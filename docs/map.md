@@ -644,7 +644,8 @@ cursor is above everything, the screens too, so it is turned off while a
 screen's window, the bar or the menu, covers it. With the cursor off, or
 on a display without one, the arrow is on a plane of its own, in its
 colours at its own size. A change of either setting applies on the map
-at once.
+at once. The mouse pointer has the cursor first: while it shows, the arrow
+moves to a plane of its own, and back when the pointer hides.
 
 The route is drawn as a line simplified to the pixel of the zoom shown,
 once per zoom, so a straight road of points every few metres is one
@@ -677,7 +678,7 @@ turned frame, how long it took and how far off the way up it landed;
 `LEHU_RANGE_TEST=full|limited|scale` shows a test picture at either
 colour range, or holds the map at twice its size, to check the display's
 conversion by eye; `LEHU_MAP_CURSOR=0` keeps the arrow off the hardware
-cursor; and `LEHU_SHOT_DIR=DIR` writes what the panel shows,
+cursor, which the mouse pointer still uses; and `LEHU_SHOT_DIR=DIR` writes what the panel shows,
 map, arrow and screens, to DIR whenever a file `take` appears there,
 which `scripts/map-shot.py` composes into a PNG (no screenshot tool reads
 the video plane). The pictures here were taken that way.
