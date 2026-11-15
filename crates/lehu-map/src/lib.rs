@@ -57,6 +57,7 @@ pub use follow::{ARRIVE_M, ARRIVE_NEAR_M, Follow, Following, OFF_M, OFF_MS, WRON
 pub use graph::{Graph, NEAR_M, ROADS_FILE, RouteBy, RouteOptions, Snap};
 pub use route::Router;
 pub use search::{Found, FoundKind, PLACES_FILE, Places, fold};
+pub use sprite::MarkerPlane;
 pub use tileset::TileSet;
 pub use track::{
     Ahead, Fix, Leg, LegCamera, LegStep, Located, Maneuver, RouteCamera, Track, Turn,

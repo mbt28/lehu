@@ -71,8 +71,8 @@ export global Bridge {
     // 3 Power, 4 Volume, 5 Audio buffer, 6 a phone on the Phones screen --
     // device-pick says which; on Audio 7-10 the streams' levels -- music,
     // navigation, alerts, calls -- and 11 Output; on Access point 12 Band,
-    // 13 Width, 14 Channel, 15 Country; 16 Frame rate) and the option shown
-    // as taken.
+    // 13 Width, 14 Channel, 15 Country; 16 Frame rate; on Map 17 Region, 18
+    // Voice, 19 Cursor size) and the option shown as taken.
     in property <int> pick;
     in property <int> pick-choice;
     in property <string> device-pick;         // the id of the phone picking
@@ -102,6 +102,12 @@ export global Bridge {
     in property <string> region-label;
     in property <string> voice-label;
     in property <string> map-hint;
+    // The map's position arrow on the hardware cursor (map.cursor), where
+    // the display has one, and its size (map.cursor-size): 0 small, 1
+    // medium, 2 large.
+    in property <bool> cursor-available;
+    in property <bool> map-cursor;
+    in property <int> cursor-size-choice;
     in property <bool> volume-bar;            // up for a moment after a change
     // How the phone is connected right now (the bar's icons).
     in property <bool> link-usb;
@@ -333,6 +339,7 @@ export global Bridge {
                                               // Route's: 7 Fastest, 8 Shortest,
                                               // 9 Avoid motorways, 10 Speed cameras
     callback map-voice-on();                  // the bar's muted key: the voice on again
+    callback map-cursor-toggle();             // Settings > Map > Hardware cursor
     callback map-preview-start();             // the route shown whole: drive it
     callback map-preview-cancel();            // or not
     callback dest-change(int);                // Go to's Change Home (0) / Change Work (1)
@@ -1706,7 +1713,8 @@ component ScreenSettings inherits ListPage {
 
 // The map's data on the card: the region shown, stepped through those
 // there and taken with Enter (one damaged or for a newer LEHU says so and
-// is not taken), and the spoken prompts' voice, picked the same way.
+// is not taken), and the spoken prompts' voice, picked the same way; and
+// the position arrow on the hardware cursor, at a size.
 component ScreenMapSettings inherits ListPage {
     title: "Map";
     LevelRow {
@@ -1732,6 +1740,30 @@ component ScreenMapSettings inherits ListPage {
         editing: Bridge.pick == 18;
         clicked => { Bridge.pick-press(18); }
         step(direction) => { Bridge.pick-step(direction); }
+    }
+    // The position arrow on the display's hardware cursor, and its size.
+    if Bridge.cursor-available: SwitchRow {
+        ring-key: "cursor";
+        icon: "locate";
+        label: "Hardware cursor";
+        on: Bridge.map-cursor;
+        clicked => { Bridge.map-cursor-toggle(); }
+    }
+    if Bridge.cursor-available && Bridge.map-cursor: SegmentRow {
+        ring-key: "cursor-size";
+        icon: "width";
+        label: "Cursor size";
+        options: ["Small", "Medium", "Large"];
+        current: Bridge.cursor-size-choice;
+        choosing: Bridge.pick == 19;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(19); }
+        picked(i) => {
+            if (Bridge.pick != 19) {
+                Bridge.pick-press(19);
+            }
+            Bridge.pick-option(i);
+        }
     }
     if Bridge.map-hint != "": HorizontalLayout {
         padding-left: 24px;

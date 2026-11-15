@@ -898,7 +898,7 @@ impl AppHost {
             }
             None => None,
         };
-        match Viewer::start(display, set.clone(), night, view) {
+        match Viewer::start(display, set.clone(), night, view, self.map_marker_plane()) {
             Ok(viewer) => {
                 viewer.set_night(self.night_now());
                 self.map = Some(viewer);
@@ -1129,6 +1129,7 @@ impl AppHost {
         self.map_marks_show();
         if let Some(viewer) = &self.map {
             viewer.set_pointer_lead(self.settings.map.pointer_lead);
+            viewer.set_marker_plane(self.map_marker_plane());
         }
         let now = lehu_core::clock::now_ms();
         if self
@@ -1303,6 +1304,21 @@ impl AppHost {
                 self.map_take_route(track, &to);
             }
             Err(e) => log::info!("map: no route anew to {}: {e}", to.name),
+        }
+    }
+
+    /// Where the map's marker goes: the hardware cursor at its size
+    /// (map.cursor, map.cursor-size), or a plane of its own.
+    fn map_marker_plane(&self) -> lehu_map::MarkerPlane {
+        use lehu_core::settings::CursorSize;
+        use lehu_map::MarkerPlane;
+        if !self.settings.map.cursor {
+            return MarkerPlane::Sprite;
+        }
+        match self.settings.map.cursor_size {
+            CursorSize::Small => MarkerPlane::CursorSmall,
+            CursorSize::Medium => MarkerPlane::CursorMedium,
+            CursorSize::Large => MarkerPlane::CursorLarge,
         }
     }
 
@@ -2021,6 +2037,12 @@ impl Host for AppHost {
 
     fn map_has_position(&self) -> bool {
         self.map_position.is_some()
+    }
+
+    fn map_cursor_available(&self) -> bool {
+        self.map_display
+            .as_ref()
+            .is_some_and(|d| d.has_cursor_plane())
     }
 
     fn map_regions(&mut self) -> Vec<lehu_ui::MapRegion> {

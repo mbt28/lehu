@@ -16,7 +16,7 @@ use drm::control::{
     self, Device as ControlDevice, Event, FbCmd2Flags, PlaneType, ResourceHandle, connector,
     framebuffer, plane, property,
 };
-use drm::{ClientCapability, Device as _};
+use drm::{ClientCapability, Device as _, DriverCapability};
 
 use crate::band::{self, Band, Rect};
 use crate::cache::{self, Entry, FbCache, Gem};
@@ -344,16 +344,19 @@ struct State {
     warned: Warned,
 }
 
-/// A cursor canvas at (`x`, `y`) of the panel, its top left.
+/// A cursor canvas, `size` a side, at (`x`, `y`) of the panel, its top
+/// left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CursorAt {
     fb: u32,
+    size: u32,
     x: i32,
     y: i32,
 }
 
-/// The cursor plane's side, in pixels. The F1C200s's pattern memory holds
-/// 16 colours at 32 x 32 (4 at 64 x 32, 2 at 64 x 64).
+/// The cursor plane's smallest side, in pixels; 64 where the driver says
+/// it takes that (`cursor_max`). The F1C200s's pattern memory holds 16
+/// colours at 32 x 32 (4 at 64 x 32, 2 at 64 x 64).
 pub const CURSOR_SIZE: u32 = 32;
 
 /// The panel. Shared between threads through an `Arc`: every method takes
@@ -381,6 +384,8 @@ pub struct Display {
     /// The cursor plane, above all the others (the map's marker, when
     /// there is one): its id and properties. None with LEHU_MAP_CURSOR=0.
     cursor_plane: Option<(u32, PlaneProps)>,
+    /// The largest square the cursor takes: 32 or 64.
+    cursor_max: u32,
     ui_pitch: u32,
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
@@ -471,11 +476,11 @@ fn plane_type(card: &Card, plane: plane::Handle) -> Option<PlaneType> {
         .find(|t| *t as u64 == value)
 }
 
-/// A `size` square at `a` shows on a `width` x `height` panel: some of it
-/// on the panel, none of it under the UI window `ui`.
-fn cursor_visible(a: CursorAt, size: u32, width: u32, height: u32, ui: Option<Rect>) -> bool {
+/// The cursor at `a` shows on a `width` x `height` panel: some of it on
+/// the panel, none of it under the UI window `ui`.
+fn cursor_visible(a: CursorAt, width: u32, height: u32, ui: Option<Rect>) -> bool {
     let (x0, y0) = (i64::from(a.x), i64::from(a.y));
-    let (x1, y1) = (x0 + i64::from(size), y0 + i64::from(size));
+    let (x1, y1) = (x0 + i64::from(a.size), y0 + i64::from(a.size));
     let on_panel = x1 > 0 && y1 > 0 && x0 < i64::from(width) && y0 < i64::from(height);
     let under_ui = ui.is_some_and(|r| {
         x1 > i64::from(r.x0) && x0 < i64::from(r.x1) && y1 > i64::from(r.y0) && y0 < i64::from(r.y1)
@@ -645,6 +650,14 @@ impl Display {
                 }
             }
         }
+        // As the driver says, both ways; 64 x 64 squares only where it is.
+        let cap = |c| card.get_driver_capability(c).unwrap_or(0);
+        let cursor_max =
+            if cap(DriverCapability::CursorWidth).min(cap(DriverCapability::CursorHeight)) >= 64 {
+                64
+            } else {
+                CURSOR_SIZE
+            };
 
         let video_props = plane_props(&card, video_plane)?;
         let ui_plane = match ui {
@@ -705,6 +718,7 @@ impl Display {
             ui_plane,
             sprite_plane: sprite,
             cursor_plane: cursor,
+            cursor_max,
             ui_pitch,
             video_frames: AtomicU32::new(0),
             shot_dir: std::env::var_os("LEHU_SHOT_DIR").map(std::path::PathBuf::from),
@@ -1427,20 +1441,31 @@ impl Display {
         })
     }
 
+    /// There is a cursor plane (refused or not): without taking the lock.
+    pub fn has_cursor_plane(&self) -> bool {
+        self.cursor_plane.is_some()
+    }
+
     /// There is a cursor plane, and the driver has not refused it.
     pub fn has_cursor(&self) -> bool {
         self.cursor_plane.is_some() && !self.lock().cursor_refused
     }
 
-    /// A transparent `CURSOR_SIZE` square for the cursor plane: ARGB8888,
-    /// alpha premultiplied. A `Sprite` of it is its whole, at any place,
-    /// partly off the panel too.
-    pub fn cursor_canvas(&self) -> Result<Canvas, Error> {
-        let dumb = Dumb::create(&self.card, CURSOR_SIZE, CURSOR_SIZE, DrmFourcc::Argb8888, 4)?;
+    /// The largest square the cursor plane takes, `CURSOR_SIZE` or 64.
+    pub fn cursor_max(&self) -> u32 {
+        self.cursor_max
+    }
+
+    /// A transparent square for the cursor plane, `size` a side (from
+    /// `CURSOR_SIZE` to `cursor_max`): ARGB8888, alpha premultiplied. A
+    /// `Sprite` of it is its whole, at any place, partly off the panel too.
+    pub fn cursor_canvas(&self, size: u32) -> Result<Canvas, Error> {
+        let size = size.clamp(CURSOR_SIZE, self.cursor_max);
+        let dumb = Dumb::create(&self.card, size, size, DrmFourcc::Argb8888, 4)?;
         Ok(Canvas {
             dumb,
-            width: CURSOR_SIZE,
-            height: CURSOR_SIZE,
+            width: size,
+            height: size,
             format: CanvasFormat::Argb8888,
             cursor: true,
         })
@@ -1456,6 +1481,7 @@ impl Display {
     fn cursor_at(s: &Sprite<'_>) -> CursorAt {
         CursorAt {
             fb: u32::from(s.canvas.dumb.fb),
+            size: s.canvas.width,
             x: s.x,
             y: s.y,
         }
@@ -1470,11 +1496,11 @@ impl Display {
         };
         let at = st
             .cursor_want
-            .filter(|a| cursor_visible(*a, CURSOR_SIZE, self.width, self.height, ui));
+            .filter(|a| cursor_visible(*a, self.width, self.height, ui));
         let req = &mut st.request;
         match at {
             Some(a) => {
-                let size = u64::from(CURSOR_SIZE);
+                let size = u64::from(a.size);
                 req.add(*id, p.fb, u64::from(a.fb));
                 req.add(*id, p.crtc, u64::from(self.crtc));
                 req.add(*id, p.src_x, 0);
@@ -1839,24 +1865,38 @@ mod tests {
 
     #[test]
     fn the_cursor_hides_under_the_ui_and_off_the_panel() {
-        let at = |x, y| CursorAt { fb: 1, x, y };
+        let at = |x, y| CursorAt {
+            fb: 1,
+            size: 32,
+            x,
+            y,
+        };
         let bar = Rect {
             x0: 0,
             y0: 396,
             x1: 800,
             y1: 480,
         };
-        assert!(cursor_visible(at(384, 314), 32, 800, 480, Some(bar)));
-        assert!(cursor_visible(at(384, 314), 32, 800, 480, None));
+        assert!(cursor_visible(at(384, 314), 800, 480, Some(bar)));
+        assert!(cursor_visible(at(384, 314), 800, 480, None));
         // Touching the bar's top row: under it.
-        assert!(!cursor_visible(at(384, 365), 32, 800, 480, Some(bar)));
+        assert!(!cursor_visible(at(384, 365), 800, 480, Some(bar)));
         // One row above it: clear.
-        assert!(cursor_visible(at(384, 364), 32, 800, 480, Some(bar)));
+        assert!(cursor_visible(at(384, 364), 800, 480, Some(bar)));
         // Partly off the left and top: shown; wholly off: not.
-        assert!(cursor_visible(at(-31, -31), 32, 800, 480, None));
-        assert!(!cursor_visible(at(-32, 10), 32, 800, 480, None));
-        assert!(!cursor_visible(at(800, 10), 32, 800, 480, None));
-        assert!(!cursor_visible(at(10, 480), 32, 800, 480, None));
+        assert!(cursor_visible(at(-31, -31), 800, 480, None));
+        assert!(!cursor_visible(at(-32, 10), 800, 480, None));
+        assert!(!cursor_visible(at(800, 10), 800, 480, None));
+        assert!(!cursor_visible(at(10, 480), 800, 480, None));
+        // A 64 pixel cursor: by its own size.
+        let big = |x, y| CursorAt {
+            size: 64,
+            ..at(x, y)
+        };
+        assert!(!cursor_visible(big(384, 333), 800, 480, Some(bar)));
+        assert!(cursor_visible(big(384, 332), 800, 480, Some(bar)));
+        assert!(cursor_visible(big(-63, -63), 800, 480, None));
+        assert!(!cursor_visible(big(-64, 10), 800, 480, None));
     }
 
     #[test]

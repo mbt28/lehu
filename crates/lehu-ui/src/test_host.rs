@@ -488,6 +488,10 @@ impl Host for TestHost {
         true
     }
 
+    fn map_cursor_available(&self) -> bool {
+        true
+    }
+
     fn map_away(&self) -> bool {
         self.map_away
     }

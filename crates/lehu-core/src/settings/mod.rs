@@ -67,6 +67,20 @@ pub enum RouteBy {
     Shortest,
 }
 
+/// The position arrow's size on the display's hardware cursor.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CursorSize {
+    /// Three quarters of the arrow's own size, in its colours with a
+    /// white edge: a 32 pixel cursor.
+    Small,
+    /// The arrow's own size, in one colour: a 64 pixel cursor.
+    #[default]
+    Medium,
+    /// A third larger again, in one colour.
+    Large,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum VideoPath {
@@ -316,6 +330,12 @@ pub struct Map {
     /// still while the arrow moves on it, until the arrow is this many
     /// pixels from its place (or the road turned), then catches up.
     pub pointer_lead: u32,
+    /// The position arrow on the display's hardware cursor, where it has
+    /// one. Off: on a display plane of its own, in its colours at its own
+    /// size. Settings > Map > Hardware cursor.
+    pub cursor: bool,
+    /// The arrow's size on the cursor. Settings > Map > Cursor size.
+    pub cursor_size: CursorSize,
 }
 
 /// A destination Map > Go to drove to: its name, the town it is in, and
@@ -514,6 +534,8 @@ impl Default for Map {
             work: None,
             speed_warning: true,
             pointer_lead: 0,
+            cursor: true,
+            cursor_size: CursorSize::Medium,
         }
     }
 }
@@ -1112,6 +1134,19 @@ mod tests {
             (RouteBy::Shortest, true)
         );
         assert!(toml::from_str::<Settings>("[map]\nroute-by = \"scenic\"").is_err());
+    }
+
+    #[test]
+    fn the_arrow_is_on_the_cursor_at_medium_unless_asked() {
+        let map = Settings::default().map;
+        assert_eq!((map.cursor, map.cursor_size), (true, CursorSize::Medium));
+        let s: Settings =
+            toml::from_str("[map]\ncursor = false\ncursor-size = \"large\"\n").unwrap();
+        assert_eq!(
+            (s.map.cursor, s.map.cursor_size),
+            (false, CursorSize::Large)
+        );
+        assert!(toml::from_str::<Settings>("[map]\ncursor-size = \"huge\"").is_err());
     }
 
     #[test]

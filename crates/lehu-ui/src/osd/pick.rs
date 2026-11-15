@@ -12,7 +12,7 @@
 //! `FAST_PERCENT` a detent -- a list stepped through (Output, Channel,
 //! Country) only when Enter takes it.
 
-use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
+use lehu_core::settings::{BUFFER_MAX_MS, CursorSize, NightMode};
 use slint::SharedString;
 use toml::Value;
 
@@ -46,6 +46,8 @@ pub(super) enum Pick {
     Region,
     /// The spoken prompts' voice (Settings > Map).
     Voice,
+    /// The arrow's size on the hardware cursor (Settings > Map).
+    CursorSize,
 }
 
 impl Pick {
@@ -64,6 +66,7 @@ impl Pick {
             16 => Pick::Fps,
             17 => Pick::Region,
             18 => Pick::Voice,
+            19 => Pick::CursorSize,
             _ => Pick::None,
         }
     }
@@ -85,6 +88,7 @@ impl Pick {
             Pick::Fps => 16,
             Pick::Region => 17,
             Pick::Voice => 18,
+            Pick::CursorSize => 19,
         }
     }
 
@@ -135,6 +139,23 @@ pub(super) fn night_index(mode: NightMode) -> i32 {
     }
 }
 
+/// The Cursor size row's options, in order.
+pub(super) fn cursor_size_index(size: CursorSize) -> i32 {
+    match size {
+        CursorSize::Small => 0,
+        CursorSize::Medium => 1,
+        CursorSize::Large => 2,
+    }
+}
+
+fn cursor_size_of(index: i32) -> CursorSize {
+    match index {
+        0 => CursorSize::Small,
+        1 => CursorSize::Medium,
+        _ => CursorSize::Large,
+    }
+}
+
 fn night_of(index: i32) -> NightMode {
     match index {
         0 => NightMode::Day,
@@ -178,7 +199,7 @@ impl<H: Host> State<H> {
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
             Pick::Night | Pick::Fps => VIDEO,
             Pick::Power => SYSTEM,
-            Pick::Region | Pick::Voice => MAP_SETTINGS,
+            Pick::Region | Pick::Voice | Pick::CursorSize => MAP_SETTINGS,
             _ => SETTINGS,
         }
     }
@@ -224,6 +245,7 @@ impl<H: Host> State<H> {
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => self.ap_start(row),
                 Pick::Night => Some(night_index(night)),
                 Pick::Fps => Some(i32::from(self.host.settings().android_auto.fps >= 60)),
+                Pick::CursorSize => Some(cursor_size_index(self.host.settings().map.cursor_size)),
                 Pick::Power => Some(2), // Cancel: nothing goes down by accident
                 _ => Some(0),
             };
@@ -265,6 +287,16 @@ impl<H: Host> State<H> {
                     let want = if taken == 1 { 60 } else { 30 };
                     if (fps >= 60) != (want == 60) {
                         self.persist("android-auto.fps", Value::Integer(want));
+                    }
+                }
+                Pick::CursorSize => {
+                    let size = cursor_size_of(taken);
+                    if size != self.host.settings().map.cursor_size {
+                        match Value::try_from(size) {
+                            // The map takes it at its next tick.
+                            Ok(value) => self.persist("map.cursor-size", value),
+                            Err(e) => log::error!("cursor size: {e}"),
+                        }
                     }
                 }
                 Pick::Buffer => self.save_buffer(),

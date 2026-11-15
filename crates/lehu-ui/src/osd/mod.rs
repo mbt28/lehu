@@ -143,6 +143,7 @@ enum Action {
     CameraPicture,
     CameraKey,
     CameraFastswitchToggle,
+    MapCursorToggle,
     MapDragStart,
     MapDrag(i32, i32),
     MapZoom(i32),
@@ -265,6 +266,8 @@ struct State<H> {
     p_clock: Option<Option<u32>>,
     clock_due: u64,
     p_fps: Option<u32>,
+    /// The hardware cursor rows as shown: there, on, the size's option.
+    p_cursor: Option<(bool, bool, i32)>,
     p_ssid: Last,
     p_pass: Last,
     p_bt_name: Last,
@@ -550,6 +553,7 @@ impl<H: Host> State<H> {
             p_clock: None,
             clock_due: 0,
             p_fps: None,
+            p_cursor: None,
             p_ssid: Last::default(),
             p_pass: Last::default(),
             p_bt_name: Last::default(),
@@ -878,6 +882,11 @@ impl<H: Host> State<H> {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
             }
+            // The map takes it at its next tick.
+            Action::MapCursorToggle => {
+                let on = self.host.settings().map.cursor;
+                self.persist("map.cursor", Value::Boolean(!on));
+            }
             Action::EditField(id) => {
                 if (0..editor::FIELD_COUNT).contains(&id) {
                     self.set_editing(ui, id);
@@ -1031,6 +1040,7 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_camera_fastswitch_toggle, || {
         Action::CameraFastswitchToggle
     });
+    on!(on_map_cursor_toggle, || Action::MapCursorToggle);
     on!(on_map_drag_start, || Action::MapDragStart);
     on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
     on!(on_map_zoom, |step| Action::MapZoom(step));

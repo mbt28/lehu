@@ -44,6 +44,7 @@ not, the card shows the map's next turn instead, also with the map closed.
 | Connection | **Linked Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
 | Video | Night (Day, Night or Auto, for the phone's projection; Night, and Auto once the sun is down, also dim LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
+| Map | **Region**: the map shown, from those on the card. **Voice**: the spoken prompts' voice. **Hardware cursor**: the position arrow on the display's hardware cursor, where it has one, and its **Cursor size** (Small, Medium or Large) |
 | System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,

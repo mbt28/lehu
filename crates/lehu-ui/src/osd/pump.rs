@@ -75,6 +75,18 @@ impl<H: Host> State<H> {
             bridge.set_fps_label(SharedString::from(label));
             bridge.set_fps_choice(i32::from(fps >= 60));
         }
+        let map = &self.host.settings().map;
+        let cursor = (
+            self.host.map_cursor_available(),
+            map.cursor,
+            super::pick::cursor_size_index(map.cursor_size),
+        );
+        if Some(cursor) != self.p_cursor {
+            self.p_cursor = Some(cursor);
+            bridge.set_cursor_available(cursor.0);
+            bridge.set_map_cursor(cursor.1);
+            bridge.set_cursor_size_choice(cursor.2);
+        }
 
         // Volume keys change it from another thread: one load per tick.
         // Every change after the first look brings the volume bar up.

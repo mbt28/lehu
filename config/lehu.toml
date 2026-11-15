@@ -232,6 +232,16 @@ speed-warning = true
 # many pixels from its place or the road has turned 6 degrees, then glides
 # after it (in 0.4 s).
 pointer-lead = 0
+# The position arrow on the display's hardware cursor, where it has one
+# (the F1C200s does): the display draws it above everything, and LEHU turns
+# it off where a screen's window covers it. false: on a display plane of its
+# own, in its colours at its own size.
+cursor = true
+# Its size on the cursor: "small" (three quarters of its own size, in its
+# colours with a white edge), "medium" (its own size) or "large" (a third
+# larger). The F1C200s's cursor shows medium and large in one colour: dark
+# blue by day, white at night.
+cursor-size = "medium"
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

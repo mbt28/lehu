@@ -47,7 +47,7 @@ use crate::drive::{Camera, Drive, Hold, NEAR_TURN_M, SpeedZoom, Steer};
 use crate::hw::HwJpeg;
 use crate::labels::Names;
 use crate::nv12::{self, Surface};
-use crate::sprite::Sprites;
+use crate::sprite::{MarkerPlane, Sprites};
 use crate::tiles::Tiles;
 use crate::tileset::TileSet;
 use crate::track::ground_px;
@@ -92,6 +92,8 @@ struct Inner {
     progress: Option<Progress>,
     /// The night tiles.
     night: bool,
+    /// Where the marker goes: its own plane, or the cursor at a size.
+    marker_plane: MarkerPlane,
     /// Where we are.
     position: Option<Marker>,
     /// The route, drawn under the marker.
@@ -148,11 +150,13 @@ impl Viewer {
     /// once, and the video engine's JPEG decoder opened when there is one.
     /// The phone decoder's frames are held off the plane until `stop`.
     /// `night`: the night tiles, shown while `set_night` says so.
+    /// `marker_plane`: where the marker goes, until `set_marker_plane`.
     pub fn start(
         display: Arc<Display>,
         set: TileSet,
         night: Option<TileSet>,
         view: View,
+        marker_plane: MarkerPlane,
     ) -> Result<Self, String> {
         let panel = (display.width(), display.height());
         // Enough whole tiles that the panel fits at any offset, and a tile
@@ -210,6 +214,7 @@ impl Viewer {
                 follow: None,
                 progress: None,
                 night: false,
+                marker_plane,
                 position: None,
                 route: None,
                 cameras: None,
@@ -244,7 +249,7 @@ impl Viewer {
         }
         // The marker on a plane of its own, when there is one: the map
         // then moves under it without a redraw.
-        let sprites = Sprites::new(&display);
+        let sprites = Sprites::new(&display, marker_plane);
         if let Some(s) = &sprites {
             log::info!("map: the marker is on {}", s.plane());
         }
@@ -290,6 +295,7 @@ impl Viewer {
                 canvases,
                 ups,
                 sprites,
+                marker_plane,
             };
             thread::Builder::new()
                 .name("map".into())
@@ -424,6 +430,16 @@ impl Viewer {
         let mut inner = self.shared.lock();
         if inner.night != night {
             inner.night = night;
+            self.shared.wake.notify_one();
+        }
+    }
+
+    /// Where the marker goes: its own plane, or the cursor at a size. A
+    /// change takes the marker off its plane and makes it anew.
+    pub fn set_marker_plane(&self, plane: MarkerPlane) {
+        let mut inner = self.shared.lock();
+        if inner.marker_plane != plane {
+            inner.marker_plane = plane;
             self.shared.wake.notify_one();
         }
     }
@@ -688,11 +704,12 @@ fn monotonic() -> Duration {
 }
 
 /// The thread's pictures: the north-up canvases, the heading-up frames,
-/// and the marker's sprites.
+/// and the marker's sprites, on the plane asked for.
 struct Frames {
     canvases: Vec<Canvas>,
     ups: Vec<Canvas>,
     sprites: Option<Sprites>,
+    marker_plane: MarkerPlane,
 }
 
 fn run(
@@ -708,7 +725,10 @@ fn run(
         mut canvases,
         mut ups,
         mut sprites,
+        mut marker_plane,
     } = frames;
+    // The marker's plane changed: made anew before the next picture.
+    let mut new_plane = false;
     // The heading-up frames shown last, as `recent` is for the canvases,
     // and what each holds; when the map last turned; and what it costs,
     // said every so often.
@@ -795,8 +815,19 @@ fn run(
                     heading = inner.heading.filter(|_| !ups.is_empty());
                     shown = None;
                 }
+                if inner.marker_plane != marker_plane {
+                    marker_plane = inner.marker_plane;
+                    new_plane = true;
+                    shown = None;
+                }
                 if inner.night != night {
                     night = inner.night;
+                    // The one-colour cursor is drawn anew in the night's
+                    // colour.
+                    if let Some(s) = sprites.as_mut() {
+                        s.set_night(night);
+                    }
+                    shown = None;
                     if tiles.set_night(night) {
                         // Every picture has the other tiles.
                         held.fill(None);
@@ -833,6 +864,30 @@ fn run(
             }
             (shown != Some(inner.want) || zoom_anim.is_some()).then_some(inner.want)
         };
+        // Another plane for the marker: the old one taken down and freed
+        // (the cursor would keep showing the old picture otherwise), the new
+        // one made; the pictures composed afresh, with the marker in them
+        // or without.
+        if new_plane {
+            new_plane = false;
+            if let Some(old) = sprites.take() {
+                display.hide_sprite();
+                for c in old.into_canvases() {
+                    display.free_canvas(c);
+                }
+            }
+            sprites = Sprites::new(display, marker_plane);
+            match &mut sprites {
+                Some(s) => {
+                    s.set_night(night);
+                    log::info!("map: the marker is on {}", s.plane());
+                }
+                None => log::info!("map: the marker is drawn into the map"),
+            }
+            held.fill(None);
+            up_held.fill(None);
+            ahead = None;
+        }
         // The marker's plane can be refused at its first commit: from
         // then on the marker is drawn into the pictures.
         if sprites.as_ref().is_some_and(|s| !s.usable(display)) {

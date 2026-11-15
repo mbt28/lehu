@@ -743,6 +743,43 @@ fn settings_and_links_reach_the_screens_on_change() {
 }
 
 #[test]
+fn the_map_rows_switch_the_hardware_cursor_and_pick_its_size() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP_SETTINGS);
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_cursor_available());
+    assert!(b.get_map_cursor(), "on unless asked");
+    assert_eq!(b.get_cursor_size_choice(), 1, "medium unless asked");
+    // A tap on Large takes it at once.
+    b.invoke_pick_press(19);
+    b.invoke_pick_option(2);
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.cursor-size"),
+        Some(&toml::Value::String("large".into()))
+    );
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_cursor_size_choice(), 2);
+    // By the knob: Enter starts on the size in force, a turn, Enter takes.
+    pick_press(&mut osd, 19);
+    assert_eq!(pick(&osd), (19, 2));
+    press(&mut osd, OsdKey::Prev);
+    press(&mut osd, OsdKey::Prev);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.cursor-size"),
+        Some(&toml::Value::String("small".into()))
+    );
+    // Off: the size row goes with it.
+    osd.ui.global::<Bridge<'_>>().invoke_map_cursor_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.cursor"),
+        Some(&toml::Value::Boolean(false))
+    );
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_cursor());
+}
+
+#[test]
 fn the_video_rows_cycle_the_frame_rate_and_the_fast_switch() {
     let mut osd = osd(with_camera());
     goto(&mut osd, VIDEO);

@@ -592,6 +592,11 @@ pub trait Host {
     fn map_has_position(&self) -> bool {
         false
     }
+    /// The display has a hardware cursor for the map's position arrow:
+    /// Settings > Map offers it.
+    fn map_cursor_available(&self) -> bool {
+        false
+    }
     /// There is a position and the map was moved off it: the bar's Me key
     /// and the menu's My position are there.
     fn map_away(&self) -> bool {
