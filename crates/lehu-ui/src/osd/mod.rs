@@ -272,6 +272,8 @@ struct State<H> {
     p_cursor: Option<(bool, bool, i32)>,
     /// The mouse rows as shown: there, on, auto-hide.
     p_mouse: Option<(bool, bool, bool)>,
+    /// The While turning row's option, as shown.
+    p_turning: Option<i32>,
     p_ssid: Last,
     p_pass: Last,
     p_bt_name: Last,
@@ -559,6 +561,7 @@ impl<H: Host> State<H> {
             p_fps: None,
             p_cursor: None,
             p_mouse: None,
+            p_turning: None,
             p_ssid: Last::default(),
             p_pass: Last::default(),
             p_bt_name: Last::default(),

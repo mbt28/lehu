@@ -1023,6 +1023,7 @@ fn block_for(across: (i64, i64)) -> usize {
 /// 31 before the block followed the angle). Some 7 ms of it is memory,
 /// which no loop gets under: 21 000 cache lines of tiles read, and the
 /// frame's 684 KB written.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn rotate(
     grid: &Grid<'_>,
@@ -1046,7 +1047,49 @@ pub fn rotate(
         across,
         down,
         block_for(across),
+        Colour::Whole,
     );
+}
+
+/// `rotate` with the colour of `colour`: coarse is a quarter of the
+/// colour's samples, for a frame that is on the panel a moment only.
+#[allow(clippy::too_many_arguments)]
+pub fn rotate_with(
+    grid: &Grid<'_>,
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    origin: (i64, i64),
+    anchor: (i64, i64),
+    across: (i64, i64),
+    down: (i64, i64),
+    colour: Colour,
+) {
+    rotate_blocks(
+        grid,
+        dst,
+        pitch,
+        chroma,
+        size,
+        origin,
+        anchor,
+        across,
+        down,
+        block_for(across),
+        colour,
+    );
+}
+
+/// How much of a turned frame's colour is looked up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colour {
+    /// A pair for each two by two pixels: the picture's own.
+    Whole,
+    /// A pair for each four by four pixels, at their middle, written
+    /// four times: a quarter of the samples and half the tiles' rows
+    /// read. The brightness is whole either way.
+    Coarse,
 }
 
 /// `rotate`, `block` columns at a time (a multiple of 4, `BLOCK_MAX` at
@@ -1063,6 +1106,7 @@ pub(crate) fn rotate_blocks(
     across: (i64, i64),
     down: (i64, i64),
     block: usize,
+    colour: Colour,
 ) {
     debug_assert_eq!(grid.side, 256, "the tiles are found by shifting");
     let block = (block & !3).clamp(4, BLOCK_MAX);
@@ -1088,6 +1132,9 @@ pub(crate) fn rotate_blocks(
     // The chroma: a pair for each two by two block, two pixels on.
     let pairs = Steps::of((u.0.wrapping_mul(2), u.1.wrapping_mul(2)), RUN as u32 / 2);
     let (vx2, vy2) = (vx.wrapping_mul(2), vy.wrapping_mul(2));
+    // Coarse: a pair for each four by four block, four pixels on, a word
+    // (the pair twice) a sample.
+    let wide = Steps::of((u.0.wrapping_mul(4), u.1.wrapping_mul(4)), RUN_WORDS as u32);
     for c0 in (0..w).step_by(block) {
         let n = block.min(w - c0);
         // The luma: each row from where the one above began.
@@ -1095,13 +1142,26 @@ pub(crate) fn rotate_blocks(
             let from = at(c0 as i64, 0);
             rows.luma_block(part, pitch, h, n, from, (vx, vy), &luma);
         }
-        // The chroma, sampled at each two by two block's middle: half a
-        // pixel right and down.
-        if let Some(part) = dst.get_mut(chroma + c0..) {
-            let mut from = at(c0 as i64, 0);
-            from.0 = from.0.wrapping_add(((across.0 + down.0) / 2) as u32);
-            from.1 = from.1.wrapping_add(((across.1 + down.1) / 2) as u32);
-            rows.chroma_block(part, pitch, h / 2, n & !1, from, (vx2, vy2), &pairs);
+        let Some(part) = dst.get_mut(chroma + c0..) else {
+            continue;
+        };
+        let mut from = at(c0 as i64, 0);
+        match colour {
+            // The chroma, sampled at each two by two block's middle: half
+            // a pixel right and down.
+            Colour::Whole => {
+                from.0 = from.0.wrapping_add(((across.0 + down.0) / 2) as u32);
+                from.1 = from.1.wrapping_add(((across.1 + down.1) / 2) as u32);
+                rows.chroma_block(part, pitch, h / 2, n & !1, from, (vx2, vy2), &pairs);
+            }
+            // At each four by four block's middle: two pixels right and
+            // down.
+            Colour::Coarse => {
+                from.0 = from.0.wrapping_add((2 * (across.0 + down.0)) as u32);
+                from.1 = from.1.wrapping_add((2 * (across.1 + down.1)) as u32);
+                let down4 = (vx2.wrapping_mul(2), vy2.wrapping_mul(2));
+                rows.coarse_block(part, pitch, h / 2, n & !1, from, down4, &wide);
+            }
         }
     }
 }
@@ -1258,6 +1318,82 @@ impl Rows<'_> {
         s: &Steps,
     ) {
         self.block(dst, pitch, count, n, from, down, s, Self::chroma);
+    }
+
+    /// A block of coarse chroma rows: `count` rows of `n` bytes, two and
+    /// two alike, each pair of rows one row of samples (`coarse`) written
+    /// twice. Through a row of its own: a row read back from the picture
+    /// (write-combined memory) would cost more than making it.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn coarse_block(
+        &self,
+        dst: &mut [u8],
+        pitch: usize,
+        count: usize,
+        n: usize,
+        mut from: (u32, u32),
+        down: (u32, u32),
+        s: &Steps,
+    ) {
+        let mut row = [0u32; BLOCK_MAX / 4];
+        let (mut o, mut left) = (0, count);
+        while left > 0 {
+            self.coarse(&mut row[..n.div_ceil(4)], from, s);
+            from = moved(from, down);
+            let bytes = &bytes_of(&row)[..n];
+            for _ in 0..left.min(2) {
+                let Some(out) = dst.get_mut(o..o + n) else {
+                    return;
+                };
+                out.copy_from_slice(bytes);
+                o += pitch;
+            }
+            left = left.saturating_sub(2);
+        }
+    }
+
+    /// A row of coarse chroma into `line`, a sample a word (its pair
+    /// twice), from `p`: as `chroma`.
+    #[inline(always)]
+    fn coarse(&self, line: &mut [u32], mut p: (u32, u32), s: &Steps) {
+        let twice = |a: [u8; 2]| u32::from_ne_bytes([a[0], a[1], a[0], a[1]]);
+        let (runs, rest) = line.as_chunks_mut::<RUN_WORDS>();
+        let slowly = |words: &mut [u32], mut p: (u32, u32)| {
+            for o in words {
+                let (gx, gy) = (p.0 >> 16, p.1 >> 16);
+                *o = twice(match self.tile_at(gx, gy) {
+                    Some(t) => {
+                        let at =
+                            65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
+                        [t[at], t[at + 1]]
+                    }
+                    None => [self.land.1, self.land.2],
+                });
+                p = moved(p, s.one);
+            }
+        };
+        for run in runs {
+            let whole = match self.tile_of(p, moved(p, s.to_last)) {
+                Some(Some(t)) => match tile_pairs(t) {
+                    Some(pairs) => {
+                        pair_run_twice(pairs, run, p.0 << 8, p.1 << 8, &s.fine);
+                        true
+                    }
+                    None => false,
+                },
+                Some(None) => {
+                    run.fill(self.land_pairs());
+                    true
+                }
+                None => false,
+            };
+            if !whole {
+                slowly(run, p);
+            }
+            p = moved(p, s.run);
+        }
+        slowly(rest, p);
     }
 
     /// A row's luma into `line`, four samples a word, from `p`: a run at
@@ -1436,6 +1572,26 @@ fn pair_run(
         x = x.wrapping_add(sx);
         y = y.wrapping_add(sy);
         *o = u32::from_ne_bytes([a[0], a[1], b[0], b[1]]);
+    }
+}
+
+/// A run's chroma from one tile's `pairs`, each sample's pair twice in
+/// a word: the coarse colour's.
+#[inline(never)]
+fn pair_run_twice(
+    pairs: &[u16; 16384],
+    out: &mut [u32; RUN_WORDS],
+    mut x: u32,
+    mut y: u32,
+    s: &(u32, u32),
+) {
+    let (sx, sy) = *s;
+    let at = |x: u32, y: u32| (((y >> 18) & 0x3f80) | (x >> 25)) as usize;
+    for o in out {
+        let a = pairs[at(x, y)].to_ne_bytes();
+        x = x.wrapping_add(sx);
+        y = y.wrapping_add(sy);
+        *o = u32::from_ne_bytes([a[0], a[1], a[0], a[1]]);
     }
 }
 

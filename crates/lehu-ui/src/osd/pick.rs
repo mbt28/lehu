@@ -12,7 +12,7 @@
 //! `FAST_PERCENT` a detent -- a list stepped through (Output, Channel,
 //! Country) only when Enter takes it.
 
-use lehu_core::settings::{BUFFER_MAX_MS, CursorSize, NightMode};
+use lehu_core::settings::{BUFFER_MAX_MS, CursorSize, NightMode, Turning};
 use slint::SharedString;
 use toml::Value;
 
@@ -48,6 +48,8 @@ pub(super) enum Pick {
     Voice,
     /// The arrow's size on the hardware cursor (Settings > Map).
     CursorSize,
+    /// How the map is made while it turns (Settings > Map).
+    Turning,
 }
 
 impl Pick {
@@ -67,6 +69,7 @@ impl Pick {
             17 => Pick::Region,
             18 => Pick::Voice,
             19 => Pick::CursorSize,
+            20 => Pick::Turning,
             _ => Pick::None,
         }
     }
@@ -89,6 +92,7 @@ impl Pick {
             Pick::Region => 17,
             Pick::Voice => 18,
             Pick::CursorSize => 19,
+            Pick::Turning => 20,
         }
     }
 
@@ -148,6 +152,23 @@ pub(super) fn cursor_size_index(size: CursorSize) -> i32 {
     }
 }
 
+/// The While turning row's options, in order.
+pub(super) fn turning_index(turning: Turning) -> i32 {
+    match turning {
+        Turning::Sharp => 0,
+        Turning::SoftColour => 1,
+        Turning::Half => 2,
+    }
+}
+
+fn turning_of(index: i32) -> Turning {
+    match index {
+        0 => Turning::Sharp,
+        1 => Turning::SoftColour,
+        _ => Turning::Half,
+    }
+}
+
 fn cursor_size_of(index: i32) -> CursorSize {
     match index {
         0 => CursorSize::Small,
@@ -199,7 +220,7 @@ impl<H: Host> State<H> {
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
             Pick::Night | Pick::Fps => VIDEO,
             Pick::Power => SYSTEM,
-            Pick::Region | Pick::Voice | Pick::CursorSize => MAP_SETTINGS,
+            Pick::Region | Pick::Voice | Pick::CursorSize | Pick::Turning => MAP_SETTINGS,
             _ => SETTINGS,
         }
     }
@@ -246,6 +267,7 @@ impl<H: Host> State<H> {
                 Pick::Night => Some(night_index(night)),
                 Pick::Fps => Some(i32::from(self.host.settings().android_auto.fps >= 60)),
                 Pick::CursorSize => Some(cursor_size_index(self.host.settings().map.cursor_size)),
+                Pick::Turning => Some(turning_index(self.host.settings().map.turning)),
                 Pick::Power => Some(2), // Cancel: nothing goes down by accident
                 _ => Some(0),
             };
@@ -296,6 +318,16 @@ impl<H: Host> State<H> {
                             // The map takes it at its next tick.
                             Ok(value) => self.persist("map.cursor-size", value),
                             Err(e) => log::error!("cursor size: {e}"),
+                        }
+                    }
+                }
+                Pick::Turning => {
+                    let turning = turning_of(taken);
+                    if turning != self.host.settings().map.turning {
+                        match Value::try_from(turning) {
+                            // The map takes it at its next tick.
+                            Ok(value) => self.persist("map.turning", value),
+                            Err(e) => log::error!("turning: {e}"),
                         }
                     }
                 }

@@ -638,7 +638,17 @@ are 256 bytes apart and would otherwise push each other out of the cache.
 A frame of 864 x 528 then takes 18 ms with the map upright or upside
 down, 23 at 45 degrees and 25 to 27 on its side. While it turns, the SD
 card is not read: the tiles are kept decoded, 96 of them, and the card is
-read only for a tile that is not among them. A change of zoom is shown by the display's scaler, the frame shown
+read only for a tile that is not among them.
+
+Settings > Map > While turning (`map.turning`) trades the look of the
+frames of a turn for their pace; a whole frame follows as soon as the
+turning stops. Measured turning by itself at 20 to 40 degrees a second:
+
+| While turning | A frame of a turn | What it costs the picture |
+|---|---|---|
+| Sharp | 27 ms, 22 a second | nothing: whole frames |
+| Soft colour | 24.5 ms, 24 a second | the colour is a sample for four by four pixels; the brightness is whole |
+| Half | 8.5 ms (4.3 in a corner), every refresh | half the resolution (a quarter in a corner) scaled up by the display, from the tiles a zoom out, without the names | A change of zoom is shown by the display's scaler, the frame shown
 enlarged or shrunk smoothly about the arrow while the new one is drawn.
 The arrow is on a display plane of its own above the map, so the map
 moves under it without being redrawn. Where the display has a hardware

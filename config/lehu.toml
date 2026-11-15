@@ -254,6 +254,16 @@ cursor = true
 # larger). The F1C200s's cursor shows medium and large in one colour: dark
 # blue by day, white at night.
 cursor-size = "medium"
+# How the map is made while it turns (Settings > Map > While turning). A
+# turned frame takes the F1C200s 18 to 27 ms, more than the panel shows one
+# for, so the frames of a bend come as fast as they are made:
+#   "sharp"        whole frames;
+#   "soft-colour"  the brightness whole, the colour a sample for four by
+#                  four pixels: about a fifth quicker;
+#   "half"         half the resolution, scaled up by the display, without
+#                  the names: several times as quick, and pixelated.
+# A whole frame follows as soon as the turning stops.
+turning = "sharp"
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

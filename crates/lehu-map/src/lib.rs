@@ -64,7 +64,7 @@ pub use track::{
     metres_between,
 };
 pub use view::{View, WORLD_Z, degrees_from_world, parse_position, world_from_degrees};
-pub use viewer::{CAMERA_ZOOM, CameraMarks, Marker, Route, Viewer};
+pub use viewer::{CAMERA_ZOOM, CameraMarks, Marker, Route, Turning, Viewer};
 pub use voice::{CameraWatch, Clip, Voice, camera_lead};
 
 #[cfg(test)]

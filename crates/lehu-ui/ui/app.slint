@@ -72,7 +72,7 @@ export global Bridge {
     // device-pick says which; on Audio 7-10 the streams' levels -- music,
     // navigation, alerts, calls -- and 11 Output; on Access point 12 Band,
     // 13 Width, 14 Channel, 15 Country; 16 Frame rate; on Map 17 Region, 18
-    // Voice, 19 Cursor size) and the option shown as taken.
+    // Voice, 19 Cursor size, 20 While turning) and the option shown as taken.
     in property <int> pick;
     in property <int> pick-choice;
     in property <string> device-pick;         // the id of the phone picking
@@ -108,6 +108,9 @@ export global Bridge {
     in property <bool> cursor-available;
     in property <bool> map-cursor;
     in property <int> cursor-size-choice;
+    // How the map is made while it turns (map.turning): 0 sharp, 1 soft
+    // colour, 2 half.
+    in property <int> turning-choice;
     // Settings > System: a mouse as a pointer (mouse.enabled), where the
     // display has a cursor plane to show it on, and its auto-hide.
     in property <bool> mouse-available;
@@ -1768,6 +1771,24 @@ component ScreenMapSettings inherits ListPage {
         picked(i) => {
             if (Bridge.pick != 19) {
                 Bridge.pick-press(19);
+            }
+            Bridge.pick-option(i);
+        }
+    }
+    // How the map is made while it turns: whole frames, or rougher ones
+    // that come faster.
+    SegmentRow {
+        ring-key: "turning";
+        icon: "speed";
+        label: "While turning";
+        options: ["Sharp", "Soft colour", "Half"];
+        current: Bridge.turning-choice;
+        choosing: Bridge.pick == 20;
+        choice: Bridge.pick-choice;
+        clicked => { Bridge.pick-press(20); }
+        picked(i) => {
+            if (Bridge.pick != 20) {
+                Bridge.pick-press(20);
             }
             Bridge.pick-option(i);
         }

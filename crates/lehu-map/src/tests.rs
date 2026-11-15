@@ -829,6 +829,7 @@ fn turned_plainly(
     (ax, ay): (i64, i64),
     across: (i64, i64),
     down: (i64, i64),
+    colour: nv12::Colour,
 ) {
     let at = |u: i64, v: i64| {
         (
@@ -853,9 +854,24 @@ fn turned_plainly(
     }
     for cv in 0..h as usize / 2 {
         for cu in 0..w as usize / 2 {
-            let (x, y) = at(2 * cu as i64, 2 * cv as i64);
-            let x = x.wrapping_add(((across.0 + down.0) / 2) as u32);
-            let y = y.wrapping_add(((across.1 + down.1) / 2) as u32);
+            // Whole: the two by two block's middle. Coarse: the middle of
+            // the four by four block the pair is in.
+            let (x, y) = match colour {
+                nv12::Colour::Whole => {
+                    let (x, y) = at(2 * cu as i64, 2 * cv as i64);
+                    (
+                        x.wrapping_add(((across.0 + down.0) / 2) as u32),
+                        y.wrapping_add(((across.1 + down.1) / 2) as u32),
+                    )
+                }
+                nv12::Colour::Coarse => {
+                    let (x, y) = at(4 * (cu / 2) as i64, 4 * (cv / 2) as i64);
+                    (
+                        x.wrapping_add((2 * (across.0 + down.0)) as u32),
+                        y.wrapping_add((2 * (across.1 + down.1)) as u32),
+                    )
+                }
+            };
             let (gx, gy) = (x >> 16, y >> 16);
             let pair = tile(gx, gy).map_or([grid.land.1, grid.land.2], |t| {
                 let i = 65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
@@ -902,19 +918,29 @@ fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
                 let (across, down) = ((-up.1, up.0), (-up.0, -up.1));
                 let origin = (390 << 16, (350 << 16) + 12345);
                 let anchor = (i64::from(w) / 2, i64::from(h) * 2 / 3);
-                let mut plain = vec![0u8; len];
-                turned_plainly(
-                    &grid,
-                    &mut plain,
-                    pitch,
-                    chroma,
-                    (w, h),
-                    origin,
-                    anchor,
-                    across,
-                    down,
-                );
-                for block in [256usize, 128, 96, 64, 48, 32, 8] {
+                for (block, colour) in [
+                    (256usize, nv12::Colour::Whole),
+                    (128, nv12::Colour::Coarse),
+                    (96, nv12::Colour::Whole),
+                    (64, nv12::Colour::Coarse),
+                    (48, nv12::Colour::Whole),
+                    (32, nv12::Colour::Coarse),
+                    (8, nv12::Colour::Whole),
+                    (8, nv12::Colour::Coarse),
+                ] {
+                    let mut plain = vec![0u8; len];
+                    turned_plainly(
+                        &grid,
+                        &mut plain,
+                        pitch,
+                        chroma,
+                        (w, h),
+                        origin,
+                        anchor,
+                        across,
+                        down,
+                        colour,
+                    );
                     // The words' alignment is the allocation's, so the
                     // offset moves the picture off it.
                     let mut words = vec![0u32; (len + offset).div_ceil(4) + 1];
@@ -936,6 +962,7 @@ fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
                         across,
                         down,
                         block,
+                        colour,
                     );
                     let got = &bytes[offset..offset + len];
                     // Rows are `pitch` apart: only the picture's own bytes.
@@ -943,14 +970,14 @@ fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
                         assert_eq!(
                             got[v * pitch..][..w as usize],
                             plain[v * pitch..][..w as usize],
-                            "luma row {v}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block}"
+                            "luma row {v}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block} {colour:?}"
                         );
                     }
                     for cv in 0..h as usize / 2 {
                         assert_eq!(
                             got[chroma + cv * pitch..][..w as usize & !1],
                             plain[chroma + cv * pitch..][..w as usize & !1],
-                            "chroma row {cv}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block}"
+                            "chroma row {cv}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block} {colour:?}"
                         );
                     }
                 }
@@ -1550,6 +1577,7 @@ fn labelled_shot() {
                         0,
                         0,
                         1,
+                        nv12::Colour::Whole,
                         &mut Default::default(),
                     );
                     let rgb = nv12_rgb(&buf, pitch, chroma, UP_WINDOW, (800, 480));
@@ -1725,6 +1753,7 @@ fn labels_cost() {
                     0,
                     0,
                     1,
+                    nv12::Colour::Whole,
                     &mut Default::default(),
                 );
             };
@@ -1887,12 +1916,34 @@ fn turn_bench() {
                     across,
                     down,
                     block,
+                    nv12::Colour::Whole,
                 );
                 b = b.min(t.elapsed().as_secs_f64() * 1000.0);
             }
             by_block += &format!(" {block}: {b:.1}");
         }
-        println!("rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms (by block{by_block})");
+        // With the coarse colour.
+        let mut coarse = f64::MAX;
+        for _ in 0..3 {
+            let grid = tiles.grid(zoom, (tx0, ty0), 7, 7);
+            let t = Instant::now();
+            nv12::rotate_with(
+                &grid,
+                &mut out,
+                pitch,
+                chroma,
+                (w, hgt),
+                origin,
+                anchor,
+                across,
+                down,
+                nv12::Colour::Coarse,
+            );
+            coarse = coarse.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!(
+            "rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms, {coarse:.1} with coarse colour (by block{by_block})"
+        );
     }
     // A route: a serpentine across the frame, `n` points, in 1/16 px.
     for (n, amp) in [(100usize, 150.0f64), (400, 150.0), (400, 2000.0)] {

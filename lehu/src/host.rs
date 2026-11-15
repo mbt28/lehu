@@ -1134,6 +1134,11 @@ impl AppHost {
         if let Some(viewer) = &self.map {
             viewer.set_pointer_lead(self.settings.map.pointer_lead);
             viewer.set_marker_plane(self.map_marker_plane());
+            viewer.set_turning(match self.settings.map.turning {
+                lehu_core::settings::Turning::Sharp => lehu_map::Turning::Sharp,
+                lehu_core::settings::Turning::SoftColour => lehu_map::Turning::SoftColour,
+                lehu_core::settings::Turning::Half => lehu_map::Turning::Half,
+            });
         }
         let now = lehu_core::clock::now_ms();
         if self

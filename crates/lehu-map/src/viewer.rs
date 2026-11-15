@@ -66,6 +66,23 @@ const HW_INPUT: u32 = 256 * 1024;
 /// A flip is still pending: look again this much later.
 const BUSY_WAIT: Duration = Duration::from_millis(4);
 
+/// How the map is made while it turns (`map.turning`): a turned frame
+/// takes the CPU a refresh and more, so the frames of a bend come as fast
+/// as they are made, and can be made rougher to come faster. Once the
+/// turning stops, a whole frame takes their place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Turning {
+    /// Whole frames, at the pace the CPU turns them.
+    #[default]
+    Sharp,
+    /// The brightness whole, the colour a sample for four by four pixels:
+    /// a fifth quicker.
+    SoftColour,
+    /// Half the resolution (a quarter in a corner), scaled up by the
+    /// display, without the names: four times as quick, and it shows.
+    Half,
+}
+
 /// Where we are, as the map shows it: world pixels at `WORLD_Z`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Marker {
@@ -94,6 +111,8 @@ struct Inner {
     night: bool,
     /// Where the marker goes: its own plane, or the cursor at a size.
     marker_plane: MarkerPlane,
+    /// How the frames of a turn are made.
+    turning_mode: Turning,
     /// Where we are.
     position: Option<Marker>,
     /// The route, drawn under the marker.
@@ -218,6 +237,7 @@ impl Viewer {
                 progress: None,
                 night: false,
                 marker_plane,
+                turning_mode: Turning::Sharp,
                 position: None,
                 route: None,
                 cameras: None,
@@ -446,6 +466,11 @@ impl Viewer {
             inner.marker_plane = plane;
             self.shared.wake.notify_one();
         }
+    }
+
+    /// How the frames of a turn are made, from the next one on.
+    pub fn set_turning(&self, mode: Turning) {
+        self.shared.lock().turning_mode = mode;
     }
 
     /// The first picture is on the plane.
@@ -839,6 +864,7 @@ fn run(
     } = frames;
     // The marker's plane changed: made anew before the next picture.
     let mut new_plane = false;
+    let mut turn_mode;
     // The heading-up frames shown last, as `recent` is for the canvases,
     // and what each holds; when the map last turned; and what it costs,
     // said every so often.
@@ -922,6 +948,7 @@ fn run(
                 }
                 heading_soon = inner.heading_soon;
                 turning = inner.turning;
+                turn_mode = inner.turning_mode;
                 if let Some(name) = inner.lap.take() {
                     up_stats.report(&name);
                 }
@@ -1170,7 +1197,7 @@ fn run(
             let placed = if sprites.is_some() {
                 newest.and_then(|i| {
                     let u = up_held[i]?;
-                    (u.div == 1 || steering).then_some(())?;
+                    ((u.div == 1 && !u.rough) || steering).then_some(())?;
                     fresh(u.progress, progress, route.is_some(), u.zoom).then_some(())?;
                     place_up(&u, &want, h, size, panel, UP_TOLERANCE).map(|src| (i, src))
                 })
@@ -1204,7 +1231,7 @@ fn run(
                     // corner a quarter, so that a frame fits a refresh. A
                     // whole frame once the steering stops.
                     let corner = turning.abs() >= CORNER_DPS;
-                    let div = if !REDUCE_WHILE_TURNING
+                    let div = if turn_mode != Turning::Half
                         || !steering
                         || !meanwhile.is_some_and(|(_, u)| u.for_zoom() == want.zoom)
                     {
@@ -1247,7 +1274,14 @@ fn run(
                         } else {
                             0
                         },
+                        // Steering, when asked: the colour coarse.
+                        colour: if steering && turn_mode == Turning::SoftColour {
+                            nv12::Colour::Coarse
+                        } else {
+                            nv12::Colour::Whole
+                        },
                     };
+                    let reduce = turn_mode == Turning::Half;
                     // Closer: the frame shown is enlarged towards the new
                     // zoom while the new frame is drawn.
                     if let Some((j, u)) = meanwhile
@@ -1318,6 +1352,7 @@ fn run(
                                             job.top,
                                             job.sides,
                                             i64::from(div),
+                                            job.colour,
                                             cost,
                                         );
                                         held.div = div;
@@ -1330,7 +1365,7 @@ fn run(
                                         // made ready meanwhile, for a bend
                                         // (whole: the half's) or a corner
                                         // (half: the quarter's) to come.
-                                        if REDUCE_WHILE_TURNING && div <= 2 && job.view.zoom >= 2 {
+                                        if reduce && div <= 2 && job.view.zoom >= 2 {
                                             let q = View {
                                                 zoom: job.view.zoom - 1,
                                                 ..job.view
@@ -1394,6 +1429,7 @@ fn run(
                                 job.top,
                                 job.sides,
                                 1,
+                                nv12::Colour::Whole,
                                 &mut cost,
                             )
                         }),
@@ -1410,6 +1446,9 @@ fn run(
                     up_stats.turned(started.elapsed(), cost);
                     if drawn.div > 1 {
                         up_stats.halves += 1;
+                    }
+                    if drawn.rough {
+                        up_stats.roughs += 1;
                     }
                     // Further out: the new frame shown at the old scale,
                     // shrinking to its own.
@@ -1664,6 +1703,7 @@ struct UpJob {
     anchor: (i64, i64),
     top: u32,
     sides: u32,
+    colour: nv12::Colour,
 }
 
 /// Two canvases of `all`, the first to draw on and the second to show.
@@ -1808,11 +1848,6 @@ const CORNER_DPS: f64 = 20.0;
 /// What committing a picture takes, with some to spare for a frame
 /// slower than estimated.
 const COMMIT_MS: Duration = Duration::from_millis(3);
-/// Whether frames are made at a reduced resolution while turning at all.
-/// Off: the scaled frames looked pixelated in a bend (the owner, 2026-11-13);
-/// whole frames only, at the pace the CPU turns them.
-const REDUCE_WHILE_TURNING: bool = false;
-
 /// How long a change of zoom is shown taking.
 const ZOOM_MS: f32 = 250.0;
 
@@ -2138,8 +2173,9 @@ struct UpStats {
     /// Turns with nothing shown meanwhile, and of those, at another zoom.
     blind: u32,
     blind_zoom: u32,
-    /// Turned at half the resolution.
+    /// Turned at half the resolution, and with coarse colour.
     halves: u32,
+    roughs: u32,
     /// Said a pass of the spin test at a time, not every so often.
     laps: bool,
     last_shown: Option<Instant>,
@@ -2167,6 +2203,7 @@ impl UpStats {
             blind: 0,
             blind_zoom: 0,
             halves: 0,
+            roughs: 0,
             laps: false,
             last_shown: None,
             since: Instant::now(),
@@ -2208,11 +2245,12 @@ impl UpStats {
     fn report(&mut self, what: &str) {
         let each = |d: Duration| d.as_micros() as f64 / 1000.0 / f64::from(self.turned.max(1));
         log::info!(
-            "map: {what}: {} frames in {:.1} s, {} turned ({} at reduced resolution), {:.1} ms each ({:.1} tiles, {:.1} turning, {:.1} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
+            "map: {what}: {} frames in {:.1} s, {} turned ({} at reduced resolution, {} with coarse colour), {:.1} ms each ({:.1} tiles, {:.1} turning, {:.1} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
             self.frames,
             self.since.elapsed().as_secs_f64(),
             self.turned,
             self.halves,
+            self.roughs,
             each(self.took),
             each(self.cost.tiles),
             each(self.cost.rotate),
@@ -2323,6 +2361,9 @@ pub(crate) struct UpHeld {
     /// quarter): one or two zooms further out, for the zoom past them,
     /// shown scaled up by the display (while steering, as it is quick).
     div: u32,
+    /// Its colour is coarse (`Turning::SoftColour`): shown while steering
+    /// only, as a reduced frame is.
+    rough: bool,
 }
 
 impl UpHeld {
@@ -2436,6 +2477,7 @@ pub(crate) fn render_up(
     top: u32,
     sides: u32,
     shrink: i64,
+    colour: nv12::Colour,
     cost: &mut UpCost,
 ) -> UpHeld {
     let size = out.size;
@@ -2449,6 +2491,7 @@ pub(crate) fn render_up(
         top,
         progress,
         div: 1,
+        rough: colour == nv12::Colour::Coarse,
     };
     let (p, across, down) = (held.p, held.across(), held.down());
     // The drawn part's corners on the map, for the tiles under them.
@@ -2480,7 +2523,7 @@ pub(crate) fn render_up(
         let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
         // From row `top`: its luma, and its chroma's place from there.
         let skip = top as usize * pitch + sides as usize;
-        nv12::rotate(
+        nv12::rotate_with(
             &grid,
             &mut out.pixels[skip..],
             pitch,
@@ -2490,6 +2533,7 @@ pub(crate) fn render_up(
             (anchor.0 - l, anchor.1 - t),
             across,
             down,
+            colour,
         );
         cost.rotate = clock.elapsed();
     }
@@ -2796,6 +2840,7 @@ mod tests {
             top,
             progress: None,
             div: 1,
+            rough: false,
         }
     }
 

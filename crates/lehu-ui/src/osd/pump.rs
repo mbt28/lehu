@@ -87,6 +87,11 @@ impl<H: Host> State<H> {
             bridge.set_map_cursor(cursor.1);
             bridge.set_cursor_size_choice(cursor.2);
         }
+        let turning = super::pick::turning_index(self.host.settings().map.turning);
+        if Some(turning) != self.p_turning {
+            self.p_turning = Some(turning);
+            bridge.set_turning_choice(turning);
+        }
         let m = &self.host.settings().mouse;
         let mouse = (self.host.mouse_available(), m.enabled, m.autohide);
         if Some(mouse) != self.p_mouse {

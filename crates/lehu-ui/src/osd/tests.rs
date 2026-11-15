@@ -768,6 +768,31 @@ fn the_system_rows_switch_the_mouse_and_its_auto_hide() {
 }
 
 #[test]
+fn the_map_row_picks_how_the_map_turns() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_turning_choice(), 0);
+    // A tap on Soft colour takes it at once.
+    osd.ui.global::<Bridge<'_>>().invoke_pick_press(20);
+    osd.ui.global::<Bridge<'_>>().invoke_pick_option(1);
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.turning"),
+        Some(&toml::Value::String("soft-colour".into()))
+    );
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_turning_choice(), 1);
+    // By the knob: on to Half.
+    pick_press(&mut osd, 20);
+    assert_eq!(pick(&osd), (20, 1));
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.turning"),
+        Some(&toml::Value::String("half".into()))
+    );
+}
+
+#[test]
 fn the_map_rows_switch_the_hardware_cursor_and_pick_its_size() {
     let mut osd = osd(TestHost::new());
     goto(&mut osd, MAP_SETTINGS);

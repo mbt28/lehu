@@ -82,6 +82,22 @@ pub enum CursorSize {
     Large,
 }
 
+/// How the map is made while it turns: each turned frame takes the CPU
+/// longer than the panel shows one, so the frames of a bend can be made
+/// rougher to come faster. A whole frame follows once the turning stops.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Turning {
+    /// Whole frames.
+    #[default]
+    Sharp,
+    /// The colour at half its resolution each way: a fifth quicker.
+    SoftColour,
+    /// Half the resolution, scaled up by the display, without the names:
+    /// several times as quick, and pixelated.
+    Half,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum VideoPath {
@@ -360,6 +376,8 @@ pub struct Map {
     pub cursor: bool,
     /// The arrow's size on the cursor. Settings > Map > Cursor size.
     pub cursor_size: CursorSize,
+    /// How the map is made while it turns. Settings > Map > While turning.
+    pub turning: Turning,
 }
 
 /// A destination Map > Go to drove to: its name, the town it is in, and
@@ -560,6 +578,7 @@ impl Default for Map {
             pointer_lead: 0,
             cursor: true,
             cursor_size: CursorSize::Medium,
+            turning: Turning::Sharp,
         }
     }
 }
@@ -1166,6 +1185,16 @@ mod tests {
         assert_eq!((m.enabled, m.autohide), (false, true));
         let s: Settings = toml::from_str("[mouse]\nenabled = true\nautohide = false\n").unwrap();
         assert_eq!((s.mouse.enabled, s.mouse.autohide), (true, false));
+    }
+
+    #[test]
+    fn the_map_turns_in_whole_frames_unless_asked() {
+        assert_eq!(Settings::default().map.turning, Turning::Sharp);
+        let s: Settings = toml::from_str("[map]\nturning = \"soft-colour\"\n").unwrap();
+        assert_eq!(s.map.turning, Turning::SoftColour);
+        let s: Settings = toml::from_str("[map]\nturning = \"half\"\n").unwrap();
+        assert_eq!(s.map.turning, Turning::Half);
+        assert!(toml::from_str::<Settings>("[map]\nturning = \"blurry\"").is_err());
     }
 
     #[test]
