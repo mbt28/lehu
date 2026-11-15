@@ -1093,7 +1093,11 @@ fn run(
                 // will want, from the cache's point of view the same as
                 // one a frame asked for.
                 let started = Instant::now();
-                if tiles.prefetch(key) && trace {
+                let decoded = tiles.prefetch(key);
+                // Swapped too, while the frames are turned from swapped
+                // tiles.
+                let swapped = tiles.swap_ahead(key);
+                if (decoded || swapped) && trace {
                     log::info!(
                         "map: tile {}/{}/{} decoded ahead in {} ms",
                         key.0,
@@ -2188,6 +2192,9 @@ pub(crate) struct UpCost {
     pub tiles: Duration,
     pub rotate: Duration,
     pub draw: Duration,
+    /// Turned from swapped tiles (0 or 1), and tiles swapped for it.
+    pub swapped: u32,
+    pub swaps: u32,
 }
 
 impl UpStats {
@@ -2217,6 +2224,8 @@ impl UpStats {
         self.cost.tiles += cost.tiles;
         self.cost.rotate += cost.rotate;
         self.cost.draw += cost.draw;
+        self.cost.swapped += cost.swapped;
+        self.cost.swaps += cost.swaps;
     }
 
     /// A picture reached the panel.
@@ -2245,12 +2254,14 @@ impl UpStats {
     fn report(&mut self, what: &str) {
         let each = |d: Duration| d.as_micros() as f64 / 1000.0 / f64::from(self.turned.max(1));
         log::info!(
-            "map: {what}: {} frames in {:.1} s, {} turned ({} at reduced resolution, {} with coarse colour), {:.1} ms each ({:.1} tiles, {:.1} turning, {:.1} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
+            "map: {what}: {} frames in {:.1} s, {} turned ({} at reduced resolution, {} with coarse colour, {} from swapped tiles, {} tiles swapped), {:.1} ms each ({:.1} tiles, {:.1} turning, {:.1} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
             self.frames,
             self.since.elapsed().as_secs_f64(),
             self.turned,
             self.halves,
             self.roughs,
+            self.cost.swapped,
+            self.cost.swaps,
             each(self.took),
             each(self.cost.tiles),
             each(self.cost.rotate),
@@ -2517,7 +2528,9 @@ pub(crate) fn render_up(
     let (cols, rows) = ((tx1 - tx0 + 1) as usize, (ty1 - ty0 + 1) as usize);
     {
         let clock = Instant::now();
-        let grid = tiles.grid(view.zoom, (tx0, ty0), cols, rows);
+        let swaps = tiles.swaps;
+        let grid = tiles.grid_for(view.zoom, (tx0, ty0), cols, rows, across);
+        cost.swapped = u32::from(grid.swapped);
         cost.tiles = clock.elapsed();
         let clock = Instant::now();
         let origin = (p.0 - tx0 * tile, p.1 - ty0 * tile);
@@ -2536,6 +2549,7 @@ pub(crate) fn render_up(
             colour,
         );
         cost.rotate = clock.elapsed();
+        cost.swaps = tiles.swaps - swaps;
     }
     let drawing = Instant::now();
     if let Some(line) = route {

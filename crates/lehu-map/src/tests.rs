@@ -796,6 +796,7 @@ fn turned(up: (i64, i64)) -> Vec<u8> {
         rows: 2,
         side: 256,
         land: (1, 2, 3),
+        swapped: false,
     };
     let (w, h, pitch) = (64u32, 32u32, 64usize);
     let chroma = pitch * h as usize;
@@ -898,6 +899,7 @@ fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
         rows: 3,
         side: 256,
         land: (7, 99, 201),
+        swapped: false,
     };
     grid.tiles[5] = None;
     // Widths that are and are not whole words and blocks; rows that are
@@ -987,6 +989,184 @@ fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
 }
 
 #[test]
+fn a_swapped_tile_has_each_sample_where_its_row_and_column_change_places() {
+    let tile: Vec<u8> = (0..98304u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 11) as u8)
+        .collect();
+    let mut swapped = vec![0u8; 98304];
+    nv12::swap_tile(&tile, &mut swapped);
+    for y in 0..256 {
+        for x in 0..256 {
+            assert_eq!(swapped[x * 256 + y], tile[y * 256 + x], "luma at {x},{y}");
+        }
+    }
+    for y in 0..128 {
+        for x in 0..128 {
+            let (to, from) = (65536 + x * 256 + 2 * y, 65536 + y * 256 + 2 * x);
+            assert_eq!(swapped[to..to + 2], tile[from..from + 2], "pair at {x},{y}");
+        }
+    }
+    // And back again.
+    let mut back = vec![0u8; 98304];
+    nv12::swap_tile(&swapped, &mut back);
+    assert!(back == tile);
+}
+
+#[test]
+fn a_frame_from_swapped_tiles_is_the_frame_from_the_tiles_as_they_are() {
+    // Three columns of two rows, one tile missing.
+    let tiles: Vec<Vec<u8>> = (0..6u32)
+        .map(|t| {
+            (0..98304u32)
+                .map(|i| (i.wrapping_mul(2654435761).wrapping_add(t * 977) >> 13) as u8)
+                .collect()
+        })
+        .collect();
+    let mut grid = nv12::Grid {
+        tiles: tiles.iter().map(|t| Some(t.as_slice())).collect(),
+        cols: 3,
+        rows: 2,
+        side: 256,
+        land: (7, 99, 201),
+        swapped: false,
+    };
+    grid.tiles[4] = None;
+    let turned: Vec<Vec<u8>> = tiles
+        .iter()
+        .map(|t| {
+            let mut out = vec![0u8; 98304];
+            nv12::swap_tile(t, &mut out);
+            out
+        })
+        .collect();
+    // The same tiles, column by column.
+    let swapped = nv12::Grid {
+        tiles: (0..3)
+            .flat_map(|c| (0..2).map(move |r| r * 3 + c))
+            .map(|at| grid.tiles[at].map(|_| turned[at].as_slice()))
+            .collect(),
+        cols: 2,
+        rows: 3,
+        side: 256,
+        land: grid.land,
+        swapped: true,
+    };
+    let (w, h, pitch) = (200u32, 64u32, 200usize);
+    let chroma = pitch * h as usize;
+    let len = chroma + pitch * h as usize / 2;
+    for degrees in [0.0f64, 33.0, 45.0, 60.0, 90.0, 123.0, 180.0, 271.0, 300.0] {
+        for scale in [65536.0, 131072.0, 40000.0] {
+            let r = degrees.to_radians();
+            let up = ((r.sin() * scale) as i64, (-r.cos() * scale) as i64);
+            let (across, down) = ((-up.1, up.0), (-up.0, -up.1));
+            // Near the missing tile and the grid's corner.
+            let origin = (400 << 16, (260 << 16) + 12345);
+            let anchor = (i64::from(w) / 2, i64::from(h) * 2 / 3);
+            for colour in [nv12::Colour::Whole, nv12::Colour::Coarse] {
+                let mut plain = vec![0u8; len];
+                turned_plainly(
+                    &grid,
+                    &mut plain,
+                    pitch,
+                    chroma,
+                    (w, h),
+                    origin,
+                    anchor,
+                    across,
+                    down,
+                    colour,
+                );
+                let mut got = vec![0u8; len];
+                nv12::rotate_with(
+                    &swapped,
+                    &mut got,
+                    pitch,
+                    chroma,
+                    (w, h),
+                    origin,
+                    anchor,
+                    across,
+                    down,
+                    colour,
+                );
+                assert!(got == plain, "at {degrees} deg x{scale}, {colour:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn on_its_side_a_frame_is_turned_from_swapped_tiles() {
+    let dir = temp("swapped");
+    std::fs::write(dir.join("map.toml"), META).unwrap();
+    let mut tiles = Tiles::new(TileSet::open(&dir).unwrap(), None, None);
+    // Every tile the test picture: not the same along as down.
+    tiles.set_test_tile(Some(true));
+    let (w, h, pitch) = (320u32, 200u32, 320usize);
+    let chroma = pitch * h as usize;
+    let len = chroma + pitch * h as usize / 2;
+    let origin = (520 << 16, 300 << 16);
+    let frame = |tiles: &mut Tiles, degrees: f64| {
+        let r = degrees.to_radians();
+        let up = ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64);
+        let (across, down) = ((-up.1, up.0), (-up.0, -up.1));
+        let mut both = [vec![0u8; len], vec![0u8; len]];
+        let mut swapped = false;
+        for (i, out) in both.iter_mut().enumerate() {
+            let grid = if i == 0 {
+                tiles.grid(3, (1, 2), 4, 3)
+            } else {
+                tiles.grid_for(3, (1, 2), 4, 3, across)
+            };
+            swapped = grid.swapped;
+            nv12::rotate(
+                &grid,
+                out,
+                pitch,
+                chroma,
+                (w, h),
+                origin,
+                (160, 130),
+                across,
+                down,
+            );
+        }
+        assert!(both[0] == both[1], "at {degrees} degrees");
+        swapped
+    };
+    // Upright: the tiles as they are, none swapped.
+    assert!(!frame(&mut tiles, 10.0));
+    assert_eq!(tiles.swaps, 0);
+    // Leaning: still as they are, a few swapped ahead each frame.
+    assert!(!frame(&mut tiles, 35.0));
+    assert_eq!(tiles.swaps, 2);
+    assert!(!frame(&mut tiles, 40.0));
+    assert_eq!(tiles.swaps, 4);
+    // On its side: the rest swapped now, the frame from them.
+    assert!(frame(&mut tiles, 80.0));
+    assert_eq!((tiles.swaps, tiles.swapped_frames), (12, 1));
+    assert!(frame(&mut tiles, 265.0));
+    assert_eq!((tiles.swaps, tiles.swapped_frames), (12, 2));
+    // Upright again they are kept for a while.
+    assert!(!frame(&mut tiles, 180.0));
+    assert!(frame(&mut tiles, 100.0));
+    assert_eq!(tiles.swaps, 12);
+    // A canvas composed, north up, lets them go.
+    let layout = Layout {
+        zoom: 3,
+        tx: 1,
+        ty: 2,
+        cols: 1,
+        rows: 1,
+    };
+    let mut canvas = vec![0u8; 256 * 256 * 3 / 2];
+    tiles.compose(&layout, &mut canvas, 256, 256 * 256);
+    assert!(frame(&mut tiles, 100.0));
+    assert_eq!(tiles.swaps, 24);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn heading_north_the_frame_is_the_map_as_it_lies() {
     let out = turned((0, -65536));
     let luma = |gx: i64, gy: i64| ((gx + 3 * gy) % 251) as u8;
@@ -1022,6 +1202,7 @@ fn off_the_grid_the_frame_is_land() {
         rows: 2,
         side: 256,
         land: (7, 8, 9),
+        swapped: false,
     };
     let mut out = vec![0u8; 64 * 32 * 3 / 2];
     // Around grid (256, 256): three quarters missing tiles, and beyond.
@@ -1078,6 +1259,7 @@ fn at_any_angle_every_pixel_is_the_one_under_it() {
         rows: 2,
         side: 256,
         land: (7, 8, 9),
+        swapped: false,
     };
     let sample = |gx: i64, gy: i64, chroma: bool| -> [u8; 2] {
         if !(0..512).contains(&gx) || !(0..512).contains(&gy) {
@@ -1217,6 +1399,7 @@ fn heading_up_cost() {
         rows: 4,
         side: 256,
         land: (1, 2, 3),
+        swapped: false,
     };
     let (w, h, pitch) = (800u32, 480u32, 800usize);
     let chroma = pitch * h as usize;
@@ -1941,9 +2124,46 @@ fn turn_bench() {
             );
             coarse = coarse.min(t.elapsed().as_secs_f64() * 1000.0);
         }
+        // As the map does it: from swapped tiles when on its side.
+        let mut chosen = f64::MAX;
+        let mut swapped = false;
+        for _ in 0..4 {
+            let grid = tiles.grid_for(zoom, (tx0, ty0), 7, 7, across);
+            swapped = grid.swapped;
+            let t = Instant::now();
+            nv12::rotate(
+                &grid,
+                &mut out,
+                pitch,
+                chroma,
+                (w, hgt),
+                origin,
+                anchor,
+                across,
+                down,
+            );
+            chosen = chosen.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
         println!(
-            "rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms, {coarse:.1} with coarse colour (by block{by_block})"
+            "rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms, {chosen:.1} as the map does it{}, {coarse:.1} with coarse colour (by block{by_block})",
+            if swapped { " (swapped tiles)" } else { "" }
         );
+    }
+    // A tile swapped: the 49 of the grid, one after the other.
+    {
+        let grid = tiles.grid(zoom, (tx0, ty0), 7, 7);
+        let mut swapped = vec![0u8; crate::tiles::TILE_BYTES];
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = Instant::now();
+            let mut n = 0;
+            for tile in grid.tiles.iter().flatten() {
+                nv12::swap_tile(tile, &mut swapped);
+                n += 1;
+            }
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0 / f64::from(n.max(1)));
+        }
+        println!("a tile swapped: {best:.2} ms");
     }
     // A route: a serpentine across the frame, `n` points, in 1/16 px.
     for (n, amp) in [(100usize, 150.0f64), (400, 150.0), (400, 2000.0)] {

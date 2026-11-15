@@ -959,6 +959,77 @@ pub struct Grid<'a> {
     pub side: usize,
     /// The land colour, for outside the tiles: luma, Cb, Cr.
     pub land: (u8, u8, u8),
+    /// The grid is laid out with its rows and columns swapped, and so is
+    /// each tile (`swap_tile`): the tile of column c and row r is at row
+    /// c and column r, `cols` and `rows` counted that way. The same
+    /// picture, for a frame whose rows run down the tiles (`rotate`).
+    pub swapped: bool,
+}
+
+impl Grid<'_> {
+    /// A grid point or step as the grid is laid out.
+    fn laid(&self, v: (i64, i64)) -> (i64, i64) {
+        if self.swapped { (v.1, v.0) } else { v }
+    }
+
+    /// The block of columns for a step `across` the picture
+    /// (`block_for`).
+    fn block(&self, across: (i64, i64)) -> usize {
+        block_for(self.laid(across))
+    }
+}
+
+/// An NV12 tile of 256 pixels a side with its rows and columns swapped:
+/// the sample at (x, y) of `src` at (y, x) of `dst`, the luma and the
+/// chroma's pairs alike (a pair is for two by two pixels, so it swaps as
+/// one). For a frame turned onto its side, whose rows would run down the
+/// tile's: they run along the swapped tile's, where the next sample is
+/// the next byte and not a row of 256 further on (`block_for`).
+///
+/// Sixteen of the tile's rows at a time, 64 bytes of each: two lines of
+/// the cache from each, read once and whole, and no more rows than the
+/// cache holds in the sets rows 256 bytes apart share (64 rows at a time
+/// take 7 ms, all 256 take 22). Four samples to a word written. On the
+/// F1C200s a tile takes 2.7 ms, where copying it takes 1.
+pub fn swap_tile(src: &[u8], dst: &mut [u8]) {
+    const S: usize = 256;
+    let (Some(src), Some(dst)) = (src.get(..S * S * 3 / 2), dst.get_mut(..S * S * 3 / 2)) else {
+        return;
+    };
+    let (sy, sc) = src.split_at(S * S);
+    let (dy, dc) = dst.split_at_mut(S * S);
+    let sy: &[u8; S * S] = sy.try_into().expect("a tile's luma");
+    let sc: &[u8; S * S / 2] = sc.try_into().expect("a tile's chroma");
+    // The luma: `dst`'s rows r (the tile's columns), its columns c (the
+    // tile's rows).
+    for r0 in (0..S).step_by(64) {
+        for c0 in (0..S).step_by(16) {
+            for r in r0..r0 + 64 {
+                let Some(out) = dy.get_mut(r * S + c0..r * S + c0 + 16) else {
+                    return;
+                };
+                for (i, four) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let at = |k: usize| sy[(((c0 + 4 * i + k) << 8) | r) & 0xffff];
+                    *four = [at(0), at(1), at(2), at(3)];
+                }
+            }
+        }
+    }
+    // The chroma: 128 rows of 128 pairs, a word two pairs.
+    for r0 in (0..S / 2).step_by(16) {
+        for c0 in (0..S / 2).step_by(16) {
+            for r in r0..r0 + 16 {
+                let Some(out) = dc.get_mut(r * S + 2 * c0..r * S + 2 * c0 + 32) else {
+                    return;
+                };
+                for (i, four) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let at = |k: usize| (((c0 + 2 * i + k) << 8) | (2 * r)) & 0x7ffe;
+                    let (a, b) = (at(0), at(1));
+                    *four = [sc[a], sc[a + 1], sc[b], sc[b + 1]];
+                }
+            }
+        }
+    }
 }
 
 /// The widest block of columns turned at once (`block_for`).
@@ -1022,7 +1093,9 @@ fn block_for(across: (i64, i64)) -> usize {
 /// or upside down, 23 at 45 degrees and 25 to 27 on its side (22, 24 and
 /// 31 before the block followed the angle). Some 7 ms of it is memory,
 /// which no loop gets under: 21 000 cache lines of tiles read, and the
-/// frame's 684 KB written.
+/// frame's 684 KB written. On its side the map is turned from swapped
+/// tiles instead (`Grid::swapped`, `Tiles::grid_for`), which is the
+/// upright case again: 45 degrees is then the slowest there is.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn rotate(
@@ -1046,7 +1119,7 @@ pub fn rotate(
         anchor,
         across,
         down,
-        block_for(across),
+        grid.block(across),
         Colour::Whole,
     );
 }
@@ -1076,7 +1149,7 @@ pub fn rotate_with(
         anchor,
         across,
         down,
-        block_for(across),
+        grid.block(across),
         colour,
     );
 }
@@ -1109,6 +1182,8 @@ pub(crate) fn rotate_blocks(
     colour: Colour,
 ) {
     debug_assert_eq!(grid.side, 256, "the tiles are found by shifting");
+    // A swapped grid is sampled at the swapped point: the same sample.
+    let (origin, across, down) = (grid.laid(origin), grid.laid(across), grid.laid(down));
     let block = (block & !3).clamp(4, BLOCK_MAX);
     let (w, h) = (width as usize, height as usize);
     let rows = Rows {

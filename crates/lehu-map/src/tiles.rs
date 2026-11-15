@@ -8,6 +8,7 @@
 //! one; a tile it refuses, and every tile without it, decodes in software.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::hw::{HwError, HwJpeg};
 use crate::nv12;
@@ -34,6 +35,18 @@ pub const CACHED: usize = 96;
 /// Buffers of tiles let go kept for the next decoded, at most.
 const SPARE: usize = 8;
 
+/// Tiles kept a second time with their rows and columns swapped, at most
+/// (`Tiles::grid_for`): a turned frame's own, up to 36, and a few left
+/// behind it. More only while one frame wants more.
+const SWAPPED: usize = 40;
+
+/// Swapped tiles made for a frame that does not need them yet, at most: a
+/// fifth of the frame's own time, until they are all there.
+const SWAPPED_AHEAD: usize = 2;
+
+/// The swapped tiles are let go when no frame wanted them for this long.
+const SWAPPED_IDLE: Duration = Duration::from_secs(30);
+
 /// Tiles remembered as missing, besides: a few bytes each, kept apart so
 /// that a trip over empty land does not push decoded tiles out.
 const MISSING: usize = 256;
@@ -53,6 +66,9 @@ struct Entry {
     pixels: Option<Box<[u8]>>,
     /// How many times enlarged: 0 for a tile of the set.
     soft: u8,
+    /// The tile again, its rows and columns swapped (`nv12::swap_tile`),
+    /// while turned frames want it.
+    swapped: Option<Box<[u8]>>,
 }
 
 /// The decoded tiles, least recently used out first.
@@ -82,6 +98,11 @@ pub struct Tiles {
     pub software: u32,
     pub failed: u32,
     pub enlarged: u32,
+    /// Tiles swapped since the start, and frames turned from them.
+    pub swaps: u32,
+    pub swapped_frames: u32,
+    /// When a frame last wanted swapped tiles, or nearly did.
+    swap_wanted: Option<Instant>,
     /// How many enlargements deep `load` is now.
     depth: u8,
     /// Every tile a test picture instead (`LEHU_RANGE_TEST`): a grey ramp
@@ -112,6 +133,9 @@ impl Tiles {
             software: 0,
             failed: 0,
             enlarged: 0,
+            swaps: 0,
+            swapped_frames: 0,
+            swap_wanted: None,
             depth: 0,
             test_tile: None,
         }
@@ -139,6 +163,7 @@ impl Tiles {
                     used: 0,
                     pixels,
                     soft,
+                    swapped: None,
                 };
                 let kept = self.entries.iter().filter(|e| e.pixels.is_some()).count();
                 let full = if entry.pixels.is_some() {
@@ -157,10 +182,8 @@ impl Tiles {
                         .min_by_key(|(_, e)| e.used)
                         .map_or(0, |(i, _)| i);
                     let old = std::mem::replace(&mut self.entries[i], entry);
-                    if let Some(b) = old.pixels
-                        && self.spare.len() < SPARE
-                    {
-                        self.spare.push(b);
+                    for b in [old.pixels, old.swapped].into_iter().flatten() {
+                        self.spared(b);
                     }
                     i
                 } else {
@@ -265,6 +288,13 @@ impl Tiles {
             .unwrap_or_else(|| vec![0u8; TILE_BYTES].into_boxed_slice())
     }
 
+    /// A buffer let go, kept for the next tile if there is room.
+    fn spared(&mut self, buffer: Box<[u8]>) {
+        if self.spare.len() < SPARE {
+            self.spare.push(buffer);
+        }
+    }
+
     /// Tile `key` is kept decoded (or known missing).
     pub fn kept(&self, key: (u8, i64, i64)) -> bool {
         self.entries.iter().any(|e| e.key == key)
@@ -329,6 +359,8 @@ impl Tiles {
     /// decoded, land where there is none. Written row by row, never read:
     /// `dst` may be write-combined memory.
     pub fn compose(&mut self, layout: &Layout, dst: &mut [u8], pitch: usize, chroma: usize) {
+        // A canvas is north up: no frame is turned now.
+        self.drop_swapped();
         let (luma, croma) = dst.split_at_mut(chroma.min(dst.len()));
         for (c, r) in order(layout) {
             let (x, y) = (layout.tx + i64::from(c), layout.ty + i64::from(r));
@@ -362,7 +394,9 @@ impl Tiles {
 
 impl Tiles {
     /// The tiles of `zoom` from (`tx`, `ty`), `cols` x `rows`, decoded
-    /// where they are not kept, for a rotated frame.
+    /// where they are not kept, for a rotated frame: as they are, at
+    /// whatever angle (the tests' measure of `grid_for`).
+    #[cfg(test)]
     pub fn grid(
         &mut self,
         zoom: u8,
@@ -370,6 +404,142 @@ impl Tiles {
         cols: usize,
         rows: usize,
     ) -> nv12::Grid<'_> {
+        let slots = self.held(zoom, (tx, ty), cols, rows);
+        self.upright(&slots, cols, rows)
+    }
+
+    /// `grid` for a frame whose pixels step `across` the tiles: laid out
+    /// swapped, of swapped tiles, when the step runs down the tiles' rows
+    /// more than along them. The picture is the same either way, the
+    /// frame a third quicker turned (`nv12::block_for`).
+    ///
+    /// A tile is swapped when a frame first wants it so (2.7 ms on the
+    /// F1C200s), and a few ahead of that once the step is past 27 degrees
+    /// from the rows, so that a map turning onto its side has them all
+    /// when it gets there. Let go when frames have been upright for a
+    /// while.
+    pub fn grid_for(
+        &mut self,
+        zoom: u8,
+        (tx, ty): (i64, i64),
+        cols: usize,
+        rows: usize,
+        across: (i64, i64),
+    ) -> nv12::Grid<'_> {
+        let before = self.clock;
+        let slots = self.held(zoom, (tx, ty), cols, rows);
+        let (along, down) = (across.0.abs(), across.1.abs());
+        let (steep, near) = (down > along, 2 * down > along);
+        if !near {
+            if self
+                .swap_wanted
+                .is_some_and(|t| t.elapsed() >= SWAPPED_IDLE)
+            {
+                self.drop_swapped();
+            }
+            return self.upright(&slots, cols, rows);
+        }
+        self.swap_wanted = Some(Instant::now());
+        let mut left = if steep { usize::MAX } else { SWAPPED_AHEAD };
+        for &i in slots.iter().flatten() {
+            if left == 0 {
+                break;
+            }
+            if self.swap(i) {
+                left -= 1;
+            }
+        }
+        // Over the limit: those no frame used the longest go, this
+        // frame's own never.
+        let mut kept = self.entries.iter().filter(|e| e.swapped.is_some()).count();
+        while kept > SWAPPED {
+            let oldest = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.swapped.is_some() && e.used <= before)
+                .min_by_key(|(_, e)| e.used)
+                .map(|(i, _)| i);
+            let Some(i) = oldest else {
+                break;
+            };
+            if let Some(b) = self.entries[i].swapped.take() {
+                self.spared(b);
+            }
+            kept -= 1;
+        }
+        if !steep {
+            return self.upright(&slots, cols, rows);
+        }
+        self.swapped_frames += 1;
+        let (y, cb, cr) = self.land();
+        // Row by row of the swapped grid: `rows` across, `cols` down.
+        let tiles = (0..cols)
+            .flat_map(|c| (0..rows).map(move |r| r * cols + c))
+            .map(|at| slots[at].and_then(|i| self.entries[i].swapped.as_deref()))
+            .collect();
+        nv12::Grid {
+            tiles,
+            cols: rows,
+            rows: cols,
+            side: SIDE,
+            land: (y, cb, cr),
+            swapped: true,
+        }
+    }
+
+    /// Tile `key` swapped too, if frames wanted swapped tiles of late and
+    /// there is room: for a tile decoded ahead (`prefetch`). True when
+    /// something was done.
+    pub fn swap_ahead(&mut self, key: (u8, i64, i64)) -> bool {
+        if self.swap_wanted.is_none_or(|t| t.elapsed() >= SWAPPED_IDLE)
+            || self.entries.iter().filter(|e| e.swapped.is_some()).count() >= SWAPPED
+        {
+            return false;
+        }
+        match self.entries.iter().position(|e| e.key == key) {
+            Some(i) => self.swap(i),
+            None => false,
+        }
+    }
+
+    /// The tile of slot `i` swapped too, if it is not: true when it was
+    /// made now.
+    fn swap(&mut self, i: usize) -> bool {
+        if self.entries[i].swapped.is_some() || self.entries[i].pixels.is_none() {
+            return false;
+        }
+        let mut out = self.buffer();
+        if let Some(src) = self.entries[i].pixels.as_deref() {
+            nv12::swap_tile(src, &mut out);
+        }
+        self.entries[i].swapped = Some(out);
+        self.swaps += 1;
+        true
+    }
+
+    /// Every swapped tile let go.
+    fn drop_swapped(&mut self) {
+        if self.swap_wanted.take().is_none() {
+            return;
+        }
+        for i in 0..self.entries.len() {
+            if let Some(b) = self.entries[i].swapped.take() {
+                self.spared(b);
+            }
+        }
+    }
+
+    /// The slots of the tiles of `zoom` from (`tx`, `ty`), `cols` x
+    /// `rows`, row by row, each decoded if it is not kept; None outside
+    /// the world.
+    fn held(
+        &mut self,
+        zoom: u8,
+        (tx, ty): (i64, i64),
+        cols: usize,
+        rows: usize,
+    ) -> Vec<Option<usize>> {
         let keys: Vec<Option<Key>> = (0..rows as i64)
             .flat_map(|r| (0..cols as i64).map(move |c| (tx + c, ty + r)))
             .map(|(x, y)| inside(zoom, x, y).then_some((zoom, x, y)))
@@ -392,6 +562,11 @@ impl Tiles {
                 break;
             }
         }
+        slots
+    }
+
+    /// The grid of the tiles in `slots`, as they are.
+    fn upright(&self, slots: &[Option<usize>], cols: usize, rows: usize) -> nv12::Grid<'_> {
         let (y, cb, cr) = self.land();
         nv12::Grid {
             tiles: slots
@@ -402,6 +577,7 @@ impl Tiles {
             rows,
             side: SIDE,
             land: (y, cb, cr),
+            swapped: false,
         }
     }
 

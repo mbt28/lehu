@@ -617,7 +617,7 @@ it, and the map is turned anew when the heading has changed by most of a
 degree, the road ahead runs out, or the route's driven part falls behind
 the arrow. The display cannot rotate, so between two turned frames the
 map only slides, and the pace of the frames is what makes a bend smooth.
-On the F1C200s the turning takes 18 to 27 ms (see below), so a frame is
+On the F1C200s the turning takes 17 to 23 ms (see below), so a frame is
 drawn on a thread of its own, below the pictures shown, for the way up predicted at
 the moment it will be on the panel; meanwhile the frame shown keeps
 moving, and only the newest frame is ever shown, so a turn never swings
@@ -636,7 +636,18 @@ rows run along the tiles' rows, where fewer lines are read twice at the
 blocks' edges; narrow (32 pixels) when they run down the tiles, whose rows
 are 256 bytes apart and would otherwise push each other out of the cache.
 A frame of 864 x 528 then takes 18 ms with the map upright or upside
-down, 23 at 45 degrees and 25 to 27 on its side. While it turns, the SD
+down, 23 at 45 degrees and 24 to 26 on its side.
+
+So on its side the map is not turned from the tiles as they are. A tile
+kept a second time with its rows and columns swapped gives the same
+picture, sample for sample, when it is read the other way round, and a
+frame whose rows run down the tiles runs along the swapped ones: the
+upright case again. The frame is then 17 to 19 ms on its side and 20.5 at
+60 degrees, and 45 degrees, at 23, is the slowest there is. Swapping a
+tile takes 2.7 ms, once: two a frame from 27 degrees on, so that they are
+all there when the map passes 45, and any still missing then. Up to 40
+swapped tiles are kept (3.7 MB), and let go when the map has been upright
+for half a minute or is shown north up. While it turns, the SD
 card is not read: the tiles are kept decoded, 96 of them, and the card is
 read only for a tile that is not among them.
 
@@ -646,8 +657,8 @@ turning stops. Measured turning by itself at 20 to 40 degrees a second:
 
 | While turning | A frame of a turn | What it costs the picture |
 |---|---|---|
-| Sharp | 27 ms, 22 a second | nothing: whole frames |
-| Soft colour | 24.5 ms, 24 a second | the colour is a sample for four by four pixels; the brightness is whole |
+| Sharp | 25 ms, 24 a second | nothing: whole frames |
+| Soft colour | about 2.5 ms less | the colour is a sample for four by four pixels; the brightness is whole |
 | Half | 8.5 ms (4.3 in a corner), every refresh | half the resolution (a quarter in a corner) scaled up by the display, from the tiles a zoom out, without the names | A change of zoom is shown by the display's scaler, the frame shown
 enlarged or shrunk smoothly about the arrow while the new one is drawn.
 The arrow is on a display plane of its own above the map, so the map
@@ -713,7 +724,8 @@ the video plane). The pictures here were taken that way.
 and a U-turn to test the turning with. The turning loop alone is timed by
 the map crate's `turn_bench` test (`LEHU_MAP_DIR=<region> cargo test -p
 lehu-map turn_bench -- --ignored --nocapture`, cross-built for the board),
-which also says what each block width would take at each angle.
+which also says what each block width would take at each angle, and
+what swapping a tile takes.
 
 ## Night from the day tiles
 
