@@ -122,6 +122,9 @@ struct Inner {
     stop: bool,
     /// A picture is on the plane.
     shown: bool,
+    /// The spin test ended a pass: the frames' cost so far is said under
+    /// this name, and counted anew.
+    lap: Option<String>,
 }
 
 struct Shared {
@@ -226,6 +229,7 @@ impl Viewer {
                 lead: 0,
                 stop: false,
                 shown: false,
+                lap: None,
             }),
             wake: Condvar::new(),
             drive_wake: Condvar::new(),
@@ -562,6 +566,8 @@ fn drive(shared: &Shared, display: &Display) {
     // Refreshes to the next look: one while the map moves (as fast as the
     // panel shows), a few while it stands still.
     let mut every = 1;
+    // LEHU_MAP_SPIN: without a drive, the map turns by itself.
+    let mut spin = Spin::from_env();
     loop {
         let drive = {
             let mut inner = shared.lock();
@@ -570,7 +576,10 @@ fn drive(shared: &Shared, display: &Display) {
                     return;
                 }
                 if let Some(d) = &inner.drive {
-                    break d.clone();
+                    break Some(d.clone());
+                }
+                if spin.is_some() {
+                    break None;
                 }
                 (last, next, seen) = (None, None, None);
                 speed_zoom = SpeedZoom::default();
@@ -619,6 +628,26 @@ fn drive(shared: &Shared, display: &Display) {
                 next = None;
                 Instant::now()
             }
+        };
+        let Some(drive) = drive else {
+            // The spin test: the way up alone, the view where it is.
+            every = 1;
+            if let Some(s) = spin.as_mut() {
+                let mut inner = shared.lock();
+                let by = inner.turn_ms.clamp(16, 200) + period.as_millis() as u64;
+                let (up, soon, dps, lap) = s.step(now, Duration::from_millis(by));
+                inner.turning = dps;
+                inner.next_refresh = Some(now);
+                inner.heading_soon = Some(soon);
+                if lap.is_some() {
+                    inner.lap = lap;
+                }
+                if inner.heading != Some(up) || inner.lap.is_some() {
+                    inner.heading = Some(up);
+                    shared.wake.notify_one();
+                }
+            }
+            continue;
         };
         let ms = now.saturating_duration_since(drive.start).as_millis() as u64;
         let fix = drive.track.at(ms);
@@ -689,6 +718,87 @@ fn drive(shared: &Shared, display: &Display) {
     }
 }
 
+/// The spin test (`LEHU_MAP_SPIN`, degrees a second, several with commas
+/// between): with no drive, the map turns about the view's point by
+/// itself, a whole turn clockwise on the panel and a whole turn back at
+/// each rate, over and over, and the frames' cost is said after each
+/// turn. To measure the turning with nothing else moving.
+struct Spin {
+    rates: Vec<f64>,
+    /// The pass under way: its number (two a rate) and when it began.
+    pass: usize,
+    began: Option<Instant>,
+}
+
+impl Spin {
+    fn from_env() -> Option<Self> {
+        let v = std::env::var("LEHU_MAP_SPIN").ok()?;
+        let rates: Vec<f64> = v
+            .split(',')
+            .filter_map(|r| r.trim().parse().ok())
+            .filter(|r: &f64| (0.5..=360.0).contains(r))
+            .collect();
+        if rates.is_empty() {
+            log::warn!("map: LEHU_MAP_SPIN={v}: no rate between 0.5 and 360 degrees a second");
+            return None;
+        }
+        log::info!("map: spin test at {rates:?} degrees a second, while there is no drive");
+        Some(Self {
+            rates,
+            pass: 0,
+            began: None,
+        })
+    }
+
+    /// The pass's rate, and its sense: the map clockwise on the panel
+    /// (the way up turning left) on the even passes.
+    fn rate(&self) -> (f64, bool) {
+        (
+            self.rates[(self.pass / 2) % self.rates.len()],
+            self.pass.is_multiple_of(2),
+        )
+    }
+
+    /// The way up at `t` seconds into a pass: from north round and back.
+    fn up(&self, t: f64) -> (i32, i32) {
+        let (rate, clockwise) = self.rate();
+        let turned = (rate * t).min(360.0);
+        // Clockwise on the panel: the way up goes left, from 360 down.
+        let bearing = if clockwise { 360.0 - turned } else { turned };
+        let r = bearing.to_radians();
+        ((r.sin() * 65536.0) as i32, (-r.cos() * 65536.0) as i32)
+    }
+
+    /// At `now`: the way up, the way up `ahead` later, how fast it turns
+    /// (degrees a second, signed), and the name of a pass just ended.
+    fn step(
+        &mut self,
+        now: Instant,
+        ahead: Duration,
+    ) -> ((i32, i32), (i32, i32), f64, Option<String>) {
+        let began = *self.began.get_or_insert(now);
+        let mut t = now.saturating_duration_since(began).as_secs_f64();
+        let (rate, clockwise) = self.rate();
+        let mut lap = None;
+        if t * rate >= 360.0 {
+            lap = Some(format!(
+                "spin {} at {rate} deg/s",
+                if clockwise {
+                    "clockwise"
+                } else {
+                    "counter-clockwise"
+                }
+            ));
+            self.pass += 1;
+            self.began = Some(now);
+            t = 0.0;
+        }
+        let (rate, clockwise) = self.rate();
+        let dps = if clockwise { -rate } else { rate };
+        (self.up(t), self.up(t + ahead.as_secs_f64()), dps, lap)
+    }
+}
+
 /// The monotonic clock, as the kernel stamps refreshes with it.
 fn monotonic() -> Duration {
     let mut t = libc::timespec {
@@ -740,6 +850,7 @@ fn run(
     let mut turns_drawn: u64 = 0;
     let mut last_turn: Option<Instant> = None;
     let mut up_stats = UpStats::new();
+    up_stats.laps = std::env::var_os("LEHU_MAP_SPIN").is_some();
     // A sprite canvas the driver would not show, kept to be freed.
     let mut retired: Vec<Canvas> = Vec::new();
     let mut heading: Option<(i32, i32)> = None;
@@ -811,6 +922,9 @@ fn run(
                 }
                 heading_soon = inner.heading_soon;
                 turning = inner.turning;
+                if let Some(name) = inner.lap.take() {
+                    up_stats.report(&name);
+                }
                 if inner.heading != heading {
                     heading = inner.heading.filter(|_| !ups.is_empty());
                     shown = None;
@@ -2026,6 +2140,8 @@ struct UpStats {
     blind_zoom: u32,
     /// Turned at half the resolution.
     halves: u32,
+    /// Said a pass of the spin test at a time, not every so often.
+    laps: bool,
     last_shown: Option<Instant>,
     since: Instant,
 }
@@ -2051,6 +2167,7 @@ impl UpStats {
             blind: 0,
             blind_zoom: 0,
             halves: 0,
+            laps: false,
             last_shown: None,
             since: Instant::now(),
         }
@@ -2080,28 +2197,35 @@ impl UpStats {
 
     fn frame(&mut self) {
         self.frames += 1;
-        if self.since.elapsed() >= UP_STATS_EVERY {
-            let each = |d: Duration| d.as_millis() / u128::from(self.turned.max(1));
-            log::info!(
-                "map: {} frames heading up in {} s, {} turned ({} at reduced resolution), {} ms each ({} tiles, {} turning, {} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
-                self.frames,
-                self.since.elapsed().as_secs(),
-                self.turned,
-                self.halves,
-                each(self.took),
-                each(self.cost.tiles),
-                each(self.cost.rotate),
-                each(self.cost.draw),
-                self.most.as_millis(),
-                self.late,
-                self.gap_most.as_millis(),
-                self.blind,
-                self.blind_zoom
-            );
-            let last = self.last_shown;
-            *self = Self::new();
-            self.last_shown = last;
+        // The spin test says its own, a pass at a time.
+        if !self.laps && self.since.elapsed() >= UP_STATS_EVERY {
+            self.report("heading up");
         }
+    }
+
+    /// Say what the frames cost since the last time, under `what`, and
+    /// count anew. The parts in tenths of a millisecond.
+    fn report(&mut self, what: &str) {
+        let each = |d: Duration| d.as_micros() as f64 / 1000.0 / f64::from(self.turned.max(1));
+        log::info!(
+            "map: {what}: {} frames in {:.1} s, {} turned ({} at reduced resolution), {:.1} ms each ({:.1} tiles, {:.1} turning, {:.1} drawing over), {} ms at most; {} gaps over {LATE_MS} ms, {} ms the longest; {} turned with nothing shown meanwhile, {} of them for another zoom",
+            self.frames,
+            self.since.elapsed().as_secs_f64(),
+            self.turned,
+            self.halves,
+            each(self.took),
+            each(self.cost.tiles),
+            each(self.cost.rotate),
+            each(self.cost.draw),
+            self.most.as_millis(),
+            self.late,
+            self.gap_most.as_millis(),
+            self.blind,
+            self.blind_zoom
+        );
+        let (last, laps) = (self.last_shown, self.laps);
+        *self = Self::new();
+        (self.last_shown, self.laps) = (last, laps);
     }
 }
 
@@ -2631,6 +2755,33 @@ fn compose_free(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spin_test_turns_the_map_round_and_back() {
+        let mut spin = Spin {
+            rates: vec![90.0, 45.0],
+            pass: 0,
+            began: None,
+        };
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // North up at first; clockwise on the panel is the way up going
+        // left: a quarter turn on, west is up.
+        let (up, soon, dps, lap) = spin.step(at(0), Duration::from_millis(1000));
+        assert_eq!((up, lap), ((0, -65536), None));
+        assert!(soon.0 < -65000 && soon.1.abs() < 100, "{soon:?}");
+        assert_eq!(dps, -90.0);
+        // The whole turn done: the pass is named, and it turns back.
+        let (up, _, dps, lap) = spin.step(at(4000), Duration::ZERO);
+        assert_eq!(lap.as_deref(), Some("spin clockwise at 90 deg/s"));
+        assert_eq!((up, dps), ((0, -65536), 90.0));
+        let (up, ..) = spin.step(at(5000), Duration::ZERO);
+        assert!(up.0 > 65000 && up.1.abs() < 100, "east up: {up:?}");
+        // Then the next rate, clockwise again.
+        let (_, _, dps, lap) = spin.step(at(8000), Duration::ZERO);
+        assert_eq!(lap.as_deref(), Some("spin counter-clockwise at 90 deg/s"));
+        assert_eq!(dps, -45.0);
+    }
 
     const PANEL: (u32, u32) = (800, 480);
     const SIZE: (u32, u32) = (PANEL.0 + 2 * UP_SIDE, PANEL.1 + UP_ROOM);

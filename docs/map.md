@@ -617,14 +617,28 @@ it, and the map is turned anew when the heading has changed by most of a
 degree, the road ahead runs out, or the route's driven part falls behind
 the arrow. The display cannot rotate, so between two turned frames the
 map only slides, and the pace of the frames is what makes a bend smooth.
-On the F1C200s the turning takes 22 to 32 ms, so a frame is drawn on a
-thread of its own, below the pictures shown, for the way up predicted at
+On the F1C200s the turning takes 18 to 27 ms (see below), so a frame is
+drawn on a thread of its own, below the pictures shown, for the way up predicted at
 the moment it will be on the panel; meanwhile the frame shown keeps
 moving, and only the newest frame is ever shown, so a turn never swings
 back. While steering, only the window and a little each side are drawn,
 and in a corner the names are left out. On the board a turned frame comes
 every 35 to 45 ms, a step of under two degrees at the most the way up
-turns. A change of zoom is shown by the display's scaler, the frame shown
+turns.
+
+What the turning costs is mostly memory. The F1C200s's data cache is 16 KB
+and a line of it read from memory costs 250 ns, the time of two hundred
+instructions; a turned frame reads 21 000 lines of tiles at the least and
+writes 684 KB, which is 7 ms before any sample is looked up. So the frame
+is made a block of columns at a time, each row under the last, and the
+block's width follows the angle: wide (256 pixels) while the picture's
+rows run along the tiles' rows, where fewer lines are read twice at the
+blocks' edges; narrow (32 pixels) when they run down the tiles, whose rows
+are 256 bytes apart and would otherwise push each other out of the cache.
+A frame of 864 x 528 then takes 18 ms with the map upright or upside
+down, 23 at 45 degrees and 25 to 27 on its side. While it turns, the SD
+card is not read: the tiles are kept decoded, 96 of them, and the card is
+read only for a tile that is not among them. A change of zoom is shown by the display's scaler, the frame shown
 enlarged or shrunk smoothly about the arrow while the new one is drawn.
 The arrow is on a display plane of its own above the map, so the map
 moves under it without being redrawn. Where the display has a hardware
@@ -678,12 +692,18 @@ turned frame, how long it took and how far off the way up it landed;
 `LEHU_RANGE_TEST=full|limited|scale` shows a test picture at either
 colour range, or holds the map at twice its size, to check the display's
 conversion by eye; `LEHU_MAP_CURSOR=0` keeps the arrow off the hardware
-cursor, which the mouse pointer still uses; and `LEHU_SHOT_DIR=DIR` writes what the panel shows,
-map, arrow and screens, to DIR whenever a file `take` appears there,
+cursor, which the mouse pointer still uses; `LEHU_MAP_SPIN=10,20,40`
+turns the map by itself while there is no position, a whole turn
+clockwise and one back at each rate (degrees a second), and logs what
+the frames of each cost; and `LEHU_SHOT_DIR=DIR` writes what the panel
+shows, map, arrow and screens, to DIR whenever a file `take` appears there,
 which `scripts/map-shot.py` composes into a PNG (no screenshot tool reads
 the video plane). The pictures here were taken that way.
 `scripts/rotation-gpx.py` makes a drive of straights, corners, S-bends
-and a U-turn to test the turning with.
+and a U-turn to test the turning with. The turning loop alone is timed by
+the map crate's `turn_bench` test (`LEHU_MAP_DIR=<region> cargo test -p
+lehu-map turn_bench -- --ignored --nocapture`, cross-built for the board),
+which also says what each block width would take at each angle.
 
 ## Night from the day tiles
 

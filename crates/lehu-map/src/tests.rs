@@ -816,6 +816,149 @@ fn turned(up: (i64, i64)) -> Vec<u8> {
     out
 }
 
+/// A turned frame one sample at a time, by `rotate`'s definition: what
+/// its blocks, runs and words must add up to.
+#[allow(clippy::too_many_arguments)]
+fn turned_plainly(
+    grid: &nv12::Grid<'_>,
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    (w, h): (u32, u32),
+    origin: (i64, i64),
+    (ax, ay): (i64, i64),
+    across: (i64, i64),
+    down: (i64, i64),
+) {
+    let at = |u: i64, v: i64| {
+        (
+            (origin.0 + (u - ax) * across.0 + (v - ay) * down.0) as u32,
+            (origin.1 + (u - ax) * across.1 + (v - ay) * down.1) as u32,
+        )
+    };
+    let tile = |gx: u32, gy: u32| {
+        if gx as usize >= grid.cols * 256 || gy as usize >= grid.rows * 256 {
+            return None;
+        }
+        grid.tiles[(gy >> 8) as usize * grid.cols + (gx >> 8) as usize]
+    };
+    for v in 0..h as usize {
+        for u in 0..w as usize {
+            let (x, y) = at(u as i64, v as i64);
+            let (gx, gy) = (x >> 16, y >> 16);
+            dst[v * pitch + u] = tile(gx, gy).map_or(grid.land.0, |t| {
+                t[(((gy & 255) << 8) | (gx & 255)) as usize]
+            });
+        }
+    }
+    for cv in 0..h as usize / 2 {
+        for cu in 0..w as usize / 2 {
+            let (x, y) = at(2 * cu as i64, 2 * cv as i64);
+            let x = x.wrapping_add(((across.0 + down.0) / 2) as u32);
+            let y = y.wrapping_add(((across.1 + down.1) / 2) as u32);
+            let (gx, gy) = (x >> 16, y >> 16);
+            let pair = tile(gx, gy).map_or([grid.land.1, grid.land.2], |t| {
+                let i = 65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
+                [t[i], t[i + 1]]
+            });
+            dst[chroma + cv * pitch + 2 * cu..][..2].copy_from_slice(&pair);
+        }
+    }
+}
+
+#[test]
+fn a_frame_turned_in_blocks_and_words_is_the_frame_turned_plainly() {
+    // Tiles that differ at every pixel, in luma and in chroma; one missing.
+    let tiles: Vec<Vec<u8>> = (0..9u32)
+        .map(|t| {
+            (0..98304u32)
+                .map(|i| (i.wrapping_mul(2654435761).wrapping_add(t * 977) >> 13) as u8)
+                .collect()
+        })
+        .collect();
+    let mut grid = nv12::Grid {
+        tiles: tiles.iter().map(|t| Some(t.as_slice())).collect(),
+        cols: 3,
+        rows: 3,
+        side: 256,
+        land: (7, 99, 201),
+    };
+    grid.tiles[5] = None;
+    // Widths that are and are not whole words and blocks; rows that are
+    // and are not words apart; the picture on and off a word's address.
+    for &((w, h), pitch, offset) in &[
+        ((150u32, 38u32), 152usize, 0usize),
+        ((150, 38), 151, 0),
+        ((128, 30), 128, 1),
+        ((67, 21), 68, 2),
+        ((200, 64), 200, 0),
+    ] {
+        let chroma = pitch * h as usize;
+        let len = chroma + pitch * h as usize / 2;
+        for degrees in [0.0f64, 7.0, 33.0, 45.0, 90.0, 123.0, 180.0, 271.0, 359.5] {
+            for scale in [65536.0, 131072.0, 40000.0] {
+                let r = degrees.to_radians();
+                let up = ((r.sin() * scale) as i64, (-r.cos() * scale) as i64);
+                let (across, down) = ((-up.1, up.0), (-up.0, -up.1));
+                let origin = (390 << 16, (350 << 16) + 12345);
+                let anchor = (i64::from(w) / 2, i64::from(h) * 2 / 3);
+                let mut plain = vec![0u8; len];
+                turned_plainly(
+                    &grid,
+                    &mut plain,
+                    pitch,
+                    chroma,
+                    (w, h),
+                    origin,
+                    anchor,
+                    across,
+                    down,
+                );
+                for block in [256usize, 128, 96, 64, 48, 32, 8] {
+                    // The words' alignment is the allocation's, so the
+                    // offset moves the picture off it.
+                    let mut words = vec![0u32; (len + offset).div_ceil(4) + 1];
+                    // SAFETY: the words' own bytes, all of them.
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            words.as_mut_ptr().cast::<u8>(),
+                            words.len() * 4,
+                        )
+                    };
+                    nv12::rotate_blocks(
+                        &grid,
+                        &mut bytes[offset..offset + len],
+                        pitch,
+                        chroma,
+                        (w, h),
+                        origin,
+                        anchor,
+                        across,
+                        down,
+                        block,
+                    );
+                    let got = &bytes[offset..offset + len];
+                    // Rows are `pitch` apart: only the picture's own bytes.
+                    for v in 0..h as usize {
+                        assert_eq!(
+                            got[v * pitch..][..w as usize],
+                            plain[v * pitch..][..w as usize],
+                            "luma row {v}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block}"
+                        );
+                    }
+                    for cv in 0..h as usize / 2 {
+                        assert_eq!(
+                            got[chroma + cv * pitch..][..w as usize & !1],
+                            plain[chroma + cv * pitch..][..w as usize & !1],
+                            "chroma row {cv}: {w}x{h} pitch {pitch} at {degrees} deg x{scale}, block {block}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn heading_north_the_frame_is_the_map_as_it_lies() {
     let out = turned((0, -65536));
@@ -1702,7 +1845,9 @@ fn turn_bench() {
     let (tx0, ty0) = ((px >> 16) / TILE - 3, (py >> 16) / TILE - 3);
     // The tiles decoded first.
     let _ = tiles.grid(zoom, (tx0, ty0), 7, 7);
-    for degrees in [0.0f64, 10.0, 30.0, 45.0, 60.0, 90.0, 135.0] {
+    for degrees in [
+        0.0f64, 10.0, 20.0, 30.0, 45.0, 60.0, 75.0, 90.0, 135.0, 200.0, 270.0,
+    ] {
         let r = degrees.to_radians();
         let h = ((r.sin() * 65536.0) as i64, (-r.cos() * 65536.0) as i64);
         let (across, down) = ((-h.1, h.0), (-h.0, -h.1));
@@ -1724,7 +1869,30 @@ fn turn_bench() {
             );
             best = best.min(t.elapsed().as_secs_f64() * 1000.0);
         }
-        println!("rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms");
+        // And by the block's width, to choose it by (`nv12::block_for`).
+        let mut by_block = String::new();
+        for block in [32usize, 64, 96, 128, 192, 256] {
+            let mut b = f64::MAX;
+            for _ in 0..3 {
+                let grid = tiles.grid(zoom, (tx0, ty0), 7, 7);
+                let t = Instant::now();
+                nv12::rotate_blocks(
+                    &grid,
+                    &mut out,
+                    pitch,
+                    chroma,
+                    (w, hgt),
+                    origin,
+                    anchor,
+                    across,
+                    down,
+                    block,
+                );
+                b = b.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            by_block += &format!(" {block}: {b:.1}");
+        }
+        println!("rotate {w}x{hgt} at {degrees:>5.1} deg: {best:.1} ms (by block{by_block})");
     }
     // A route: a serpentine across the frame, `n` points, in 1/16 px.
     for (n, amp) in [(100usize, 150.0f64), (400, 150.0), (400, 2000.0)] {

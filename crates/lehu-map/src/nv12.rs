@@ -961,24 +961,98 @@ pub struct Grid<'a> {
     pub land: (u8, u8, u8),
 }
 
+/// The widest block of columns turned at once (`block_for`).
+const BLOCK_MAX: usize = 256;
+
+/// How many columns to turn at once, for a step `across` the picture: a
+/// block's rows are made one under the other, so the tiles' bytes a row
+/// reads are still in the cache for the next, and the block is as wide
+/// as that allows. Measured on the F1C200s, whose data cache is 16 KB in
+/// four ways of 128 lines of 32 bytes, where a line read from memory
+/// costs 250 ns, two hundred instructions:
+///
+/// - Wider is better while it fits: the lines at a block's two edges are
+///   read for a part of their bytes and read again for the block beside
+///   it, a line in three of a 64 pixel block and one in nine of a 256
+///   pixel one.
+/// - The steeper the step runs down the tiles, the less fits: a tile's
+///   rows are 256 bytes apart, which the cache maps onto 16 of its 128
+///   sets, so a row of the picture that crosses many of them wants more
+///   lines of those sets than their four ways hold, and they evict each
+///   other (on its side, a 256 pixel block takes 133 ms, a 32 pixel one
+///   25).
+///
+/// By the step's slope down the tiles, the widest block that was the
+/// quickest: 256 pixels up to 30 degrees from the tiles' rows, 192 to 40,
+/// 96 to 55, 64 to 62, then 32.
+fn block_for(across: (i64, i64)) -> usize {
+    let (along, down) = (across.0.abs(), across.1.abs());
+    if 7 * down <= 4 * along {
+        256
+    } else if 6 * down <= 5 * along {
+        192
+    } else if 7 * down <= 10 * along {
+        96
+    } else if 10 * down <= 19 * along {
+        64
+    } else {
+        32
+    }
+}
+
 /// A heading-up frame: each output pixel (u, v) of a `width` x `height`
 /// NV12 canvas samples the grid at
 ///   origin + (u - ax) * across + (v - ay) * down
 /// where `origin` is the grid point at the anchor (ax, ay), and `across`
 /// and `down` the grid steps of one output pixel right and down; all in
-/// 1/65536 grid pixels. Nearest sample. Written 64 columns at a time, so
-/// the grid's reads stay in the cache, and a row's bytes at once, so the
-/// output (write-combined memory) is written in bursts.
+/// 1/65536 grid pixels. Nearest sample. Written a block of columns at a
+/// time (`block_for`), so the grid's reads stay in the cache, and a row's
+/// words one after the other, so the output (write-combined memory) is
+/// written in bursts.
 ///
 /// The loop runs once a pixel, up to thirty frames a second while the map
 /// turns, on a CPU without a divide instruction, so it is written for it:
 /// 32-bit fixed point (a grid of up to 128 tiles a side fits), the tiles
-/// found by shifting, never by dividing; a run of 16 samples that lies in
-/// one tile indexes that tile alone, four samples to a word; a run across
-/// a tile's edge is split in four before any sample is looked up on its
-/// own.
+/// found by shifting, never by dividing; a row begins where the one above
+/// did plus `down`, by adding; a run of 32 samples that lies in one tile
+/// is looked up by a loop of its own (`luma_run`), unrolled, four samples
+/// to a word; a run across a tile's edge a word at a time.
+///
+/// On the F1C200s a frame of 864 x 528 takes 18 ms with the map upright
+/// or upside down, 23 at 45 degrees and 25 to 27 on its side (22, 24 and
+/// 31 before the block followed the angle). Some 7 ms of it is memory,
+/// which no loop gets under: 21 000 cache lines of tiles read, and the
+/// frame's 684 KB written.
 #[allow(clippy::too_many_arguments)]
 pub fn rotate(
+    grid: &Grid<'_>,
+    dst: &mut [u8],
+    pitch: usize,
+    chroma: usize,
+    size: (u32, u32),
+    origin: (i64, i64),
+    anchor: (i64, i64),
+    across: (i64, i64),
+    down: (i64, i64),
+) {
+    rotate_blocks(
+        grid,
+        dst,
+        pitch,
+        chroma,
+        size,
+        origin,
+        anchor,
+        across,
+        down,
+        block_for(across),
+    );
+}
+
+/// `rotate`, `block` columns at a time (a multiple of 4, `BLOCK_MAX` at
+/// most).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rotate_blocks(
     grid: &Grid<'_>,
     dst: &mut [u8],
     pitch: usize,
@@ -988,15 +1062,18 @@ pub fn rotate(
     (ax, ay): (i64, i64),
     across: (i64, i64),
     down: (i64, i64),
+    block: usize,
 ) {
-    const BLOCK: usize = 64;
-    // Samples looked up together, from one tile when they lie in one.
-    const SPAN: usize = 32;
     debug_assert_eq!(grid.side, 256, "the tiles are found by shifting");
+    let block = (block & !3).clamp(4, BLOCK_MAX);
     let (w, h) = (width as usize, height as usize);
-    let (gw, gh) = ((grid.cols * 256) as u32, (grid.rows * 256) as u32);
-    let cols = grid.cols;
-    let mut row = [0u8; BLOCK];
+    let rows = Rows {
+        tiles: &grid.tiles,
+        cols: grid.cols,
+        gw: (grid.cols * 256) as u32,
+        gh: (grid.rows * 256) as u32,
+        land: grid.land,
+    };
     // Where (u, v) samples, in 1/65536 grid pixels; u32 from here on
     // (wrapping: a sample off the grid lands far away and reads as land).
     let at = |u: i64, v: i64| {
@@ -1005,180 +1082,360 @@ pub fn rotate(
             (origin.1 + (u - ax) * across.1 + (v - ay) * down.1) as u32,
         )
     };
-    let (ux, uy) = (across.0 as u32, across.1 as u32);
-    // The luma at grid pixel (gx, gy): one compare each way sends what is
-    // off the grid (negatives too, wrapped) to land.
-    let luma = |gx: u32, gy: u32| -> u8 {
-        if gx >= gw || gy >= gh {
-            return grid.land.0;
+    let u = (across.0 as u32, across.1 as u32);
+    let (vx, vy) = (down.0 as u32, down.1 as u32);
+    let luma = Steps::of(u, RUN as u32);
+    // The chroma: a pair for each two by two block, two pixels on.
+    let pairs = Steps::of((u.0.wrapping_mul(2), u.1.wrapping_mul(2)), RUN as u32 / 2);
+    let (vx2, vy2) = (vx.wrapping_mul(2), vy.wrapping_mul(2));
+    for c0 in (0..w).step_by(block) {
+        let n = block.min(w - c0);
+        // The luma: each row from where the one above began.
+        if let Some(part) = dst.get_mut(c0..) {
+            let from = at(c0 as i64, 0);
+            rows.luma_block(part, pitch, h, n, from, (vx, vy), &luma);
         }
-        match grid.tiles[(gy >> 8) as usize * cols + (gx >> 8) as usize] {
-            Some(t) => t[(((gy & 255) << 8) | (gx & 255)) as usize],
-            None => grid.land.0,
+        // The chroma, sampled at each two by two block's middle: half a
+        // pixel right and down.
+        if let Some(part) = dst.get_mut(chroma + c0..) {
+            let mut from = at(c0 as i64, 0);
+            from.0 = from.0.wrapping_add(((across.0 + down.0) / 2) as u32);
+            from.1 = from.1.wrapping_add(((across.1 + down.1) / 2) as u32);
+            rows.chroma_block(part, pitch, h / 2, n & !1, from, (vx2, vy2), &pairs);
         }
-    };
-    let pair = |gx: u32, gy: u32| -> [u8; 2] {
-        if gx >= gw || gy >= gh {
-            return [grid.land.1, grid.land.2];
+    }
+}
+
+/// Samples looked up together, from one tile when they lie in one: eight
+/// words of four. Fixed, so the loop over them is unrolled.
+const RUN: usize = 32;
+const RUN_WORDS: usize = RUN / 4;
+
+/// A row's step from sample to sample, and what follows from it, worked
+/// out once a frame: the step over a run less one (to its last sample),
+/// over a whole run, and the step with its pixel in the top byte.
+struct Steps {
+    one: (u32, u32),
+    to_last: (u32, u32),
+    run: (u32, u32),
+    fine: (u32, u32),
+}
+
+impl Steps {
+    /// For samples `one` apart, `count` of them a run.
+    fn of(one: (u32, u32), count: u32) -> Self {
+        Self {
+            one,
+            to_last: stepped((0, 0), one, count - 1),
+            run: stepped((0, 0), one, count),
+            fine: (one.0 << 8, one.1 << 8),
         }
-        match grid.tiles[(gy >> 8) as usize * cols + (gx >> 8) as usize] {
-            Some(t) => {
-                let at = 65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
-                [t[at], t[at + 1]]
-            }
-            None => [grid.land.1, grid.land.2],
-        }
-    };
-    // The tile a run of samples lies in, when the whole run does: its
-    // ends in one tile put every sample between them there too (the run
-    // is straight, the tile a rectangle). Some(None) for a missing tile.
-    let tile_of = |(x0, y0): (u32, u32), (x1, y1): (u32, u32)| -> Option<Option<&[u8]>> {
+    }
+}
+
+/// What a row of a turned frame is sampled from: the grid's tiles, and
+/// the land's colour where there is none. A block's rows are made by
+/// functions of their own (`luma_block`, `chroma_block`), small enough
+/// that most of what they work with stays in registers.
+struct Rows<'a> {
+    tiles: &'a [Option<&'a [u8]>],
+    cols: usize,
+    /// The grid's size in pixels.
+    gw: u32,
+    gh: u32,
+    land: (u8, u8, u8),
+}
+
+/// `p` moved `n` steps of `s`, wrapping.
+#[inline(always)]
+fn stepped(p: (u32, u32), s: (u32, u32), n: u32) -> (u32, u32) {
+    (
+        p.0.wrapping_add(s.0.wrapping_mul(n)),
+        p.1.wrapping_add(s.1.wrapping_mul(n)),
+    )
+}
+
+/// `p` moved by `d`, wrapping.
+#[inline(always)]
+fn moved(p: (u32, u32), d: (u32, u32)) -> (u32, u32) {
+    (p.0.wrapping_add(d.0), p.1.wrapping_add(d.1))
+}
+
+impl Rows<'_> {
+    /// The tile a run of samples lies in, when the whole run does: its
+    /// ends in one tile put every sample between them there too (the run
+    /// is straight, the tile a rectangle). Some(None) for a missing tile.
+    #[inline(always)]
+    fn tile_of(&self, (x0, y0): (u32, u32), (x1, y1): (u32, u32)) -> Option<Option<&[u8]>> {
         let (a, b) = ((x0 >> 16, y0 >> 16), (x1 >> 16, y1 >> 16));
-        if a.0 >= gw || a.1 >= gh || a.0 >> 8 != b.0 >> 8 || a.1 >> 8 != b.1 >> 8 {
+        if a.0 >= self.gw || a.1 >= self.gh || a.0 >> 8 != b.0 >> 8 || a.1 >> 8 != b.1 >> 8 {
             return None;
         }
-        Some(grid.tiles[(a.1 >> 8) as usize * cols + (a.0 >> 8) as usize])
-    };
-    // The luma of `run` from one tile `t`, from (x, y) stepping (sx, sy):
-    // four samples to a word. The index is masked to the tile, so there
-    // is no bounds check to pay for.
-    #[inline(always)]
-    fn luma_run(t: &[u8; 65536], run: &mut [u8], x: &mut u32, y: &mut u32, sx: u32, sy: u32) {
-        let index = |x: u32, y: u32| (((y >> 8) & 0xff00) | ((x >> 16) & 0xff)) as usize;
-        let (words, rest) = run.as_chunks_mut::<4>();
-        for o in words {
-            let p0 = t[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
-            let p1 = t[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
-            let p2 = t[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
-            let p3 = t[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
-            *o = [p0, p1, p2, p3];
-        }
-        for o in rest {
-            *o = t[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
-        }
+        Some(self.tiles[(a.1 >> 8) as usize * self.cols + (a.0 >> 8) as usize])
     }
-    // The chroma pairs of `run` from one tile `t`, the same way.
+
+    /// The tile at grid pixel (gx, gy): one compare each way sends what
+    /// is off the grid (negatives too, wrapped) to none.
     #[inline(always)]
-    fn pair_run(
-        pairs: &[[u8; 2]; 16384],
-        run: &mut [[u8; 2]],
-        x: &mut u32,
-        y: &mut u32,
-        sx: u32,
-        sy: u32,
+    fn tile_at(&self, gx: u32, gy: u32) -> Option<&[u8]> {
+        if gx >= self.gw || gy >= self.gh {
+            return None;
+        }
+        self.tiles[(gy >> 8) as usize * self.cols + (gx >> 8) as usize]
+    }
+
+    /// `count` rows of a block of columns, `n` bytes each, into `dst`
+    /// (the block's first byte, its rows `pitch` apart): each row by
+    /// `line`, from where the one above began plus `down`. Rows that do
+    /// not fit in `dst` are left out.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn block(
+        &self,
+        dst: &mut [u8],
+        pitch: usize,
+        count: usize,
+        n: usize,
+        mut from: (u32, u32),
+        down: (u32, u32),
+        s: &Steps,
+        line: impl Fn(&Self, &mut [u32], (u32, u32), &Steps),
     ) {
-        let index = |x: u32, y: u32| (((y >> 10) & 0x3f80) | ((x >> 17) & 0x7f)) as usize;
-        for p in run.iter_mut() {
-            *p = pairs[index(*x, *y)];
-            *x = x.wrapping_add(sx);
-            *y = y.wrapping_add(sy);
+        // Straight into the picture when its rows' bytes are words there.
+        let words =
+            dst.as_ptr().addr().is_multiple_of(4) && pitch.is_multiple_of(4) && n.is_multiple_of(4);
+        let mut row = [0u32; BLOCK_MAX / 4];
+        let mut o = 0;
+        for _ in 0..count {
+            let p = from;
+            from = moved(from, down);
+            let Some(out) = dst.get_mut(o..o + n) else {
+                break;
+            };
+            o += pitch;
+            if words {
+                // SAFETY: `out` begins a multiple of four bytes from an
+                // address that is one, and is that long: its bytes are
+                // `n / 4` words, and every bit pattern is a value of both.
+                let out = unsafe {
+                    std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u32>(), n / 4)
+                };
+                line(self, out, p, s);
+            } else {
+                line(self, &mut row[..n.div_ceil(4)], p, s);
+                out.copy_from_slice(&bytes_of(&row)[..n]);
+            }
         }
     }
-    for c0 in (0..w).step_by(BLOCK) {
-        let n = BLOCK.min(w - c0);
-        for v in 0..h {
-            let (mut x, mut y) = at(c0 as i64, v as i64);
-            for run in row[..n].chunks_mut(SPAN) {
-                let last = (run.len() - 1) as u32;
-                let end = (
-                    x.wrapping_add(ux.wrapping_mul(last)),
-                    y.wrapping_add(uy.wrapping_mul(last)),
-                );
-                match tile_of((x, y), end) {
-                    Some(Some(t)) => {
-                        let t: &[u8; 65536] = t[..65536].try_into().expect("a tile's luma");
-                        luma_run(t, run, &mut x, &mut y, ux, uy);
+
+    /// A block of luma rows (`block` with `luma`), a function of its own.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn luma_block(
+        &self,
+        dst: &mut [u8],
+        pitch: usize,
+        count: usize,
+        n: usize,
+        from: (u32, u32),
+        down: (u32, u32),
+        s: &Steps,
+    ) {
+        self.block(dst, pitch, count, n, from, down, s, Self::luma);
+    }
+
+    /// A block of chroma rows.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn chroma_block(
+        &self,
+        dst: &mut [u8],
+        pitch: usize,
+        count: usize,
+        n: usize,
+        from: (u32, u32),
+        down: (u32, u32),
+        s: &Steps,
+    ) {
+        self.block(dst, pitch, count, n, from, down, s, Self::chroma);
+    }
+
+    /// A row's luma into `line`, four samples a word, from `p`: a run at
+    /// a time from the tile it lies in.
+    #[inline(always)]
+    fn luma(&self, line: &mut [u32], mut p: (u32, u32), s: &Steps) {
+        let (runs, rest) = line.as_chunks_mut::<RUN_WORDS>();
+        for run in runs {
+            match self.tile_of(p, moved(p, s.to_last)) {
+                Some(Some(t)) => {
+                    let t: &[u8; 65536] = t[..65536].try_into().expect("a tile's luma");
+                    luma_run(t, run, p.0 << 8, p.1 << 8, &s.fine);
+                }
+                Some(None) => run.fill(u32::from_ne_bytes([self.land.0; 4])),
+                None => self.luma_slowly(run, p, s),
+            }
+            p = moved(p, s.run);
+        }
+        if !rest.is_empty() {
+            self.luma_slowly(rest, p, s);
+        }
+    }
+
+    /// Luma across a tile's edge, or less than a run of it: a word at a
+    /// time from its tile when it lies in one, else sample by sample.
+    #[inline(never)]
+    fn luma_slowly(&self, words: &mut [u32], mut p: (u32, u32), s: &Steps) {
+        for o in words {
+            match self.tile_of(p, stepped(p, s.one, 3)) {
+                Some(Some(t)) => {
+                    let t: &[u8; 65536] = t[..65536].try_into().expect("a tile's luma");
+                    luma_words(t, std::slice::from_mut(o), p.0 << 8, p.1 << 8, &s.fine);
+                    p = stepped(p, s.one, 4);
+                }
+                _ => {
+                    let mut four = [0u8; 4];
+                    for b in &mut four {
+                        let (gx, gy) = (p.0 >> 16, p.1 >> 16);
+                        *b = match self.tile_at(gx, gy) {
+                            Some(t) => t[(((gy & 255) << 8) | (gx & 255)) as usize],
+                            None => self.land.0,
+                        };
+                        p = moved(p, s.one);
                     }
-                    Some(None) => {
-                        run.fill(grid.land.0);
-                        x = x.wrapping_add(ux.wrapping_mul(run.len() as u32));
-                        y = y.wrapping_add(uy.wrapping_mul(run.len() as u32));
-                    }
-                    None => {
-                        // Across a tile's edge: in quarters, each from its
-                        // tile when it lies in one, else sample by sample.
-                        for part in run.chunks_mut(SPAN / 4) {
-                            let last = (part.len() - 1) as u32;
-                            let end = (
-                                x.wrapping_add(ux.wrapping_mul(last)),
-                                y.wrapping_add(uy.wrapping_mul(last)),
-                            );
-                            match tile_of((x, y), end) {
-                                Some(Some(t)) => {
-                                    let t: &[u8; 65536] =
-                                        t[..65536].try_into().expect("a tile's luma");
-                                    luma_run(t, part, &mut x, &mut y, ux, uy);
-                                }
-                                _ => {
-                                    for o in part.iter_mut() {
-                                        *o = luma(x >> 16, y >> 16);
-                                        x = x.wrapping_add(ux);
-                                        y = y.wrapping_add(uy);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    *o = u32::from_ne_bytes(four);
                 }
             }
-            let o = v * pitch + c0;
-            if let Some(out) = dst.get_mut(o..o + n) {
-                out.copy_from_slice(&row[..n]);
-            }
         }
-        // The chroma: a pair for each two by two block, sampled at the
-        // block's middle; the pairs of a 64-pixel block are 64 bytes.
-        let (ux2, uy2) = (ux.wrapping_mul(2), uy.wrapping_mul(2));
-        for cv in 0..h / 2 {
-            let (mut x, mut y) = at(c0 as i64, 2 * cv as i64);
-            // To the block's middle: half a pixel right and down.
-            x = x.wrapping_add(((across.0 + down.0) / 2) as u32);
-            y = y.wrapping_add(((across.1 + down.1) / 2) as u32);
-            for run in row[..n & !1].as_chunks_mut::<2>().0.chunks_mut(SPAN / 2) {
-                let last = (run.len() - 1) as u32;
-                let end = (
-                    x.wrapping_add(ux2.wrapping_mul(last)),
-                    y.wrapping_add(uy2.wrapping_mul(last)),
-                );
-                match tile_of((x, y), end) {
-                    Some(Some(t)) => {
-                        // The tile's pairs: 128 rows of 128.
-                        let pairs: &[[u8; 2]; 16384] = t[65536..98304]
-                            .as_chunks::<2>()
-                            .0
-                            .try_into()
-                            .expect("a tile's chroma");
-                        pair_run(pairs, run, &mut x, &mut y, ux2, uy2);
+    }
+
+    /// A row's chroma into `line`, two pairs a word, from `p`: as `luma`.
+    #[inline(always)]
+    fn chroma(&self, line: &mut [u32], mut p: (u32, u32), s: &Steps) {
+        let (runs, rest) = line.as_chunks_mut::<RUN_WORDS>();
+        for run in runs {
+            let whole = match self.tile_of(p, moved(p, s.to_last)) {
+                Some(Some(t)) => match tile_pairs(t) {
+                    Some(pairs) => {
+                        pair_run(pairs, run, p.0 << 8, p.1 << 8, &s.fine);
+                        true
                     }
-                    Some(None) => {
-                        run.fill([grid.land.1, grid.land.2]);
-                        x = x.wrapping_add(ux2.wrapping_mul(run.len() as u32));
-                        y = y.wrapping_add(uy2.wrapping_mul(run.len() as u32));
-                    }
-                    None => {
-                        for p in run.iter_mut() {
-                            *p = pair(x >> 16, y >> 16);
-                            x = x.wrapping_add(ux2);
-                            y = y.wrapping_add(uy2);
-                        }
-                    }
+                    None => false,
+                },
+                Some(None) => {
+                    run.fill(self.land_pairs());
+                    true
                 }
+                None => false,
+            };
+            if !whole {
+                self.chroma_slowly(run, p, s);
             }
-            let o = chroma + cv * pitch + c0;
-            if let Some(out) = dst.get_mut(o..o + (n & !1)) {
-                out.copy_from_slice(&row[..n & !1]);
-            }
+            p = moved(p, s.run);
         }
+        if !rest.is_empty() {
+            self.chroma_slowly(rest, p, s);
+        }
+    }
+
+    fn land_pairs(&self) -> u32 {
+        u32::from_ne_bytes([self.land.1, self.land.2, self.land.1, self.land.2])
+    }
+
+    /// Chroma across a tile's edge, or less than a run of it: pair by
+    /// pair.
+    #[inline(never)]
+    fn chroma_slowly(&self, words: &mut [u32], mut p: (u32, u32), s: &Steps) {
+        for o in words {
+            let mut four = [0u8; 4];
+            for pair in four.as_chunks_mut::<2>().0 {
+                let (gx, gy) = (p.0 >> 16, p.1 >> 16);
+                *pair = match self.tile_at(gx, gy) {
+                    Some(t) => {
+                        let at =
+                            65536 + (((gy & 255) >> 1) << 8) as usize + ((gx & 255) & !1) as usize;
+                        [t[at], t[at + 1]]
+                    }
+                    None => [self.land.1, self.land.2],
+                };
+                p = moved(p, s.one);
+            }
+            *o = u32::from_ne_bytes(four);
+        }
+    }
+}
+
+/// The words' bytes, as they lie in memory.
+fn bytes_of(words: &[u32]) -> &[u8] {
+    // SAFETY: a u32's four bytes are four u8s, of any value, at the same
+    // address; the slice covers exactly the words' memory.
+    unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), size_of_val(words)) }
+}
+
+/// A tile's chroma as its 128 rows of 128 pairs, each pair one 16-bit
+/// read; None when the tile's bytes do not lie on an even address.
+fn tile_pairs(tile: &[u8]) -> Option<&[u16; 16384]> {
+    // SAFETY: bytes read as 16-bit words where they are aligned as such;
+    // every bit pattern is a value of both.
+    let (head, pairs, _) = unsafe { tile.get(65536..98304)?.align_to::<u16>() };
+    if head.is_empty() {
+        pairs.try_into().ok()
+    } else {
+        None
+    }
+}
+
+/// Where the sample at (x, y) is in a tile's luma: coordinates within
+/// the tile, 8 bits of pixel above 24 of fraction, so the pixel is the
+/// top byte and wraps by itself. Masked to the tile, so there is no
+/// bounds check to pay for.
+#[inline(always)]
+fn luma_at(x: u32, y: u32) -> usize {
+    (((y >> 16) & 0xff00) | (x >> 24)) as usize
+}
+
+/// A run's luma from one tile `t`, four samples to a word, from (x, y)
+/// stepping `s`. A function of its own, not inlined, and of a fixed
+/// length: every register is its own and the loop is unrolled.
+#[inline(never)]
+fn luma_run(t: &[u8; 65536], out: &mut [u32; RUN_WORDS], x: u32, y: u32, s: &(u32, u32)) {
+    luma_words(t, out, x, y, s);
+}
+
+/// The luma of `out`'s samples from one tile `t`, four to a word.
+#[inline(always)]
+fn luma_words(t: &[u8; 65536], out: &mut [u32], mut x: u32, mut y: u32, s: &(u32, u32)) {
+    let (sx, sy) = *s;
+    for o in out {
+        let mut four = [0u8; 4];
+        for b in &mut four {
+            *b = t[luma_at(x, y)];
+            x = x.wrapping_add(sx);
+            y = y.wrapping_add(sy);
+        }
+        *o = u32::from_ne_bytes(four);
+    }
+}
+
+/// A run's chroma pairs from one tile's `pairs`, two to a word, the
+/// same way.
+#[inline(never)]
+fn pair_run(
+    pairs: &[u16; 16384],
+    out: &mut [u32; RUN_WORDS],
+    mut x: u32,
+    mut y: u32,
+    s: &(u32, u32),
+) {
+    let (sx, sy) = *s;
+    let at = |x: u32, y: u32| (((y >> 18) & 0x3f80) | (x >> 25)) as usize;
+    for o in out {
+        let a = pairs[at(x, y)].to_ne_bytes();
+        x = x.wrapping_add(sx);
+        y = y.wrapping_add(sy);
+        let b = pairs[at(x, y)].to_ne_bytes();
+        x = x.wrapping_add(sx);
+        y = y.wrapping_add(sy);
+        *o = u32::from_ne_bytes([a[0], a[1], b[0], b[1]]);
     }
 }
 
@@ -1349,6 +1606,33 @@ fn columns(a: i64, k: i64, rec: i64, limit: i64, (x0, x1): (i64, i64)) -> (i64, 
 #[cfg(test)]
 mod line_tests {
     use super::*;
+
+    #[test]
+    fn the_block_is_wide_along_the_tiles_rows_and_narrow_down_them() {
+        let across = |degrees: f64| {
+            let r = degrees.to_radians();
+            ((r.cos() * 65536.0) as i64, (r.sin() * 65536.0) as i64)
+        };
+        // The same whichever way round the map is turned.
+        for (degrees, block) in [
+            (0.0, 256),
+            (29.0, 256),
+            (31.0, 192),
+            (39.0, 192),
+            (45.0, 96),
+            (54.0, 96),
+            (58.0, 64),
+            (65.0, 32),
+            (90.0, 32),
+        ] {
+            for turn in [degrees, 180.0 - degrees, 180.0 + degrees, 360.0 - degrees] {
+                assert_eq!(block_for(across(turn)), block, "at {turn} degrees");
+            }
+        }
+        // A step of any length: half a pixel, two pixels.
+        assert_eq!(block_for((32768, 0)), 256);
+        assert_eq!(block_for((0, -131072)), 32);
+    }
 
     #[test]
     fn the_integer_root_is_the_floor() {
