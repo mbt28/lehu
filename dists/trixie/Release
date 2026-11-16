@@ -1,24 +1,24 @@
 Architectures: arm64
 Codename: trixie
 Components: main
-Date: Mon, 09 Nov 2026 21:27:24 +0000
+Date: Mon, 16 Nov 2026 15:07:44 +0000
 Description: LEHU for Raspberry Pi OS (trixie)
 Label: LEHU
 Origin: LEHU
 Suite: trixie
 MD5Sum:
- 006899993e258c658ae4815c4a257ce6              179 Release
- f9b9078d423100807be51f8181c86c13             2190 main/binary-arm64/Packages
- e8d81e88dcc91f031368f198084b300b              933 main/binary-arm64/Packages.gz
+ b2ab879aa943b1a377fe7570ca63330a              179 Release
+ 65e9847bfd4895a4171dccd50514e4f9             3285 main/binary-arm64/Packages
+ 56045cf9d8b38bdeebd56872f6f669fc             1135 main/binary-arm64/Packages.gz
 SHA1:
- aec7046309a6cbc99a917560cde55f68c22dc419              179 Release
- 789bfe1beedecab4e469a850f0d958835ca312ba             2190 main/binary-arm64/Packages
- dcee8ea320cb1e48e18261f20ac1b5a45c627bee              933 main/binary-arm64/Packages.gz
+ 4bce8d5572909fd0a821b49c5aa1d32eee659f25              179 Release
+ da9f855ba23bba5b68f8e191636c188baa2ef358             3285 main/binary-arm64/Packages
+ aebd7b45d29bfbaad4df95c7a8572accc5dd6611             1135 main/binary-arm64/Packages.gz
 SHA256:
- 94d6fc5140d9afa1219fbe3100f280c15bb64cbe4b9fcfeb40e09c98749383c8              179 Release
- 47d8e36274235302d405963f6a3a2de60262b534ea97cadd464357872bc2de2f             2190 main/binary-arm64/Packages
- 3dfd215046a88e53aaacb850362012439a3e8783b5a17a13d2bca9efefa41ae0              933 main/binary-arm64/Packages.gz
+ e252d43becd1411dd18c764c900cafab41631071fa95823a9b826b8fa2189809              179 Release
+ b885de8843a3e561f303da21aa6720f8bb50b56d1f34298ecd607da233c64613             3285 main/binary-arm64/Packages
+ a70c39a40ade7acbd8c3aa4c56b405012e142d4494759ce1d5b9663af713c2c0             1135 main/binary-arm64/Packages.gz
 SHA512:
- 7c55e2aad8e8cbb098e0699963754a2189fb5059aa4712dfc906931e8ad708ebb2d9dbcb8f865f5bded2668a693108de96e44b607cd9af740d467c9e4b155802              179 Release
- 6943b7e9c698449a09d93681105992dafd40725b7038f66cf23ac63361c2a649f5a6a4049842b5cf68c8d222df63b6016f2a7f480ed80f3d2f8467f3e41b994d             2190 main/binary-arm64/Packages
- 4b40616802be94e2ea391d3e150d1becb0e63ebe9ab0558cca47d7ef8a9414751a7a02bad63c5da367a1cdd4b5c35c2e8b02e0394bedd54ecc536344464d6676              933 main/binary-arm64/Packages.gz
+ 29305dce7a0f2aa00dbc4d129a157b7e43abf65ed64606168290506d2daaa3266c7fd9799a64a9f1e6cc047b0b8d75eb096d94395a0c5d867a7ca0358f2505ee              179 Release
+ d671c527b5180770f7db4d03444f752437f4a810e399ea539056151a77097f91acde929e3fb3b3b4bedfe4166c727b25bbbef7a61f396d34c3721661c3abe467             3285 main/binary-arm64/Packages
+ 84b4f9685f27f5b618dc697038e580557bb62ff58cd251b7421fb8c3c8e839c1290f8c576fd7b9d13a72d9b99ce4bde925a38983f1fb9bc74be09e1097200a8d             1135 main/binary-arm64/Packages.gz
