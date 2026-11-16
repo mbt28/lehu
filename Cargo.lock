@@ -2286,7 +2286,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lehu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-aa",
  "lehu-audio",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-aa"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-bt",
  "lehu-core",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-audio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
  "lehu-core",
@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-bt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-core",
  "libc",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-camera"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
  "lehu-core",
@@ -2361,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "log",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-cp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "chacha20poly1305",
@@ -2400,7 +2400,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-drm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "drm",
  "drm-ffi",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-fuzz"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-aa",
  "lehu-audio",
@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-image"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "png",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-input"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-core",
  "libc",
@@ -2447,7 +2447,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-map"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
  "lehu-drm",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-session"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-core",
  "lehu-input",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fontique",
  "lehu-core",
@@ -2486,7 +2486,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-update"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "log",
@@ -2495,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-usb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-core",
  "libc",
@@ -2504,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-video"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
  "lehu-core",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "lehu-wifi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lehu-core",
  "libc",
