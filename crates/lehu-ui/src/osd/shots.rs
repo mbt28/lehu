@@ -181,6 +181,7 @@ fn guide(h: &mut TestHost, arrow: NavArrow, maneuver: &str) {
         road: "Hauptstrasse".into(),
         eta: "14:52".into(),
         eta_note: "arrival".into(),
+        then: NavArrow::None,
     };
     h.nav_gen += 1;
 }
@@ -475,4 +476,403 @@ fn shots() {
         s.goto(SETTINGS);
         s.save(&format!("40-nav-arrow-{i}"));
     }
+
+    // ── the map's bar: plain, and guiding (the map itself is on the video
+    // plane, so black here) ──
+    let mut s = Shot::new(base_host());
+    s.goto(MAP);
+    s.save("70-map-bar");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Left,
+        maneuver: "Turn left".into(),
+        distance: "350 m".into(),
+        road: "Avenue de la Porte-Neuve".into(),
+        eta: "14:32".into(),
+        eta_note: "4 min, 3.6 km".into(),
+        then: NavArrow::None,
+    });
+    s.osd.host_mut().map_speed = Some((47, Some(50)));
+    s.goto(MAP);
+    s.save("71-map-guiding");
+    s.osd.host_mut().map_speed = Some((58, Some(50)));
+    s.goto(MAP);
+    s.save("72-map-over-the-limit");
+
+    // ── Map > Go to: the bar's keys, then the destination screen ──
+    let names = |host: &mut TestHost| {
+        let d = |name: &str, detail: &str, place: bool| crate::host::Destination {
+            name: name.into(),
+            detail: detail.into(),
+            place,
+        };
+        host.map_can_search = true;
+        host.map_names = vec![
+            d("Kirchberg", "Luxembourg, 3.1 km", true),
+            d("Rue de Kirchberg", "Luxembourg, 3.4 km", false),
+            d("Kirchbierg", "Mamer, 9.8 km", false),
+            d("Avenue John F. Kennedy", "Luxembourg, 3.6 km", false),
+        ];
+        host.map_recent = vec![
+            d("Boulevard Robert Schuman", "Luxembourg, 2.2 km", false),
+            d("Gare", "Luxembourg, 1.2 km", true),
+        ];
+    };
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.save("73-map-bar-go-to");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().map_on_route = true;
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Right,
+        maneuver: "Turn right".into(),
+        distance: "1.2 km".into(),
+        road: "Avenue John F. Kennedy".into(),
+        eta: "14:32".into(),
+        eta_note: "6 min, 4.1 km".into(),
+        then: NavArrow::None,
+    });
+    s.osd.host_mut().map_speed = Some((47, Some(50)));
+    s.goto(MAP);
+    s.save("74-map-guiding-stop");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.goto(DEST);
+    s.save("75-go-to-recent");
+    s.bridge().invoke_dest_type();
+    s.tick();
+    s.save("76-go-to-typing");
+    for c in "kirch".chars() {
+        s.bridge().invoke_osk_key(c.to_string().into());
+        s.tick();
+    }
+    s.save("77-go-to-typed");
+    s.bridge().invoke_osk_ok();
+    s.tick();
+    s.save("78-go-to-list");
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.save("79-go-to-finding");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().map_recent.clear();
+    s.osd.host_mut().map_route_note = "No road near the destination".into();
+    s.osd.host_mut().map_stages = [crate::host::RouteStage::Failed].into();
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_osk_key("k".into());
+    s.tick();
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.tick();
+    s.save("80-go-to-no-route");
+
+    // ── the map's fixed keys, its menu, Home and Work ──
+    let card = |arrow, then, maneuver: &str, distance: &str, road: &str| NavCard {
+        active: true,
+        arrow,
+        maneuver: maneuver.into(),
+        distance: distance.into(),
+        road: road.into(),
+        eta: "14:41".into(),
+        eta_note: "9 min, 4.1 km".into(),
+        then,
+    };
+    let routed = |h: &mut TestHost| {
+        names(h);
+        h.map_on_route = true;
+        h.map_guide = Some(card(
+            NavArrow::Right,
+            NavArrow::None,
+            "Turn right",
+            "1.2 km",
+            "Avenue John F. Kennedy",
+        ));
+        h.map_speed = Some((47, Some(50)));
+    };
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.save("81-map-bar");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::SlightLeft,
+        NavArrow::None,
+        "Bear left",
+        "350 m",
+        "Boulevard Grande-Duchesse Charlotte",
+    ));
+    s.goto(MAP);
+    s.save("82-map-guiding-long-road");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd.host_mut().settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Rue de la Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.save("83-map-menu");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.save("84-map-menu-routed");
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.goto(MAP);
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(3);
+    s.tick();
+    s.save("85-go-to-set-home");
+    s.bridge().invoke_dest_pick(1);
+    s.tick();
+    s.save("86-map-home-set");
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(4);
+    s.tick();
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.bridge().invoke_map_menu(true);
+    s.tick();
+    s.bridge().invoke_map_menu_pick(2);
+    s.tick();
+    s.save("87-go-to-change-home");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::Right,
+        NavArrow::Left,
+        "Turn right",
+        "200 m",
+        "Rue Goethe",
+    ));
+    s.goto(MAP);
+    s.save("88-map-then");
+    s.osd.host_mut().settings.map.voice = false;
+    s.osd.host_mut().map_away = true;
+    s.tick();
+    s.save("89-map-muted-away");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Arrive,
+        distance: "Arrived".into(),
+        maneuver: "Avenue John F. Kennedy".into(),
+        road: "Luxembourg".into(),
+        ..NavCard::default()
+    });
+    s.goto(MAP);
+    s.save("90-map-arrived");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_guide = Some(card(
+        NavArrow::Right,
+        NavArrow::Left,
+        "Turn right",
+        "200 m",
+        "Rue Goethe",
+    ));
+    s.save("91-home-our-card");
+    let mut s = Shot::new(night_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Rue de la Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    s.goto(MAP);
+    s.save("92-map-guiding-night");
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.save("93-map-menu-night");
+
+    // ── Go to: the nearest fuel, parking and charging ──
+    let nearby = |h: &mut TestHost| {
+        use crate::host::Nearby;
+        let d = |name: &str, detail: &str| crate::host::Destination {
+            name: name.into(),
+            detail: detail.into(),
+            place: false,
+        };
+        names(h);
+        h.map_nearby = vec![
+            (Nearby::Fuel, d("Aral Bertrange", "Aral · 1.2 km")),
+            (Nearby::Fuel, d("Shell Strassen", "Shell · 2.4 km")),
+            (
+                Nearby::Fuel,
+                d("Station Total Helfent", "TotalEnergies · 3.0 km"),
+            ),
+            (Nearby::Fuel, d("Q8 Route d'Arlon", "Q8 · 3.8 km")),
+            (Nearby::Fuel, d("Esso Mamer", "Esso · 6.1 km")),
+            (
+                Nearby::Parking,
+                d("Parking Knuedler", "Underground, 400 spaces · 350 m"),
+            ),
+            (
+                Nearby::Charging,
+                d("Chargy Gare", "4 points, 22 kW · 900 m"),
+            ),
+            (Nearby::Charging, d("Charging station", "2 points · 1.4 km")),
+        ];
+    };
+    let mut s = Shot::new(base_host());
+    nearby(s.osd.host_mut());
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.save("94-go-to-nearby");
+    s.key(OsdKey::Ok);
+    s.save("95-go-to-nearest-fuel");
+    let mut s = Shot::new(night_host());
+    nearby(s.osd.host_mut());
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_dest_nearby(3);
+    s.tick();
+    s.save("96-go-to-nearest-charging-night");
+
+    // ── the map's menu: Route's choices ──
+    let mut s = Shot::new(base_host());
+    names(s.osd.host_mut());
+    s.osd
+        .host_mut()
+        .persist("map.avoid-motorways", toml::Value::Boolean(true))
+        .unwrap();
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 3);
+    s.save("97-map-menu-route");
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.key(OsdKey::Ok);
+    s.save("98-map-route-choices");
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 5);
+    s.save("99-map-menu-seven-rows");
+
+    // ── speed cameras ──
+    let mut s = Shot::new(base_host());
+    routed(s.osd.host_mut());
+    s.osd
+        .host_mut()
+        .persist("map.speed-cameras", toml::Value::Boolean(true))
+        .unwrap();
+    s.osd.host_mut().map_camera = Some(340);
+    s.osd.host_mut().map_away = true;
+    s.goto(MAP);
+    s.save("100-map-guiding-camera");
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 5);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Prev);
+    s.save("101-map-route-cameras");
+
+    // ── the route shown whole ──
+    let preview = |h: &mut TestHost| {
+        names(h);
+        h.map_stages = [crate::host::RouteStage::Preview].into();
+        h.map_preview = Some(crate::host::RoutePreview {
+            name: "Boulevard Grande-Duchesse Charlotte".into(),
+            distance: "12 km".into(),
+            time: "1 h 05 min".into(),
+            eta: "15:37".into(),
+        });
+    };
+    let mut s = Shot::new(base_host());
+    preview(s.osd.host_mut());
+    s.goto(MAP);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Ok);
+    s.keys(OsdKey::Next, 2);
+    s.key(OsdKey::Ok);
+    s.save("102-map-preview");
+    s.key(OsdKey::Next);
+    s.save("103-map-preview-cancel");
+    let mut s = Shot::new(night_host());
+    preview(s.osd.host_mut());
+    s.osd.host_mut().map_preview.as_mut().unwrap().name = "Kirchberg".into();
+    s.goto(MAP);
+    s.goto(DEST);
+    s.bridge().invoke_dest_pick(0);
+    s.tick();
+    s.osd.st.skew += 3000;
+    s.tick();
+    s.save("104-map-preview-night-touch");
+
+    // ── Settings > Map: the regions on the card ──
+    let regions = |h: &mut TestHost| {
+        let region = |dir: &str, name: &str, state| crate::host::MapRegion {
+            dir: dir.into(),
+            name: name.into(),
+            state,
+            current: false,
+        };
+        h.map_regions = vec![
+            region("/maps/hungary", "Hungary", crate::host::RegionState::Ready),
+            region(
+                "/maps/luxembourg",
+                "Luxembourg",
+                crate::host::RegionState::Ready,
+            ),
+            region(
+                "/maps/austria",
+                "Austria",
+                crate::host::RegionState::NeedsNewer,
+            ),
+            region(
+                "/maps/slovakia",
+                "Slovakia",
+                crate::host::RegionState::Damaged,
+            ),
+        ];
+        h.settings.map.dir = "/maps/hungary".into();
+    };
+    let mut s = Shot::new(phone_host());
+    regions(s.osd.host_mut());
+    s.goto(SETTINGS);
+    s.save("105-settings-map-row");
+    s.goto(MAP_SETTINGS);
+    s.save("106-map-settings");
+    // The knob: Region, Enter, a turn on to Luxembourg, then to a region
+    // that cannot be taken.
+    s.keys(OsdKey::Next, 2);
+    s.key(OsdKey::Ok);
+    s.key(OsdKey::Next);
+    s.save("107-map-region-choosing");
+    s.keys(OsdKey::Next, 2);
+    s.save("108-map-region-damaged");
+    s.key(OsdKey::Ok);
+    s.save("109-map-region-kept");
+    let mut s = Shot::new(night_host());
+    regions(s.osd.host_mut());
+    s.osd.host_mut().map_voice = false;
+    s.goto(MAP_SETTINGS);
+    s.save("110-map-settings-no-voice-night");
+    let mut s = Shot::new(base_host());
+    s.goto(MAP_SETTINGS);
+    s.save("111-map-settings-no-region");
+    let mut s = Shot::new(base_host());
+    s.osd.host_mut().map_note = "Map needs a newer LEHU".into();
+    s.goto(MAP);
+    s.save("112-map-needs-newer");
+    s.osd.host_mut().map_note = "Map damaged: copy Hungary again".into();
+    s.tick();
+    s.save("113-map-damaged");
 }

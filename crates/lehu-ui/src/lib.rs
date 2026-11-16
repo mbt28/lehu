@@ -23,8 +23,9 @@ pub(crate) mod test_host;
 pub mod text;
 
 pub use host::{
-    ART_SIZE, Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media,
-    MediaKey, NavArrow, NavCard, Power, Prompt, PromptKind, SystemNames, Update, UpdateOutcome,
+    ART_SIZE, Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host,
+    KnownDevice, MapRegion, MapSlot, MapVoice, Media, MediaKey, NavArrow, NavCard, Nearby, Power,
+    Prompt, PromptKind, RegionState, RoutePreview, RouteStage, SystemNames, Update, UpdateOutcome,
     UpdateStage,
 };
 pub use input::Input;

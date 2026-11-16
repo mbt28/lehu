@@ -743,6 +743,93 @@ fn settings_and_links_reach_the_screens_on_change() {
 }
 
 #[test]
+fn the_system_rows_switch_the_mouse_and_its_auto_hide() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, SYSTEM);
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_mouse_available());
+    assert!(!b.get_mouse_on(), "off unless asked");
+    b.invoke_mouse_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("mouse.enabled"),
+        Some(&toml::Value::Boolean(true))
+    );
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_mouse_on());
+    assert!(b.get_mouse_autohide(), "the pointer hides unless asked");
+    b.invoke_mouse_autohide_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("mouse.autohide"),
+        Some(&toml::Value::Boolean(false))
+    );
+    assert!(!osd.ui.global::<Bridge<'_>>().get_mouse_autohide());
+}
+
+#[test]
+fn the_map_row_picks_how_the_map_turns() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_turning_choice(), 0);
+    // A tap on Soft colour takes it at once.
+    osd.ui.global::<Bridge<'_>>().invoke_pick_press(20);
+    osd.ui.global::<Bridge<'_>>().invoke_pick_option(1);
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.turning"),
+        Some(&toml::Value::String("soft-colour".into()))
+    );
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_turning_choice(), 1);
+    // By the knob: on to Half.
+    pick_press(&mut osd, 20);
+    assert_eq!(pick(&osd), (20, 1));
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.turning"),
+        Some(&toml::Value::String("half".into()))
+    );
+}
+
+#[test]
+fn the_map_rows_switch_the_hardware_cursor_and_pick_its_size() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP_SETTINGS);
+    let b = osd.ui.global::<Bridge<'_>>();
+    assert!(b.get_cursor_available());
+    assert!(b.get_map_cursor(), "on unless asked");
+    assert_eq!(b.get_cursor_size_choice(), 1, "medium unless asked");
+    // A tap on Large takes it at once.
+    b.invoke_pick_press(19);
+    b.invoke_pick_option(2);
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.cursor-size"),
+        Some(&toml::Value::String("large".into()))
+    );
+    assert_eq!(osd.ui.global::<Bridge<'_>>().get_cursor_size_choice(), 2);
+    // By the knob: Enter starts on the size in force, a turn, Enter takes.
+    pick_press(&mut osd, 19);
+    assert_eq!(pick(&osd), (19, 2));
+    press(&mut osd, OsdKey::Prev);
+    press(&mut osd, OsdKey::Prev);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.cursor-size"),
+        Some(&toml::Value::String("small".into()))
+    );
+    // Off: the size row goes with it.
+    osd.ui.global::<Bridge<'_>>().invoke_map_cursor_toggle();
+    tick(&mut osd);
+    assert_eq!(
+        osd.host().persisted("map.cursor"),
+        Some(&toml::Value::Boolean(false))
+    );
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_cursor());
+}
+
+#[test]
 fn the_video_rows_cycle_the_frame_rate_and_the_fast_switch() {
     let mut osd = osd(with_camera());
     goto(&mut osd, VIDEO);
@@ -1614,6 +1701,7 @@ fn guiding(osd: &mut Osd<TestHost>) {
         road: "Stra\u{df}e".into(),
         eta: "14:32".into(),
         eta_note: "arrival".into(),
+        then: crate::host::NavArrow::None,
     };
     host.nav_gen += 1;
 }
@@ -1790,6 +1878,75 @@ fn the_audio_row_opens_the_stream_levels_which_turn_live_in_tens() {
     assert_eq!(prop!(osd, get_navigation_label), "90%");
     // Off its screen the pick ends.
     goto(&mut osd, SETTINGS);
+    assert_eq!(pick(&osd).0, 0);
+}
+
+#[test]
+fn the_map_region_steps_through_the_regions_and_keeps_one_that_works() {
+    use crate::host::{MapRegion, RegionState};
+    let region = |dir: &str, name: &str, state| MapRegion {
+        dir: dir.into(),
+        name: name.into(),
+        state,
+        current: false,
+    };
+    let mut host = TestHost::new();
+    host.map_regions = vec![
+        region("/maps/hungary", "Hungary", RegionState::Ready),
+        region("/maps/luxembourg", "Luxembourg", RegionState::Ready),
+        region("/maps/austria", "Austria", RegionState::NeedsNewer),
+    ];
+    host.persist("map.dir", toml::Value::String("/maps/hungary".into()))
+        .unwrap();
+    host.calls.clear();
+    let mut osd = osd(host);
+    goto(&mut osd, SETTINGS);
+    assert_eq!(prop!(osd, get_region_label), "Hungary");
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "English");
+    assert_eq!(prop!(osd, get_map_hint), "");
+    pick_press(&mut osd, 17);
+    assert_eq!(pick(&osd), (17, 0));
+    assert_eq!(prop!(osd, get_pick_value), "Hungary");
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next); // stops at the end
+    assert_eq!(prop!(osd, get_pick_value), "Austria · Needs a newer LEHU");
+    // One for a newer LEHU is not taken: the one shown stays.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(pick(&osd).0, 0);
+    assert!(osd.host().persisted("map.dir").is_none());
+    // Another that works is, the map opening on its own start.
+    pick_press(&mut osd, 17);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.dir"),
+        Some(&toml::Value::String("/maps/luxembourg".into()))
+    );
+    assert_eq!(
+        osd.host().persisted("map.zoom"),
+        Some(&toml::Value::Integer(0))
+    );
+    assert_eq!(prop!(osd, get_region_label), "Luxembourg");
+    // A check that found it damaged: said at once, on its row and on
+    // Settings.
+    osd.host_mut().map_regions[1].state = RegionState::Damaged;
+    osd.host_mut().map_regions_gen += 1;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_region_label), "Luxembourg · Damaged");
+    // No voice, then no region at all: a hint says what to copy.
+    osd.host_mut().map_voice = false;
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Not installed");
+    assert!(prop!(osd, get_map_hint).contains("voice"));
+    osd.host_mut().map_regions.clear();
+    goto(&mut osd, SETTINGS);
+    assert_eq!(prop!(osd, get_region_label), "None");
+    goto(&mut osd, MAP_SETTINGS);
+    assert!(prop!(osd, get_map_hint).contains("LEHU-MAPS"));
+    pick_press(&mut osd, 17);
     assert_eq!(pick(&osd).0, 0);
 }
 
@@ -2111,8 +2268,8 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
     let mut host = TestHost::new();
     host.bt_paired = vec![device("/k", "Remote")];
     let mut osd = osd(host);
-    // Home: Connect, Phones, Settings -- Settings opens.
-    for _ in 0..3 {
+    // Home: Connect, Phones, Map, Settings -- Settings opens.
+    for _ in 0..4 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "settings");
@@ -2180,8 +2337,8 @@ fn back_puts_the_ring_on_the_row_that_opened_the_page() {
 fn a_dialog_closing_puts_the_ring_back_on_its_row() {
     let mut osd = osd(TestHost::new());
     goto(&mut osd, SYSTEM);
-    // Back, Update, Info, Power.
-    for _ in 0..4 {
+    // Back, Update, Info, Mouse, Power.
+    for _ in 0..5 {
         press(&mut osd, OsdKey::Next);
     }
     assert_eq!(ring(&osd), "power");
@@ -2241,13 +2398,19 @@ fn a_level_turned_fast_moves_further_a_detent() {
 }
 
 #[test]
-fn night_picks_the_night_palette_and_auto_follows_the_phone_into_day() {
+fn night_picks_the_night_palette_and_auto_follows_the_sun() {
     let mut osd = osd(TestHost::new());
     let night = |osd: &Osd<TestHost>| {
         let b = osd.ui.global::<Bridge<'_>>();
         (b.get_night(), b.get_night_choice())
     };
-    // Auto by default: the phone is told day, and so are the screens.
+    // Auto by default: day while the sun is up, night once it is down.
+    assert_eq!(night(&osd), (false, 2));
+    osd.host_mut().sun_down = true;
+    tick(&mut osd);
+    assert_eq!(night(&osd), (true, 2));
+    osd.host_mut().sun_down = false;
+    tick(&mut osd);
     assert_eq!(night(&osd), (false, 2));
     goto(&mut osd, SETTINGS);
     // A tap on Night: taken at once.
@@ -2263,7 +2426,6 @@ fn night_picks_the_night_palette_and_auto_follows_the_phone_into_day() {
     assert!(osd.tick(false, &mut sink));
     assert_eq!(night(&osd), (false, 0));
     assert_eq!(sink.0, [(0, H)]);
-    assert!(!pump::night_palette(lehu_core::settings::NightMode::Auto));
 }
 
 #[test]
@@ -2287,8 +2449,8 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
         seen.rotate_left(first);
         seen
     };
-    // No phone: Connect (wide), Phones, Settings.
-    assert_eq!(stops(&mut osd), ["connect", "phones", "settings"]);
+    // No phone: Connect (wide), Phones, Map, Settings.
+    assert_eq!(stops(&mut osd), ["connect", "phones", "map", "settings"]);
     assert_eq!(
         prop!(osd, get_bt_name),
         "LEHU",
@@ -2298,7 +2460,10 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     playing(&mut osd);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
-    assert_eq!(stops(&mut osd), ["connect", "media", "phones", "settings"]);
+    assert_eq!(
+        stops(&mut osd),
+        ["connect", "media", "phones", "map", "settings"]
+    );
     // A session waiting: its tile in Connect's place, the Resume action.
     let host = osd.host_mut();
     host.status = "Android Auto: Pixel 8".into();
@@ -2307,7 +2472,10 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     tick(&mut osd);
     assert_eq!(home_words(&osd).0, "Android Auto");
     assert_eq!(home_words(&osd).1, "Pixel 8");
-    assert_eq!(stops(&mut osd), ["resume", "media", "phones", "settings"]);
+    assert_eq!(
+        stops(&mut osd),
+        ["resume", "media", "phones", "map", "settings"]
+    );
     advance(&mut osd, KEY_RECENT_MS);
     goto(&mut osd, SETTINGS);
     goto(&mut osd, HOME);
@@ -2321,7 +2489,7 @@ fn the_home_tiles_follow_the_session_and_what_plays() {
     host.media_gen += 1;
     tick(&mut osd);
     tick(&mut osd);
-    assert_eq!(stops(&mut osd), ["resume", "phones", "settings"]);
+    assert_eq!(stops(&mut osd), ["resume", "phones", "map", "settings"]);
     // The Phones tile opens the phones; Back goes Home again.
     advance(&mut osd, KEY_RECENT_MS);
     goto(&mut osd, SETTINGS);
@@ -2608,19 +2776,23 @@ fn the_card_gives_the_qr_codes_the_screen() {
 }
 
 #[test]
-fn the_menu_is_connection_audio_video_system() {
+fn the_menu_is_connection_audio_video_map_system() {
     use crate::host::UpdateStage;
     let mut osd = osd(TestHost::new());
     goto(&mut osd, SETTINGS);
     // Audio and Video follow each other.
     let mut stops = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         press(&mut osd, OsdKey::Next);
         stops.push(ring(&osd));
     }
-    assert_eq!(stops, ["back", "connection", "audio", "video", "system"]);
+    assert_eq!(
+        stops,
+        ["back", "connection", "audio", "video", "map", "system"]
+    );
     for (screen_at, parent) in [
         (CONNECTION, SETTINGS),
+        (MAP_SETTINGS, SETTINGS),
         (WIRELESS, CONNECTION),
         (SYSTEM, SETTINGS),
         (UPDATE, SYSTEM),
@@ -2755,4 +2927,1119 @@ fn the_last_update_is_said_once() {
     tick(&mut osd);
     assert_eq!(screen(&osd), UPDATE);
     assert!(osd.host().has(&Call::UpdateOutcomeSeen));
+}
+
+// ── the map ──────────────────────────────────────────────────────────────
+
+#[test]
+fn the_map_runs_while_its_screen_is_up_and_moves_with_the_finger() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    assert!(osd.host().has(&Call::SetMapRunning(true)));
+    assert_eq!(prop!(osd, get_map_label), "Test  -  zoom 12");
+    // Only the bar shows over the map.
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.x, bar.y, bar.width, bar.height), (0, 416, 800, 64));
+    // A drag: the map follows the finger, the view goes the other way, by
+    // what the finger moved since the last report.
+    osd.pointer(400, 200, true);
+    tick(&mut osd);
+    osd.pointer(430, 190, true);
+    tick(&mut osd);
+    osd.pointer(450, 190, true);
+    tick(&mut osd);
+    osd.pointer(450, 190, false);
+    tick(&mut osd);
+    let pans: Vec<_> = osd
+        .host()
+        .calls
+        .iter()
+        .filter(|c| matches!(c, Call::MapPan(..)))
+        .cloned()
+        .collect();
+    assert_eq!(pans, [Call::MapPan(-30, 10), Call::MapPan(-20, 0)]);
+    // The arrows move it a quarter of the panel; the knob zooms.
+    press(&mut osd, OsdKey::Right);
+    assert!(osd.host().has(&Call::MapPan(200, 0)));
+    press(&mut osd, OsdKey::Up);
+    assert!(osd.host().has(&Call::MapPan(0, -120)));
+    press(&mut osd, OsdKey::Next);
+    assert!(osd.host().has(&Call::MapZoom(1)));
+    press(&mut osd, OsdKey::Prev);
+    assert!(osd.host().has(&Call::MapZoom(-1)));
+    // Moved off where we are: the bar's Me key, which centres on it.
+    assert!(!br(&osd).get_map_away());
+    osd.host_mut().map_away = true;
+    tick(&mut osd);
+    assert!(br(&osd).get_map_away());
+    osd.ui.global::<Bridge<'_>>().invoke_map_locate();
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapLocate));
+    // Left is a direction here, not Back.
+    press(&mut osd, OsdKey::Left);
+    assert_eq!(screen(&osd), MAP);
+    // Back: home, and the map stops.
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), HOME);
+    assert!(osd.host().has(&Call::SetMapRunning(false)));
+}
+
+#[test]
+fn guiding_the_map_bar_shows_the_next_turn_and_grows() {
+    use crate::host::{NavArrow, NavCard};
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Left,
+        maneuver: "Turn left".into(),
+        distance: "350 m".into(),
+        road: "Boulevard Royal".into(),
+        eta: "4 min".into(),
+        eta_note: "3.6 km".into(),
+        then: NavArrow::None,
+    });
+    tick(&mut osd);
+    let bridge = osd.ui.global::<Bridge<'_>>();
+    assert!(bridge.get_map_guiding());
+    assert_eq!(bridge.get_map_arrow(), NavArrow::Left.id());
+    assert_eq!(prop!(osd, get_map_distance), "350 m");
+    assert_eq!(prop!(osd, get_map_road), "Boulevard Royal");
+    assert_eq!(prop!(osd, get_map_eta_note), "3.6 km");
+    // One window over the map still: the taller bar.
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.x, bar.y, bar.width, bar.height), (0, 396, 800, 84));
+    // Guidance over: the bar as it was.
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_guiding());
+    let bar = osd.over_video().expect("the bar's window");
+    assert_eq!((bar.y, bar.height), (416, 64));
+}
+
+// ── Map > Go to ──────────────────────────────────────────────────────────
+
+fn dest(name: &str, detail: &str) -> crate::host::Destination {
+    crate::host::Destination {
+        name: name.into(),
+        detail: detail.into(),
+        place: false,
+    }
+}
+
+/// A map with names to search: Gare, two streets and Kirchberg.
+fn with_names() -> TestHost {
+    let mut host = TestHost::new();
+    host.map_can_search = true;
+    host.map_names = vec![
+        dest("Gare", "Luxembourg, 1.2 km"),
+        dest("Avenue de la Gare", "Luxembourg, 900 m"),
+        dest("Rue de la Gare", "Ettelbruck, 25 km"),
+        dest("Kirchberg", "Luxembourg, 3.1 km"),
+    ];
+    host
+}
+
+fn br(osd: &Osd<TestHost>) -> Bridge<'_> {
+    osd.ui.global::<Bridge<'_>>()
+}
+
+fn dest_rows(osd: &Osd<TestHost>, top: bool) -> Vec<String> {
+    let b = br(osd);
+    let model = if top {
+        b.get_dest_top()
+    } else {
+        b.get_dest_rows()
+    };
+    model.iter().map(|r| r.name.to_string()).collect()
+}
+
+#[test]
+fn go_to_types_a_destination_and_drives_there() {
+    use crate::host::RouteStage;
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    assert!(br(&osd).get_map_can_search());
+    assert!(!br(&osd).get_map_on_route());
+    // The menu's Go to: nothing recent, so the keyboard, and a hint.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(2);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), DEST);
+    assert!(osd.host().has(&Call::SetMapRunning(false)));
+    assert!(br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_caption), "Type a street or a place");
+    assert_eq!(prop!(osd, get_dest_note), "Go to");
+    // Each key searches; the best two over the keyboard, all in the list.
+    for c in "gar".chars() {
+        br(&osd).invoke_osk_key(c.to_string().into());
+        tick(&mut osd);
+    }
+    assert!(osd.host().has(&Call::MapSearch("gar".into())));
+    assert_eq!(prop!(osd, get_dest_query), "gar");
+    assert_eq!(dest_rows(&osd, true), ["Gare", "Avenue de la Gare"]);
+    assert_eq!(dest_rows(&osd, false).len(), 3);
+    // A leading or a double space is not typed; Del takes the last letter.
+    br(&osd).invoke_osk_key(" ".into());
+    br(&osd).invoke_osk_key(" ".into());
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_dest_query), "gar ");
+    br(&osd).invoke_osk_backspace();
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_dest_query), "gar");
+    // Typed on a keyboard, and nothing found.
+    typed(&mut osd, 'x');
+    assert_eq!(prop!(osd, get_dest_caption), "No match");
+    assert!(dest_rows(&osd, true).is_empty());
+    press(&mut osd, OsdKey::Erase);
+    assert_eq!(dest_rows(&osd, true).len(), 2);
+    // OK shows the list; a tap on a row asks for the route.
+    br(&osd).invoke_osk_ok();
+    tick(&mut osd);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_dest_typing());
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Found].into();
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(1);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGo(1)));
+    assert!(osd.ui.global::<Bridge<'_>>().get_dest_busy());
+    assert_eq!(prop!(osd, get_dest_note), "Finding the route");
+    // Ticked again soon, to see it come.
+    assert!(osd.next_due().is_some_and(|d| d.as_millis() <= 50));
+    // Taps wait meanwhile.
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(0);
+    tick(&mut osd);
+    assert!(!osd.host().has(&Call::MapGo(0)));
+    // Found: back on the map, which drives it; its bar has Stop.
+    osd.host_mut().map_on_route = true;
+    tick(&mut osd);
+    assert_eq!(screen(&osd), MAP);
+    assert!(
+        osd.host()
+            .calls
+            .iter()
+            .rev()
+            .find(|c| matches!(c, Call::SetMapRunning(_)))
+            == Some(&Call::SetMapRunning(true))
+    );
+    assert!(br(&osd).get_map_on_route());
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(1);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapEndRoute));
+    assert!(!osd.ui.global::<Bridge<'_>>().get_map_on_route());
+}
+
+#[test]
+fn go_to_opens_on_the_recent_destinations_and_says_why_there_is_no_route() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    host.map_route_note = "No route there".into();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    assert!(!br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_caption), "Recent");
+    assert_eq!(dest_rows(&osd, false), ["Kirchberg"]);
+    // None found: the screen stays and says why.
+    osd.host_mut().map_stages = [RouteStage::Failed].into();
+    osd.ui.global::<Bridge<'_>>().invoke_dest_pick(0);
+    tick(&mut osd);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), DEST);
+    assert!(osd.ui.global::<Bridge<'_>>().get_dest_error());
+    assert_eq!(prop!(osd, get_dest_note), "No route there");
+    // A letter typed on the list goes to the keyboard with it.
+    typed(&mut osd, 'k');
+    assert!(br(&osd).get_dest_typing());
+    assert_eq!(prop!(osd, get_dest_query), "k");
+    assert!(!br(&osd).get_dest_error());
+    // Cancel, and Back from the list: the map.
+    br(&osd).invoke_osk_cancel();
+    tick(&mut osd);
+    assert_eq!(screen(&osd), MAP);
+    goto(&mut osd, DEST);
+    // Opened afresh: nothing typed, the recent ones again.
+    assert_eq!(prop!(osd, get_dest_query), "");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), MAP);
+}
+
+#[test]
+fn go_to_types_with_a_remote_and_picks_with_the_knob() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    // The arrows ring the keyboard's keys, as in the editor: the first
+    // shows the ring on q; Enter types it.
+    press(&mut osd, OsdKey::Down);
+    assert_eq!(osk_pos(&osd), (1, 0));
+    // Down to the a, s, d row; right to... k: row 2, col 7.
+    press(&mut osd, OsdKey::Down);
+    for _ in 0..7 {
+        press(&mut osd, OsdKey::Right);
+    }
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(prop!(osd, get_dest_query), "k");
+    assert_eq!(dest_rows(&osd, true), ["Kirchberg"]);
+    // Enter with no ring: the list, the ring on its first stop.
+    typed(&mut osd, 'i');
+    press(&mut osd, OsdKey::Ok);
+    assert!(!osd.ui.global::<Bridge<'_>>().get_dest_typing());
+    // The knob walks Back, the search row, then the destinations.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "dest-0");
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapGo(0)));
+}
+
+#[test]
+fn go_to_lists_the_nearest_fuel_parking_or_charging() {
+    use crate::host::Nearby;
+    let mut host = with_names();
+    host.map_nearby = vec![
+        (Nearby::Fuel, dest("Aral Bertrange", "Aral · 1.2 km")),
+        (Nearby::Fuel, dest("Shell Strassen", "Shell · 2.4 km")),
+        (
+            Nearby::Charging,
+            dest("Chargy Gare", "4 points, 22 kW · 900 m"),
+        ),
+    ];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    // Nothing recent, but places to find: the list, with the kinds there
+    // are.
+    assert!(!br(&osd).get_dest_typing());
+    assert!(br(&osd).get_dest_can_fuel());
+    assert!(!br(&osd).get_dest_can_parking());
+    assert!(br(&osd).get_dest_can_charging());
+    assert_eq!(br(&osd).get_dest_near(), 0);
+    // The knob walks them in the list's order, between the search row and
+    // the destinations.
+    let mut stops = Vec::new();
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(stops, ["back", "dest-type", "near-1", "near-3"]);
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(ring(&osd), "near-1");
+    // A click lists the nearest fuel, nearest first; the ring stays.
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapNearest(Nearby::Fuel, 8)));
+    assert_eq!(br(&osd).get_dest_near(), 1);
+    assert_eq!(dest_rows(&osd, false), ["Aral Bertrange", "Shell Strassen"]);
+    assert_eq!(prop!(osd, get_dest_caption), "nearest first");
+    assert_eq!(ring(&osd), "near-1");
+    // Back: the recent ones again (none), still on Go to; Back again
+    // leaves.
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), DEST);
+    assert_eq!(br(&osd).get_dest_near(), 0);
+    assert!(dest_rows(&osd, false).is_empty());
+    assert_eq!(prop!(osd, get_dest_caption), "Type a street or a place");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), MAP);
+    // By touch: a tap on Charging lists them, a tap on one drives there.
+    goto(&mut osd, DEST);
+    br(&osd).invoke_dest_nearby(3);
+    tick(&mut osd);
+    assert_eq!(dest_rows(&osd, false), ["Chargy Gare"]);
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGo(0)));
+}
+
+#[test]
+fn choosing_home_offers_no_nearest_places() {
+    use crate::host::Nearby;
+    let mut host = with_names();
+    host.map_nearby = vec![(Nearby::Parking, dest("Knuedler", "400 spaces · 350 m"))];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(3);
+    tick(&mut osd);
+    assert!(br(&osd).get_dest_choosing());
+    assert!(br(&osd).get_dest_typing(), "nothing to choose from: typing");
+}
+
+// ── the route shown whole ────────────────────────────────────────────────
+
+fn kirchberg() -> crate::host::RoutePreview {
+    crate::host::RoutePreview {
+        name: "Kirchberg".into(),
+        distance: "4.1 km".into(),
+        time: "9 min".into(),
+        eta: "14:41".into(),
+    }
+}
+
+/// Go to, a destination picked with the knob, its route found and shown
+/// whole.
+fn previewing() -> Osd<TestHost> {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(screen(&osd), DEST);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "dest-0");
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Preview].into();
+    osd.host_mut().map_preview = Some(kirchberg());
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapGo(0)));
+    tick(&mut osd);
+    osd
+}
+
+#[test]
+fn a_route_found_is_shown_whole_then_starts_by_itself() {
+    let mut osd = previewing();
+    // Back on the map, the bar saying where to, how far, how long, when;
+    // Start and Cancel in its keys' place, the ring on Start.
+    assert_eq!(screen(&osd), MAP);
+    assert!(br(&osd).get_map_preview());
+    assert_eq!(prop!(osd, get_map_preview_name), "Kirchberg");
+    assert_eq!(
+        prop!(osd, get_map_preview_line),
+        "4.1 km · 9 min · arrival 14:41"
+    );
+    assert_eq!(br(&osd).get_map_preview_ring(), 1);
+    assert_eq!(br(&osd).get_map_preview_secs(), 8);
+    assert_eq!(window(&osd), (0, 396, 800, 84));
+    // It counts down, and the screens tick for each second.
+    advance(&mut osd, 2500);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_preview_secs(), 6);
+    assert!(osd.next_due().is_some_and(|d| d.as_millis() <= 500));
+    // Left alone, it starts by itself.
+    advance(&mut osd, 5501);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+    assert!(br(&osd).get_map_on_route());
+    assert_eq!(window(&osd), (0, 416, 800, 64));
+    // The knob zooms again.
+    press(&mut osd, OsdKey::Next);
+    assert!(osd.host().has(&Call::MapZoom(1)));
+}
+
+#[test]
+fn the_knob_starts_or_cancels_the_route_shown_whole() {
+    // A click starts it.
+    let mut osd = previewing();
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+    assert!(
+        !br(&osd).get_map_menu_open(),
+        "the click did not open the menu"
+    );
+    // A turn moves the ring to Cancel, and waits again; a click cancels.
+    let mut osd = previewing();
+    advance(&mut osd, 5000);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(br(&osd).get_map_preview_ring(), 2);
+    assert_eq!(br(&osd).get_map_preview_secs(), 8);
+    assert!(!osd.host().has(&Call::MapZoom(1)), "turns do not zoom");
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(br(&osd).get_map_preview_ring(), 1);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapPreviewCancel));
+    assert!(!osd.host().has(&Call::MapPreviewStart));
+    assert_eq!(screen(&osd), MAP);
+    assert!(!br(&osd).get_map_on_route());
+    // Back cancels; the map stays.
+    let mut osd = previewing();
+    press(&mut osd, OsdKey::Back);
+    assert!(osd.host().has(&Call::MapPreviewCancel));
+    assert_eq!(screen(&osd), MAP);
+    advance(&mut osd, 9000);
+    tick(&mut osd);
+    assert!(!osd.host().has(&Call::MapPreviewStart), "not after it");
+}
+
+#[test]
+fn the_route_shown_whole_by_touch() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    host.map_stages = [RouteStage::Preview].into();
+    host.map_preview = Some(crate::host::RoutePreview {
+        eta: String::new(),
+        ..kirchberg()
+    });
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    goto(&mut osd, DEST);
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    tick(&mut osd);
+    // No ring for a finger; with the clock not set, no arrival.
+    assert!(br(&osd).get_map_preview());
+    assert_eq!(br(&osd).get_map_preview_ring(), 0);
+    assert_eq!(prop!(osd, get_map_preview_line), "4.1 km · 9 min");
+    // A drag looks round it, and the start waits.
+    advance(&mut osd, 6000);
+    osd.pointer(400, 200, true);
+    tick(&mut osd);
+    osd.pointer(300, 200, true);
+    tick(&mut osd);
+    osd.pointer(300, 200, false);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPan(100, 0)));
+    advance(&mut osd, 3000);
+    tick(&mut osd);
+    assert!(br(&osd).get_map_preview());
+    // A tap on Start (where the - + and menu keys are).
+    osd.pointer(600, 450, true);
+    tick(&mut osd);
+    osd.pointer(600, 450, false);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+}
+
+#[test]
+fn leaving_the_map_starts_the_route_shown_whole() {
+    let mut osd = previewing();
+    goto(&mut osd, HOME);
+    assert!(osd.host().has(&Call::MapPreviewStart));
+    assert!(!br(&osd).get_map_preview());
+}
+
+#[test]
+fn home_from_the_menu_is_driven_at_once() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.settings.map.home = Some(lehu_core::settings::MapPlace {
+        name: "Gare".into(),
+        town: "Luxembourg".into(),
+        at: "49.6, 6.13".into(),
+    });
+    host.map_stages = [RouteStage::Found].into();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(3);
+    tick(&mut osd);
+    assert!(osd.host().has(&Call::MapGoPlace("Gare".into())));
+    assert!(!br(&osd).get_map_preview());
+}
+
+// ── the map's menu, Home and Work ────────────────────────────────────────
+
+fn window(osd: &Osd<TestHost>) -> (u32, u32, u32, u32) {
+    let r = osd.over_video().expect("a window over the map");
+    (r.x, r.y, r.width, r.height)
+}
+
+#[test]
+fn the_knob_opens_the_map_menu_walks_it_and_backs_out() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    assert_eq!(window(&osd), (0, 416, 800, 64));
+    // The click opens the menu, the ring on its first row; the window is
+    // the menu's column, the bar's keys at its foot.
+    press(&mut osd, OsdKey::Ok);
+    assert!(br(&osd).get_map_menu_open());
+    assert!(
+        !osd.host().has(&Call::MapZoom(1)),
+        "the click no longer zooms"
+    );
+    assert_eq!(ring(&osd), "menu-goto");
+    assert_eq!(window(&osd), (502, 0, 298, 480));
+    // Turns move the ring, round at the ends as any list.
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        press(&mut osd, OsdKey::Next);
+        seen.push(ring(&osd));
+    }
+    assert_eq!(
+        seen,
+        [
+            "menu-home",
+            "menu-work",
+            "menu-route",
+            "menu-voice",
+            "menu-goto"
+        ]
+    );
+    assert!(!osd.host().has(&Call::MapZoom(1)), "turns do not zoom");
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(ring(&osd), "menu-voice");
+    // Voice: chosen, it turns off and the menu stays.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.voice"),
+        Some(&toml::Value::Boolean(false))
+    );
+    assert!(br(&osd).get_map_menu_open());
+    assert!(!br(&osd).get_map_voice());
+    // Back closes the menu, a second Back leaves the map.
+    press(&mut osd, OsdKey::Back);
+    assert!(!br(&osd).get_map_menu_open());
+    assert_eq!(screen(&osd), MAP);
+    assert_eq!(window(&osd), (0, 416, 800, 64));
+    press(&mut osd, OsdKey::Next);
+    assert!(osd.host().has(&Call::MapZoom(1)), "closed: the knob zooms");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), HOME);
+}
+
+#[test]
+fn the_map_menu_closes_when_left_alone() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    press(&mut osd, OsdKey::Ok);
+    advance(&mut osd, 6000);
+    press(&mut osd, OsdKey::Next);
+    advance(&mut osd, 6000);
+    tick(&mut osd);
+    assert!(br(&osd).get_map_menu_open(), "used meanwhile");
+    assert!(osd.next_due().is_some_and(|d| d.as_millis() <= 2000));
+    advance(&mut osd, 2001);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open());
+    assert_eq!(screen(&osd), MAP);
+}
+
+#[test]
+fn the_bar_says_while_the_route_is_found_anew_by_itself() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    osd.host_mut().map_on_route = true;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+    // Off the route: said until the new one is there.
+    osd.host_mut().map_rerouting = true;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    advance(&mut osd, 10_000);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    osd.host_mut().map_rerouting = false;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+}
+
+#[test]
+fn the_map_menu_by_touch() {
+    let mut osd = osd(with_names());
+    goto(&mut osd, MAP);
+    // The menu key opens it, no ring for a finger; again closes it.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    assert!(br(&osd).get_map_menu_open());
+    assert_eq!(ring(&osd), "");
+    br(&osd).invoke_map_menu(false);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open());
+    // A tap on the map beside it closes it, and moves nothing.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    osd.pointer(200, 200, true);
+    tick(&mut osd);
+    osd.pointer(200, 200, false);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open());
+    assert!(
+        !osd.host()
+            .calls
+            .iter()
+            .any(|c| matches!(c, Call::MapPan(..)))
+    );
+    // The bar's Back key, as the knob's Back: Route's choices, then the
+    // menu, then the map.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 1);
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 0);
+    assert!(br(&osd).get_map_menu_open());
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open());
+    assert_eq!(screen(&osd), MAP);
+    br(&osd).invoke_back();
+    tick(&mut osd);
+    assert_ne!(screen(&osd), MAP);
+    goto(&mut osd, MAP);
+    // A tap on its first row chooses it: Go to.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    osd.pointer(650, 36, true);
+    tick(&mut osd);
+    osd.pointer(650, 36, false);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), DEST);
+    assert!(!br(&osd).get_map_menu_open());
+    // A click of the knob on a menu opened by touch shows the ring first.
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-goto");
+    assert_eq!(screen(&osd), MAP);
+}
+
+#[test]
+fn the_menu_has_my_position_and_stop_while_they_apply() {
+    let mut osd = osd(with_names());
+    osd.host_mut().map_away = true;
+    osd.host_mut().map_on_route = true;
+    goto(&mut osd, MAP);
+    assert!(br(&osd).get_map_away(), "the bar's Me key");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-me");
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "menu-stop");
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapEndRoute));
+    assert!(!br(&osd).get_map_menu_open());
+    // My position centres the map; back on it, the Me key goes.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-me");
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapLocate));
+    osd.host_mut().map_away = false;
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_away());
+}
+
+#[test]
+fn home_is_chosen_once_then_one_choice_away_and_changed_from_go_to() {
+    use crate::host::RouteStage;
+    let mut host = with_names();
+    host.map_recent = vec![dest("Kirchberg", "Luxembourg, 3.1 km")];
+    let mut osd = osd(host);
+    goto(&mut osd, MAP);
+    // Not set: the row says so, and opens Go to to choose it.
+    press(&mut osd, OsdKey::Ok);
+    assert!(!br(&osd).get_map_home_set());
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "menu-home");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(screen(&osd), DEST);
+    assert_eq!(prop!(osd, get_dest_title), "Set Home");
+    assert!(br(&osd).get_dest_choosing());
+    // A pick keeps it, no route; the map's bar says so a moment.
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    assert_eq!(screen(&osd), MAP);
+    assert!(!osd.host().calls.iter().any(|c| matches!(c, Call::MapGo(_))));
+    let home = osd.host().settings.map.home.clone().expect("Home kept");
+    assert_eq!(
+        (home.name.as_str(), home.town.as_str()),
+        ("Kirchberg", "Luxembourg")
+    );
+    assert_eq!(prop!(osd, get_map_flash), "Home set: Kirchberg");
+    advance(&mut osd, 4001);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+    // Set: where it is, and one choice drives there.
+    press(&mut osd, OsdKey::Ok);
+    assert!(br(&osd).get_map_home_set());
+    assert_eq!(prop!(osd, get_map_home), "Kirchberg, 2.4 km");
+    press(&mut osd, OsdKey::Next);
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Found].into();
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().has(&Call::MapGoPlace("Kirchberg".into())));
+    assert!(!br(&osd).get_map_menu_open());
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route to Home");
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "", "the guidance says the rest");
+    // None found: the bar says why.
+    osd.host_mut().map_route_note = "No road near the destination".into();
+    osd.host_mut().map_stages = [RouteStage::Failed].into();
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "No road near the destination");
+    // Changed from Go to: its row under the recent ones, by the knob.
+    advance(&mut osd, 5000);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-goto");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(screen(&osd), DEST);
+    assert_eq!(prop!(osd, get_dest_title), "Go to");
+    let mut stops = Vec::new();
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(stops, ["dest-type", "dest-0", "dest-home", "back"]);
+    press(&mut osd, OsdKey::Prev);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(prop!(osd, get_dest_title), "Set Home");
+    assert!(
+        !br(&osd).get_dest_typing(),
+        "the recent ones to choose from"
+    );
+    typed(&mut osd, 'g');
+    br(&osd).invoke_osk_key("a".into());
+    tick(&mut osd);
+    br(&osd).invoke_dest_pick(0);
+    tick(&mut osd);
+    assert_eq!(
+        osd.host()
+            .settings
+            .map
+            .home
+            .as_ref()
+            .map(|p| p.name.as_str()),
+        Some("Gare")
+    );
+    assert_eq!(screen(&osd), MAP);
+    // Work set too: both Change rows; leaving Go to ends choosing.
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(4);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_dest_title), "Set Work");
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(screen(&osd), MAP);
+    assert!(osd.host().settings.map.work.is_none());
+}
+
+#[test]
+fn route_chooses_fastest_or_shortest_and_motorways_and_finds_ours_anew() {
+    use crate::host::RouteStage;
+    let mut osd = osd(with_names());
+    osd.host_mut().map_on_route = true;
+    goto(&mut osd, MAP);
+    assert_eq!(prop!(osd, get_map_route), "Fastest");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-stop");
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+    }
+    assert_eq!(ring(&osd), "menu-route");
+    // Route: its choices in the column's place, the ring on the first.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(br(&osd).get_map_menu_page(), 1);
+    assert_eq!(ring(&osd), "route-fastest");
+    assert_eq!(window(&osd), (502, 0, 298, 480));
+    assert!(!br(&osd).get_map_shortest());
+    // Turned round its rows.
+    let mut stops = Vec::new();
+    for _ in 0..4 {
+        press(&mut osd, OsdKey::Next);
+        stops.push(ring(&osd));
+    }
+    assert_eq!(
+        stops,
+        [
+            "route-shortest",
+            "route-motorways",
+            "route-cameras",
+            "route-fastest"
+        ]
+    );
+    // Shortest, then motorways avoided: kept, said, the menu stays.
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.route-by"),
+        Some(&toml::Value::String("shortest".into()))
+    );
+    assert!(br(&osd).get_map_shortest());
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().settings.map.avoid_motorways);
+    assert!(br(&osd).get_map_no_motorways());
+    assert_eq!(prop!(osd, get_map_route), "Shortest, no motorways");
+    assert!(br(&osd).get_map_menu_open());
+    assert!(!osd.host().has(&Call::MapReroute), "not while choosing");
+    // Back: the menu's rows, the ring on Route, and our route found anew.
+    osd.host_mut().map_stages = [RouteStage::Finding, RouteStage::Found].into();
+    press(&mut osd, OsdKey::Back);
+    assert_eq!(br(&osd).get_map_menu_page(), 0);
+    assert_eq!(ring(&osd), "menu-route");
+    assert_eq!(osd.host().count(&Call::MapReroute), 1);
+    assert_eq!(prop!(osd, get_map_flash), "Finding the route");
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_flash), "");
+    press(&mut osd, OsdKey::Back);
+    assert!(!br(&osd).get_map_menu_open());
+    // By touch: opened and left unchanged, nothing is found anew; changed,
+    // the menu key closing it finds it anew.
+    advance(&mut osd, KEY_RECENT_MS + 1);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    assert_eq!(ring(&osd), "", "no ring for a finger");
+    br(&osd).invoke_map_menu(false);
+    tick(&mut osd);
+    assert_eq!(osd.host().count(&Call::MapReroute), 1);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_map_menu_page(), 0, "opens on its rows");
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(7);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_shortest());
+    osd.host_mut().map_stages = [RouteStage::Found].into();
+    br(&osd).invoke_map_menu(false);
+    tick(&mut osd);
+    assert_eq!(osd.host().count(&Call::MapReroute), 2);
+    // No route of ours: the options are only kept.
+    osd.host_mut().map_on_route = false;
+    tick(&mut osd);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(6);
+    tick(&mut osd);
+    br(&osd).invoke_map_menu_pick(9);
+    tick(&mut osd);
+    advance(&mut osd, 8001);
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_menu_open(), "closed when left alone");
+    assert_eq!(osd.host().count(&Call::MapReroute), 2);
+    assert!(!osd.host().settings.map.avoid_motorways);
+}
+
+#[test]
+fn speed_cameras_are_switched_in_route_and_shown_ahead_on_the_bar() {
+    use crate::host::NavArrow;
+    let mut osd = osd(with_names());
+    osd.host_mut().map_guide = Some(our_card(NavArrow::Right, NavArrow::None));
+    osd.host_mut().map_camera = Some(337);
+    goto(&mut osd, MAP);
+    // Off by default: no sign, the arrival in its line.
+    assert_eq!(prop!(osd, get_map_camera), "");
+    // Route, then its last row.
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(ring(&osd), "menu-goto");
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    press(&mut osd, OsdKey::Next);
+    assert_eq!(ring(&osd), "menu-route");
+    press(&mut osd, OsdKey::Ok);
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(ring(&osd), "route-cameras");
+    assert!(!br(&osd).get_map_cameras());
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(
+        osd.host().persisted("map.speed-cameras"),
+        Some(&toml::Value::Boolean(true))
+    );
+    assert!(br(&osd).get_map_cameras());
+    assert!(br(&osd).get_map_menu_open(), "the menu stays");
+    // On: the next camera on the bar, to 50 m.
+    assert_eq!(prop!(osd, get_map_camera), "350 m");
+    osd.host_mut().map_camera = Some(120);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "100 m");
+    // Further than 500 m, or passed: none.
+    osd.host_mut().map_camera = Some(700);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
+    osd.host_mut().map_camera = None;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
+    // Not guiding: the camera on the road ahead, the same way.
+    osd.host_mut().map_camera = Some(200);
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "200 m");
+    // Switched off: none.
+    osd.host_mut().settings.map.speed_cameras = false;
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_map_camera), "");
+}
+
+#[test]
+fn seven_menu_rows_fit_above_the_bar() {
+    let mut osd = osd(with_names());
+    osd.host_mut().map_on_route = true;
+    osd.host_mut().map_away = true;
+    osd.host_mut().map_guide = Some(our_card(
+        crate::host::NavArrow::Right,
+        crate::host::NavArrow::None,
+    ));
+    goto(&mut osd, MAP);
+    br(&osd).invoke_map_menu(true);
+    tick(&mut osd);
+    let menu = osd.ui.global::<MapMenu<'_>>();
+    let bar = osd.ui.global::<MapBar<'_>>();
+    assert_eq!(menu.get_rows(), 7);
+    let rows = 7.0 * menu.get_row_h() + 6.0 * menu.get_spacing() + 2.0 * bar.get_pad();
+    assert!(
+        rows <= bar.get_y(),
+        "{rows} over the bar at {}",
+        bar.get_y()
+    );
+    assert!(menu.get_row_h() >= 50.0, "still a finger's height");
+    // Fewer: as tall as they were.
+    osd.host_mut().map_away = false;
+    tick(&mut osd);
+    assert_eq!(osd.ui.global::<MapMenu<'_>>().get_row_h(), 60.0);
+}
+
+#[test]
+fn the_muted_key_turns_the_voice_on_again() {
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    assert!(br(&osd).get_map_voice());
+    osd.host_mut()
+        .persist("map.voice", toml::Value::Boolean(false))
+        .unwrap();
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_voice(), "the bar's muted key");
+    br(&osd).invoke_map_voice_on();
+    tick(&mut osd);
+    assert!(osd.host().settings.map.voice);
+    assert!(br(&osd).get_map_voice());
+}
+
+fn our_card(arrow: crate::host::NavArrow, then: crate::host::NavArrow) -> crate::host::NavCard {
+    crate::host::NavCard {
+        active: true,
+        arrow,
+        maneuver: "Turn right".into(),
+        distance: "200 m".into(),
+        road: "Avenue John F. Kennedy".into(),
+        eta: "14:40".into(),
+        eta_note: "8 min, 5.2 km".into(),
+        then,
+    }
+}
+
+#[test]
+fn a_turn_close_behind_shows_as_then_on_the_bar_and_the_card() {
+    use crate::host::NavArrow;
+    let mut osd = osd(TestHost::new());
+    osd.host_mut().map_guide = Some(our_card(NavArrow::Right, NavArrow::Left));
+    goto(&mut osd, MAP);
+    assert_eq!(br(&osd).get_map_then(), NavArrow::Left.id());
+    goto(&mut osd, HOME);
+    assert_eq!(br(&osd).get_nav_then(), NavArrow::Left.id());
+    osd.host_mut().map_guide = Some(our_card(NavArrow::Right, NavArrow::None));
+    tick(&mut osd);
+    assert_eq!(br(&osd).get_nav_then(), 0);
+}
+
+#[test]
+fn the_arrival_shows_in_the_bar() {
+    use crate::host::{NavArrow, NavCard};
+    let mut osd = osd(TestHost::new());
+    goto(&mut osd, MAP);
+    osd.host_mut().map_guide = Some(NavCard {
+        active: true,
+        arrow: NavArrow::Arrive,
+        distance: "Arrived".into(),
+        maneuver: "Rue de la Gare".into(),
+        road: "Luxembourg".into(),
+        ..NavCard::default()
+    });
+    tick(&mut osd);
+    assert!(br(&osd).get_map_guiding());
+    assert_eq!(br(&osd).get_map_arrow(), NavArrow::Arrive.id());
+    assert_eq!(prop!(osd, get_map_distance), "Arrived");
+    assert_eq!(prop!(osd, get_map_maneuver), "Rue de la Gare");
+    // Over: the plain bar.
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert!(!br(&osd).get_map_guiding());
+}
+
+#[test]
+fn our_next_turn_is_the_card_on_the_other_screens_unless_the_phone_guides() {
+    use crate::host::NavArrow;
+    let mut osd = osd(TestHost::new());
+    osd.host_mut().map_guide = Some(our_card(NavArrow::Right, NavArrow::None));
+    goto(&mut osd, MAP);
+    assert!(!br(&osd).get_nav_card(), "the map's bar says it there");
+    goto(&mut osd, HOME);
+    assert!(br(&osd).get_nav_card());
+    assert_eq!(prop!(osd, get_nav_road), "Avenue John F. Kennedy");
+    // Kept current, and for as long as the map guides, not a while.
+    advance(&mut osd, 60_000);
+    osd.host_mut().map_guide.as_mut().unwrap().distance = "100 m".into();
+    tick(&mut osd);
+    assert!(br(&osd).get_nav_card());
+    assert_eq!(prop!(osd, get_nav_distance), "100 m");
+    // The phone guiding wins.
+    guiding(&mut osd);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_nav_maneuver), "Turn left");
+    assert_eq!(prop!(osd, get_nav_distance), "350 m");
+    // Its card gone a while later: ours again.
+    advance(&mut osd, NAV_CARD_MS + 1);
+    tick(&mut osd);
+    assert_eq!(prop!(osd, get_nav_distance), "100 m");
+    // Guidance over: no card.
+    osd.host_mut().map_guide = None;
+    tick(&mut osd);
+    assert!(!br(&osd).get_nav_card());
+}
+
+#[test]
+fn the_map_voice_steps_through_the_voices_on_the_card() {
+    use crate::host::MapVoice;
+    let voice = |dir: &str, name: &str| MapVoice {
+        dir: dir.into(),
+        name: name.into(),
+        current: false,
+    };
+    let mut host = TestHost::new();
+    host.map_voices = vec![
+        voice("/maps/voice/hu_HU-anna-medium", "Anna, Hungarian"),
+        voice("/maps/voice/en_GB-cori-high", "Cori, British English"),
+        voice("/maps/voice/de_DE-thorsten-high", "Thorsten, German"),
+    ];
+    host.persist(
+        "map.voice-dir",
+        toml::Value::String("/maps/voice/en_GB-cori-high".into()),
+    )
+    .unwrap();
+    host.calls.clear();
+    let mut osd = osd(host);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Cori, British English");
+    // Started on the voice spoken with; stepped through the others.
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd), (18, 1));
+    assert_eq!(prop!(osd, get_pick_value), "Cori, British English");
+    press(&mut osd, OsdKey::Prev);
+    assert_eq!(prop!(osd, get_pick_value), "Anna, Hungarian");
+    press(&mut osd, OsdKey::Ok);
+    assert_eq!(pick(&osd).0, 0);
+    assert_eq!(
+        osd.host().persisted("map.voice-dir"),
+        Some(&toml::Value::String("/maps/voice/hu_HU-anna-medium".into()))
+    );
+    assert_eq!(prop!(osd, get_voice_label), "Anna, Hungarian");
+    // Enter on the one spoken with changes nothing.
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd), (18, 0));
+    osd.host_mut().calls.clear();
+    press(&mut osd, OsdKey::Ok);
+    assert!(osd.host().calls.is_empty(), "{:?}", osd.host().calls);
+    // No voice on the card: nothing to step through.
+    osd.host_mut().map_voice = false;
+    goto(&mut osd, SETTINGS);
+    goto(&mut osd, MAP_SETTINGS);
+    assert_eq!(prop!(osd, get_voice_label), "Not installed");
+    pick_press(&mut osd, 18);
+    assert_eq!(pick(&osd).0, 0);
 }

@@ -231,7 +231,11 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     let (width, height) = display
         .as_ref()
         .map_or((800, 480), |d| (d.width(), d.height()));
-    let input_config = InputConfig::from_settings(&settings);
+    let mut input_config = InputConfig::from_settings(&settings);
+    // The pointer moves over the panel, and only where it can be shown.
+    input_config.panel = (width, height);
+    let has_pointer = display.as_ref().is_some_and(|d| d.has_cursor_plane());
+    input_config.mouse &= has_pointer;
     let mut camera_key = settings.camera.key;
     // The audio runs for the program's lifetime, shared by the screens and
     // the sessions. The protocols' state (pairings, identities) lives
@@ -344,12 +348,20 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
     // The camera view ended or failed while it is still up: not again
     // until it is left.
     let mut camera_done = false;
+    // The map could not start: not again until its screen is left.
+    let mut map_done = false;
     // The settings' generation the program last followed.
     let mut settings_seen = 0;
     let mut mem_watch = crate::mem::Watch::new();
     // An update installs: the phone's sessions stay off until it failed (on
     // success the installer restarts the head unit).
     let mut installing = false;
+    // The screens asked for the map or the camera (or to leave it) after
+    // the loop looked this turn: it looks again at once, not at whatever
+    // wakes it next.
+    let mut again = false;
+    // The mouse pointer on the cursor plane.
+    let mut pointer = crate::pointer::Pointer::default();
 
     log::info!("running");
     let mut exit = Exit::Done(ExitCode::SUCCESS);
@@ -358,12 +370,25 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // moments (the volume bar or the navigation card going, the Media
         // page's position line); otherwise the loop sleeps until a
         // descriptor is ready.
-        let timeout = screens.as_ref().and_then(|(osd, _)| {
-            match (lehu_ui::next_timer_due(), osd.next_due()) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            }
-        });
+        let timeout = if std::mem::take(&mut again) {
+            Some(std::time::Duration::ZERO)
+        } else {
+            screens.as_ref().and_then(|(osd, _)| {
+                let now = lehu_core::clock::now_ms();
+                let pointer_due = pointer
+                    .next_due(osd.host().settings().mouse.autohide, now)
+                    .map(|t| std::time::Duration::from_millis(t.saturating_sub(now)));
+                [
+                    lehu_ui::next_timer_due(),
+                    osd.next_due(),
+                    osd.host().map_due(),
+                    pointer_due,
+                ]
+                .into_iter()
+                .flatten()
+                .min()
+            })
+        };
         match poller.wait(timeout) {
             Ok(_) => {}
             Err(e) => {
@@ -403,6 +428,11 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
                         osd.host_mut().request_camera(CameraRequest::Toggle);
                     }
                     (Some((osd, _)), Event::KeyLearned(code)) => osd.host_mut().key_learned(code),
+                    (_, Event::Pointer { x, y }) => pointer.moved(
+                        (u32::from(x) * width / u32::from(TOUCH_SCALE)) as i32,
+                        (u32::from(y) * height / u32::from(TOUCH_SCALE)) as i32,
+                        lehu_core::clock::now_ms(),
+                    ),
                     (_, Event::Phone { button, value }) => driver.button(button, value),
                     (
                         _,
@@ -441,6 +471,9 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             driver.set_android_fps(s.android_auto.fps);
             if let Some(bt) = &bt {
                 bt.set_name(&s.bluetooth.name);
+            }
+            if let Some(input) = &input {
+                input.set_mouse(s.mouse.enabled && has_pointer);
             }
         }
         let due = driver.next_due();
@@ -516,6 +549,50 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             }
         }
 
+        // The map: on the video plane while its screen is up. Its canvases
+        // want video memory the phone's decoder may hold, so the decoder is
+        // parked meanwhile, as for the camera.
+        // What the loop sees the screens ask for, this turn.
+        let (mut map_asked, mut camera_asked) = (false, false);
+        let mut map_shown = false;
+        let mut map_ready = false;
+        if let Some((osd, plane)) = &mut screens {
+            let wanted = osd.host().map_wanted();
+            map_asked = wanted;
+            if !wanted {
+                map_done = false;
+            }
+            if osd.host().map_started() && !wanted {
+                // The screens cover the map before it goes.
+                osd.invalidate();
+                if osd.tick(false, plane) {
+                    plane.show();
+                }
+                over_video = false;
+                osd.host_mut().map_stop();
+                driver.unpark();
+                crate::mem::trim();
+            }
+            if wanted && !map_done && !osd.host().map_started() {
+                driver.park(true);
+                if !osd.host_mut().map_start() {
+                    map_done = true;
+                    driver.unpark();
+                }
+            }
+            // The pointer first: while it shows, the map's marker keeps
+            // off the cursor plane.
+            if let Some(d) = &display {
+                let mouse = &osd.host().settings().mouse;
+                let (enabled, autohide) = (mouse.enabled && has_pointer, mouse.autohide);
+                pointer.tick(d, enabled, autohide, lehu_core::clock::now_ms());
+            }
+            osd.host_mut().set_pointer_shown(pointer.shown());
+            osd.host_mut().map_tick();
+            map_shown = osd.host().map_started();
+            map_ready = osd.host().map_ready();
+        }
+
         // Settings > Video > Camera: the camera owns the panel until its
         // view is closed, whatever the phone does meanwhile. It needs the
         // video memory the phone's decoder holds (~19 of 24 MiB): the
@@ -527,6 +604,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         if let Some((osd, plane)) = &mut screens {
             osd.camera_requests(); // the camera key, from any screen or video
             let wanted = osd.host().camera_wanted();
+            camera_asked = wanted;
             if !wanted {
                 camera_done = false;
             }
@@ -616,8 +694,8 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
         // front, and only the window the screens ask for (the volume bar,
         // the camera column) over the picture. The camera's column is the
         // screens' own, so the phone takes nothing while it runs.
-        let phone_front = driver.phone_front() && !camera_running;
-        let over_now = phone_front || (camera_running && !camera_waiting);
+        let phone_front = driver.phone_front() && !camera_running && !map_shown;
+        let over_now = phone_front || (camera_running && !camera_waiting) || map_ready;
         hub.set_phone_takes(phone_front);
         if let Some(input) = &input {
             input.route(if phone_front {
@@ -663,6 +741,7 @@ pub fn run(loaded: Loaded, features: Features) -> Exit {
             }
             let host = osd.host_mut();
             host.tick();
+            again = host.map_wanted() != map_asked || host.camera_wanted() != camera_asked;
             if let (Some(input), Some(on)) = (&input, host.take_learning()) {
                 input.set_learning(on);
             }

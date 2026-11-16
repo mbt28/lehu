@@ -4,11 +4,11 @@
 //! list, so a commit allocates nothing. The properties of one object stay
 //! together, as the ioctl wants them.
 
-/// Connector, CRTC and two planes.
-pub const MAX_OBJECTS: usize = 4;
-/// A modeset (3) and two planes with their geometry and zpos (11 each) is
-/// 25; the rest is slack.
-pub const MAX_PROPS: usize = 32;
+/// Connector, CRTC and the four planes: video, sprite, cursor, UI.
+pub const MAX_OBJECTS: usize = 6;
+/// A modeset (3) and four planes with their geometry and zpos (11 each) is
+/// 47; the rest is slack.
+pub const MAX_PROPS: usize = 48;
 
 #[derive(Debug)]
 pub struct Request {
@@ -45,6 +45,11 @@ impl Request {
         self.object_count = 0;
         self.prop_count = 0;
         self.overflow = false;
+    }
+
+    /// Nothing has been added since `clear`.
+    pub fn is_empty(&self) -> bool {
+        self.object_count == 0
     }
 
     pub fn overflowed(&self) -> bool {

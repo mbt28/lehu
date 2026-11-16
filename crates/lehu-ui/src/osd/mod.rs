@@ -28,24 +28,27 @@ use slint::platform::{Key, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, ModelRc, SharedString, VecModel};
 use toml::Value;
 
-use crate::host::{AudioOutput, CameraRequest, Host};
+use crate::host::{AudioOutput, CameraRequest, Destination, Host, MapSlot, NavCard};
 use crate::input::{Input, KEY_QUEUE, KeyEvent};
 use crate::{
-    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DeviceRow, NavCardBox, VolumeBar, platform,
-    text,
+    AppWindow, Bridge, BtRow, CameraPanel, CameraRow, DestRow, DeviceRow, MapBar, MapMenu,
+    NavCardBox, VolumeBar, platform, text,
 };
 
 mod audio;
 mod bluetooth;
 mod camera;
+mod dest;
 mod devices;
 mod dialog;
 mod editor;
 mod info;
 mod keys;
+mod map;
 mod media;
 mod pick;
 mod pump;
+mod region;
 mod rows;
 #[cfg(test)]
 mod shots;
@@ -93,8 +96,11 @@ const UPDATE_PHONE: i32 = 15;
 const CONNECTION: i32 = 16;
 const SYSTEM: i32 = 17;
 const INFO: i32 = 18;
+const MAP: i32 = 19;
+const DEST: i32 = 20;
+const MAP_SETTINGS: i32 = 21;
 /// One past the highest screen number: the ring's memory has a place each.
-const SCREENS: usize = 19;
+const SCREENS: usize = 22;
 
 /// The camera view's settings column hides this long after the last input.
 const CAMERA_PANEL_MS: u64 = 5000;
@@ -137,6 +143,21 @@ enum Action {
     CameraPicture,
     CameraKey,
     CameraFastswitchToggle,
+    MapCursorToggle,
+    MouseToggle,
+    MouseAutohideToggle,
+    MapDragStart,
+    MapDrag(i32, i32),
+    MapZoom(i32),
+    MapLocate,
+    MapMenu(bool),
+    MapMenuPick(i32),
+    MapVoice(bool),
+    MapPreview(bool),
+    DestPick(i32),
+    DestChange(i32),
+    DestType,
+    DestNearby(i32),
     EditField(i32),
     OskKey(SharedString),
     OskBackspace,
@@ -240,11 +261,19 @@ struct State<H> {
     p_phone_detail: Last,
     p_status_note: Last,
     p_night: Option<NightMode>,
+    /// The night palette, as shown.
+    p_palette: Option<bool>,
     /// The clock as shown, minutes since midnight (`None` not known), and
     /// when to look at the time again.
     p_clock: Option<Option<u32>>,
     clock_due: u64,
     p_fps: Option<u32>,
+    /// The hardware cursor rows as shown: there, on, the size's option.
+    p_cursor: Option<(bool, bool, i32)>,
+    /// The mouse rows as shown: there, on, auto-hide.
+    p_mouse: Option<(bool, bool, bool)>,
+    /// The While turning row's option, as shown.
+    p_turning: Option<i32>,
     p_ssid: Last,
     p_pass: Last,
     p_bt_name: Last,
@@ -384,6 +413,63 @@ struct State<H> {
     /// phone's video is in front.
     over_phone: bool,
 
+    // ── the map ─────────────────────────────────────────────────────────
+    /// The drag so far, as last reported: pixels from where it went down.
+    map_drag: (i32, i32),
+    p_map_note: Last,
+    p_map_label: Last,
+    p_map_away: Option<bool>,
+    p_map_voice: Option<bool>,
+    p_map_guidance: Option<NavCard>,
+    p_map_speed: Option<Option<(u32, Option<u16>)>>,
+    p_map_search: Option<(bool, bool)>,
+    /// Home and Work are set, as shown.
+    p_map_slots: Option<(bool, bool)>,
+    /// The menu is open, until then unless used; its page (the rows, or
+    /// Route's choices), and the route's options when they were opened.
+    map_menu: bool,
+    menu_until: u64,
+    map_menu_page: i32,
+    route_opened: Option<(lehu_core::settings::RouteBy, bool)>,
+    p_map_route: Option<(lehu_core::settings::RouteBy, bool)>,
+    /// Speed cameras warned of, and the metres to the next one shown.
+    p_map_cameras: Option<bool>,
+    p_map_camera: Option<Option<u32>>,
+    /// The bar's short note, until then (0: none).
+    flash: String,
+    flash_until: u64,
+    p_map_flash: Last,
+    /// The route was being found anew by itself, last tick.
+    p_rerouting: bool,
+    /// The route being found is to Home or Work, asked from the menu.
+    menu_routing: bool,
+    /// A route shown whole: it starts by itself then (0: none shown); the
+    /// knob's ring on its keys (1 Start, 2 Cancel, 0 none); the seconds
+    /// left, as shown.
+    preview_until: u64,
+    preview_ring: i32,
+    p_preview_secs: Option<u64>,
+    /// Our own guidance as the navigation card shows it on the other
+    /// screens, while the phone's is not up.
+    p_nav_ours: Option<NavCard>,
+
+    // ── Map > Go to ─────────────────────────────────────────────────────
+    /// What is typed; the keyboard is up (else the list); a route is
+    /// being found; none was, and the note says why.
+    dest_query: String,
+    dest_typing: bool,
+    dest_busy: bool,
+    dest_error: bool,
+    /// Go to chooses Home or Work rather than going somewhere.
+    dest_choose: Option<MapSlot>,
+    /// The nearest of this kind are listed, in the recent ones' place.
+    dest_near: Option<crate::host::Nearby>,
+    dest_rows: Rc<VecModel<DestRow>>,
+    dest_top: Rc<VecModel<DestRow>>,
+    p_dests: Option<Vec<Destination>>,
+    p_dest_caption: Last,
+    p_dest_note: Last,
+
     // ── Settings > Audio ────────────────────────────────────────────────
     p_levels: Option<[u32; 4]>,
     /// The playback devices as listed when the screen last opened.
@@ -393,8 +479,20 @@ struct State<H> {
     output_now: Option<usize>,
     output_dirty: bool,
     p_output_label: Last,
-    /// The list a row steps through (Output, Channel, Country), as shown.
+    /// The list a row steps through (Output, Channel, Country, Region),
+    /// as shown.
     pick_list: Vec<String>,
+
+    // ── Settings > Map ──────────────────────────────────────────────────
+    /// The regions as listed when Settings or its Map screen last opened.
+    regions: Vec<crate::host::MapRegion>,
+    voices: Vec<crate::host::MapVoice>,
+    regions_gen: Option<u32>,
+    /// The screen the last pump saw, to read the regions again on opening.
+    regions_screen: i32,
+    p_region_label: Last,
+    p_voice_label: Last,
+    p_map_hint: Last,
 
     // ── the access point and the link ───────────────────────────────────
     /// hostapd's radio, read when its page (or Link speed) opened.
@@ -457,9 +555,13 @@ impl<H: Host> State<H> {
             p_phone_detail: Last::default(),
             p_status_note: Last::default(),
             p_night: None,
+            p_palette: None,
             p_clock: None,
             clock_due: 0,
             p_fps: None,
+            p_cursor: None,
+            p_mouse: None,
+            p_turning: None,
             p_ssid: Last::default(),
             p_pass: Last::default(),
             p_bt_name: Last::default(),
@@ -544,6 +646,42 @@ impl<H: Host> State<H> {
             nav_until: 0,
             p_nav_card: false,
             over_phone: false,
+            map_drag: (0, 0),
+            p_map_note: Last::default(),
+            p_map_label: Last::default(),
+            p_map_away: None,
+            p_map_voice: None,
+            p_map_guidance: None,
+            p_map_speed: None,
+            p_map_search: None,
+            p_map_slots: None,
+            map_menu: false,
+            menu_until: 0,
+            map_menu_page: 0,
+            route_opened: None,
+            p_map_route: None,
+            p_map_cameras: None,
+            p_map_camera: None,
+            flash: String::new(),
+            flash_until: 0,
+            p_map_flash: Last::default(),
+            p_rerouting: false,
+            menu_routing: false,
+            preview_until: 0,
+            preview_ring: 0,
+            p_preview_secs: None,
+            p_nav_ours: None,
+            dest_query: String::new(),
+            dest_typing: false,
+            dest_busy: false,
+            dest_error: false,
+            dest_choose: None,
+            dest_near: None,
+            dest_rows: Rc::new(VecModel::default()),
+            dest_top: Rc::new(VecModel::default()),
+            p_dests: None,
+            p_dest_caption: Last::default(),
+            p_dest_note: Last::default(),
             p_levels: None,
             outputs: Vec::new(),
             outputs_seen: false,
@@ -551,6 +689,13 @@ impl<H: Host> State<H> {
             output_dirty: false,
             p_output_label: Last::default(),
             pick_list: Vec::new(),
+            regions: Vec::new(),
+            voices: Vec::new(),
+            regions_gen: None,
+            regions_screen: -1,
+            p_region_label: Last::default(),
+            p_voice_label: Last::default(),
+            p_map_hint: Last::default(),
             ap: None,
             ap_status: String::new(),
             p_ap_status: Last::default(),
@@ -607,7 +752,8 @@ impl<H: Host> State<H> {
             UPDATE_PHONE => Some(UPDATE),
             CAMERA => Some(self.cam_return),
             DEVICES => Some(self.devices_parent),
-            MEDIA | SETTINGS => Some(HOME),
+            MEDIA | SETTINGS | MAP => Some(HOME),
+            DEST => Some(MAP),
             _ => Some(SETTINGS),
         }
     }
@@ -641,8 +787,27 @@ impl<H: Host> State<H> {
         }
     }
 
-    /// One level up from the screen shown; false at home.
+    /// One level up from the screen shown; false at home. On Go to's
+    /// nearest of a kind, the recent ones again.
     fn back(&mut self, bridge: &Bridge<'_>) -> bool {
+        if bridge.get_screen() == DEST && self.dest_near_close(bridge) {
+            return true;
+        }
+        // A route shown whole: dropped, the map stays.
+        if bridge.get_screen() == MAP && self.preview_until != 0 {
+            self.preview_end(bridge, false);
+            return true;
+        }
+        // The map's menu open: Route's choices, then the menu, go first, as
+        // with the knob's Back.
+        if bridge.get_screen() == MAP && self.map_menu {
+            if self.map_menu_page == map::PAGE_ROUTE {
+                self.map_menu_page(bridge, map::PAGE_ROWS);
+            } else {
+                self.map_menu_show(bridge, false);
+            }
+            return true;
+        }
         match self.parent(bridge.get_screen()) {
             Some(parent) => {
                 bridge.set_screen(parent);
@@ -709,14 +874,48 @@ impl<H: Host> State<H> {
                 self.dialog_dirty = true;
                 self.host.set_key_learning(true);
             }
+            Action::MapDragStart => self.map_drag_start(),
+            Action::MapDrag(dx, dy) => self.map_drag(dx, dy),
+            Action::MapZoom(step) => self.host.map_zoom(step),
+            Action::MapLocate => self.host.map_locate(),
+            Action::MapMenu(open) => self.map_menu_show(&bridge, open),
+            Action::MapMenuPick(row) => self.map_menu_pick(&bridge, row),
+            Action::MapVoice(on) => self.map_voice(on),
+            Action::MapPreview(start) => self.preview_end(&bridge, start),
+            Action::DestPick(index) => self.dest_pick(&bridge, index),
+            Action::DestChange(slot) => self.dest_change(ui, slot),
+            Action::DestType => self.dest_type(ui),
+            Action::DestNearby(id) => self.dest_nearby(&bridge, id),
             Action::CameraFastswitchToggle => {
                 let on = self.host.settings().camera.fast_switch;
                 self.persist("camera.fast-switch", Value::Boolean(!on));
+            }
+            // The map takes it at its next tick.
+            Action::MapCursorToggle => {
+                let on = self.host.settings().map.cursor;
+                self.persist("map.cursor", Value::Boolean(!on));
+            }
+            // The input thread and the pointer follow at the loop's next
+            // turn.
+            Action::MouseToggle => {
+                let on = self.host.settings().mouse.enabled;
+                self.persist("mouse.enabled", Value::Boolean(!on));
+            }
+            Action::MouseAutohideToggle => {
+                let on = self.host.settings().mouse.autohide;
+                self.persist("mouse.autohide", Value::Boolean(!on));
             }
             Action::EditField(id) => {
                 if (0..editor::FIELD_COUNT).contains(&id) {
                     self.set_editing(ui, id);
                 }
+            }
+            // The keyboard is the editor's, or Go to's.
+            Action::OskKey(key) if self.dest_keys(&bridge) => self.dest_key(&bridge, key.as_str()),
+            Action::OskBackspace if self.dest_keys(&bridge) => self.dest_backspace(&bridge),
+            Action::OskOk if self.dest_keys(&bridge) => self.dest_list(ui),
+            Action::OskCancel if self.dest_keys(&bridge) => {
+                self.back(&bridge);
             }
             Action::OskKey(key) => self.osk_key(&bridge, key.as_str()),
             Action::OskBackspace => self.osk_backspace(&bridge),
@@ -859,6 +1058,22 @@ fn wire(ui: &AppWindow, actions: &Actions) {
     on!(on_camera_fastswitch_toggle, || {
         Action::CameraFastswitchToggle
     });
+    on!(on_map_cursor_toggle, || Action::MapCursorToggle);
+    on!(on_mouse_toggle, || Action::MouseToggle);
+    on!(on_mouse_autohide_toggle, || Action::MouseAutohideToggle);
+    on!(on_map_drag_start, || Action::MapDragStart);
+    on!(on_map_drag, |dx, dy| Action::MapDrag(dx, dy));
+    on!(on_map_zoom, |step| Action::MapZoom(step));
+    on!(on_map_locate, || Action::MapLocate);
+    on!(on_map_menu, |open| Action::MapMenu(open));
+    on!(on_map_menu_pick, |row| Action::MapMenuPick(row));
+    on!(on_map_voice_on, || Action::MapVoice(true));
+    on!(on_map_preview_start, || Action::MapPreview(true));
+    on!(on_map_preview_cancel, || Action::MapPreview(false));
+    on!(on_dest_pick, |index| Action::DestPick(index));
+    on!(on_dest_change, |slot| Action::DestChange(slot));
+    on!(on_dest_type, || Action::DestType);
+    on!(on_dest_nearby, |id| Action::DestNearby(id));
     on!(on_edit_field, |id| Action::EditField(id));
     on!(on_osk_key, |key| Action::OskKey(key));
     on!(on_osk_backspace, || Action::OskBackspace);
@@ -898,6 +1113,8 @@ impl<H: Host> Osd<H> {
             bridge.set_bt_paired(ModelRc::from(st.bt_paired.clone()));
             bridge.set_bt_found(ModelRc::from(st.bt_found.clone()));
             bridge.set_devices(ModelRc::from(st.devices.clone()));
+            bridge.set_dest_rows(ModelRc::from(st.dest_rows.clone()));
+            bridge.set_dest_top(ModelRc::from(st.dest_top.clone()));
         }
         let pixels = width as usize * height as usize;
         log::info!(
@@ -1006,7 +1223,7 @@ impl<H: Host> Osd<H> {
             dispatch_key(&self.ui, Key::Tab, false);
         }
 
-        self.st.over_phone = over_video && self.st.p_screen != CAMERA;
+        self.st.over_phone = over_video && self.st.p_screen != CAMERA && self.st.p_screen != MAP;
         self.pointer_events();
         drain(&self.actions, &mut self.st, &self.ui);
 
@@ -1153,10 +1370,34 @@ impl<H: Host> Osd<H> {
         }
         // A change the next tick has not pumped yet brings the bar up too.
         let pending = st.volume_seen && st.host.volume_generation() != st.p_volume_gen;
-        if !pending && !(st.volume_bar && st.now() < st.volume_bar_until) {
+        let bar_up = pending || (st.volume_bar && st.now() < st.volume_bar_until);
+        // The map's menu, the bar's keys at its foot; else its bar, while
+        // the volume bar is not up.
+        if st.p_screen == MAP && st.map_menu && !bar_up {
+            let menu = self.ui.global::<MapMenu<'_>>();
+            return Some(rect(
+                menu.get_x(),
+                menu.get_y(),
+                menu.get_width(),
+                menu.get_height(),
+            ));
+        }
+        if st.p_screen == MAP && !bar_up {
+            let bar = self.ui.global::<MapBar<'_>>();
+            return Some(rect(
+                bar.get_x(),
+                bar.get_y(),
+                bar.get_width(),
+                bar.get_height(),
+            ));
+        }
+        if !bar_up {
             // Over the phone's video the card never shows: the phone draws
             // its own route.
-            if st.p_screen == CAMERA && st.p_nav_card && st.now() < st.nav_until {
+            if st.p_screen == CAMERA
+                && st.p_nav_card
+                && (st.now() < st.nav_until || st.p_nav_ours.is_some())
+            {
                 let card = self.ui.global::<NavCardBox<'_>>();
                 return Some(rect(
                     card.get_x(),
@@ -1189,6 +1430,16 @@ impl<H: Host> Osd<H> {
             st.media_due(now),
             st.link_due(),
             st.info_due(),
+            // A route being found: looked for again soon.
+            st.dest_busy.then_some(now + 50),
+            // The map's menu closing by itself, its bar's note going.
+            st.map_menu.then_some(st.menu_until),
+            // A route shown whole: its next second, and its start.
+            (st.preview_until != 0).then(|| {
+                let left = st.preview_until.saturating_sub(now);
+                now + (left.saturating_sub(1) % 1000) + 1
+            }),
+            (st.flash_until != 0 && st.flash_until != u64::MAX).then_some(st.flash_until),
             // The clock's next minute, while it shows the time.
             matches!(st.p_clock, Some(Some(_))).then_some(st.clock_due),
         ]

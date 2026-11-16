@@ -7,7 +7,9 @@
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lehu_audio::{AUX_DEPTH, Decoder, Input, MAIN_DEPTH, Mic, Mixer, Segment, Volume};
+use lehu_audio::{
+    AUX_DEPTH, Decoder, Input, MAIN_DEPTH, Mic, Mixer, PROMPT_DEPTH, Segment, Volume,
+};
 use lehu_core::queue::Queue;
 use lehu_core::settings::Audio as AudioSettings;
 use lehu_session::{AudioFormat, AudioKind, MicFormat, MicFrame, Sinks};
@@ -27,6 +29,8 @@ pub struct Audio {
     device: Mutex<String>,
     main: Arc<Queue<Segment>>,
     aux: Arc<Queue<Segment>>,
+    /// LEHU's own spoken prompts, a phrase a segment.
+    prompt: Arc<Queue<Segment>>,
     /// The microphone's PCM, read each time a microphone starts.
     mic_device: Arc<Mutex<String>>,
     mic_gain: u32,
@@ -54,11 +58,13 @@ impl Audio {
         let volume = Arc::new(Volume::open(settings));
         let main = Arc::new(Queue::new(MAIN_DEPTH));
         let aux = Arc::new(Queue::new(AUX_DEPTH));
+        let prompt = Arc::new(Queue::new(PROMPT_DEPTH));
         let mixer = Mixer::start(
             &settings.device,
             settings,
             Arc::clone(&main),
             Arc::clone(&aux),
+            Arc::clone(&prompt),
             Arc::clone(&volume),
         );
         Self {
@@ -67,6 +73,7 @@ impl Audio {
             device: Mutex::new(settings.device.clone()),
             main,
             aux,
+            prompt,
             mic_device: Arc::new(Mutex::new(mic_device_of(settings))),
             mic_gain: settings.mic_gain,
             levels: Arc::new(std::array::from_fn(|_| AtomicI32::new(32768))),
@@ -118,6 +125,7 @@ impl Audio {
             settings,
             Arc::clone(&self.main),
             Arc::clone(&self.aux),
+            Arc::clone(&self.prompt),
             Arc::clone(&self.volume),
         ));
     }
@@ -148,6 +156,16 @@ impl Audio {
             mic_gain: self.mic_gain,
             big_endian_pcm,
         })
+    }
+
+    /// A spoken prompt of LEHU's own, a whole phrase, at the navigation
+    /// level. The mixer plays it at once, ducking the music, unless the
+    /// phone's voice is playing: then it waits for half a second of quiet,
+    /// a little while, and is dropped rather than said late. A phone
+    /// session's audio is never touched.
+    pub fn prompt(&self, mut segment: Segment) {
+        segment.scale(self.levels[slot(AudioKind::Speech)].load(Ordering::Relaxed));
+        self.prompt.push_drop_oldest(segment);
     }
 
     /// A session ended: what is queued is dropped; the segment the mixer

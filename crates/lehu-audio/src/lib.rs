@@ -14,6 +14,11 @@
 //!   the music to the `fade` floor and releases after four quiet periods;
 //!   the device is released after `idle-hold-ms` of silence so the DAC and
 //!   amplifier power down. A `[Audio]` line every 5 s says how it went.
+//!   A third queue carries LEHU's own spoken prompts (the map's turns), a
+//!   phrase a segment: played at once, summed with the rest and ducking
+//!   the music, but held while the phone's voice plays and dropped when it
+//!   goes on too long, so a call or the phone's own prompts are never
+//!   talked over.
 //! - [`Volume`]: the level and mute, through the card's own control via
 //!   ALSA's simple mixer (cubic dB mapping) or a software gain the mixer
 //!   ramps; the save of the level debounced by 2 s, handed to the caller.
@@ -22,6 +27,7 @@
 //! - [`Mic`]: capture, DC-blocked and framed as the phone asks, coded to
 //!   PCM or Opus, into the session's microphone queue.
 //! - [`outputs`]: the playback devices the kernel lists, for the screens.
+//! - [`wav`]: a WAV clip's samples, for the prompts.
 //!
 //! Everything per sample is integer; no `f32` touches the audio.
 
@@ -39,15 +45,16 @@ mod segment;
 mod source;
 mod stats;
 mod volume;
+pub mod wav;
 
 use std::fmt;
 
 pub use aac::{AacDecoder, MAX_UNIT, available as aac_available};
 pub use cards::{Output, opens, outputs};
 pub use decoder::{Decoder, decode_pcm_be, pcm_samples};
-pub use engine::{MAX_BUFFER_MS, MIX_PERIOD, MIX_PERIOD_MS, SILENCE_LEVEL};
+pub use engine::{MAX_BUFFER_MS, MIX_PERIOD, MIX_PERIOD_MS, PROMPT_WAIT_MS, SILENCE_LEVEL};
 pub use mic::{DcBlocker, Mic, frame_samples};
-pub use mixer::{AUX_DEPTH, Input, MAIN_DEPTH, Mixer};
+pub use mixer::{AUX_DEPTH, Input, MAIN_DEPTH, Mixer, PROMPT_DEPTH};
 pub use opus::{MAX_FRAME, OpusDecoder, OpusEncoder, available as opus_available};
 pub use segment::{Format, Segment};
 pub use source::MIX_RATE;

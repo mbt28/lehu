@@ -10,6 +10,11 @@
 //! it started on: a route change gives the old side a terminal release and
 //! the new side never sees a press it has no context for.
 //!
+//! A mouse, while [`Input::set_mouse`] allows it, is a pointer: its left
+//! button touches where it points and its right button is Back (`mouse`).
+//! Where it points leaves through [`Sink::pointer`], for the display to
+//! draw.
+//!
 //! Keyboards are read only from Bluetooth HID devices and grabbed
 //! exclusively: the touchscreen's I2C device reports keys as well and must
 //! be left alone, and without the grab Magic SysRq, enabled on the image,
@@ -23,6 +28,7 @@ mod evdev;
 mod hotplug;
 mod keymap;
 mod keys;
+mod mouse;
 mod reader;
 mod touch;
 
@@ -176,6 +182,11 @@ pub trait Sink {
     /// Settings > Video > Camera key: the key just pressed, as its evdev
     /// code; learning is off again.
     fn key_learned(&mut self, code: u16);
+
+    /// The mouse pointer moved or a button changed, while the mouse is on:
+    /// where it points, in ten-thousandths of the panel. Its presses come
+    /// through `touch` and `key` as well.
+    fn pointer(&mut self, x: u16, y: u16);
 }
 
 /// What the reader needs to know at start.
@@ -191,6 +202,10 @@ pub struct Config {
     pub camera_key: u16,
     /// Where touch and keys go until [`Input::route`] is first called.
     pub route: Route,
+    /// Mice are a pointer, until [`Input::set_mouse`] says otherwise.
+    pub mouse: bool,
+    /// The panel in pixels: a mouse moves the pointer one pixel a count.
+    pub panel: (u32, u32),
 }
 
 impl Config {
@@ -203,6 +218,8 @@ impl Config {
             // Key codes fit; anything larger is no key and means none.
             camera_key: u16::try_from(s.camera.key).unwrap_or(0),
             route: Route::Screens,
+            mouse: s.mouse.enabled,
+            panel: (800, 480),
         }
     }
 }
@@ -213,6 +230,7 @@ pub(crate) struct Shared {
     route: AtomicU8,
     camera_key: AtomicU16,
     learning: AtomicBool,
+    mouse: AtomicBool,
     running: AtomicBool,
     wake: OwnedFd,
 }
@@ -228,6 +246,10 @@ impl Shared {
 
     pub(crate) fn learning(&self) -> bool {
         self.learning.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mouse(&self) -> bool {
+        self.mouse.load(Ordering::Acquire)
     }
 
     /// A key was learned: learning is off until asked for again.
@@ -290,6 +312,7 @@ impl Input {
             route: AtomicU8::new(config.route as u8),
             camera_key: AtomicU16::new(config.camera_key),
             learning: AtomicBool::new(false),
+            mouse: AtomicBool::new(config.mouse),
             running: AtomicBool::new(true),
             wake,
         });
@@ -316,6 +339,15 @@ impl Input {
     /// The camera key (evdev code, 0 for none), when the setting changes.
     pub fn set_camera_key(&self, code: u16) {
         self.shared.camera_key.store(code, Ordering::Relaxed);
+    }
+
+    /// Settings > System > Mouse: mice are a pointer, or (off) only their
+    /// wheel and middle button are read, as the knob. Turned off, what the
+    /// mouse holds is let go.
+    pub fn set_mouse(&self, on: bool) {
+        if self.shared.mouse.swap(on, Ordering::AcqRel) != on {
+            self.shared.wake();
+        }
     }
 
     /// Settings > Video > Camera key: while on, the next key pressed is
@@ -350,6 +382,7 @@ pub(crate) mod test_sink {
         Mute,
         Camera,
         Learned(u16),
+        Pointer(u16, u16),
     }
 
     /// Records everything; `phone_live` is what `phone` answers.
@@ -393,6 +426,9 @@ pub(crate) mod test_sink {
         }
         fn key_learned(&mut self, code: u16) {
             self.out.push(Out::Learned(code));
+        }
+        fn pointer(&mut self, x: u16, y: u16) {
+            self.out.push(Out::Pointer(x, y));
         }
     }
 }

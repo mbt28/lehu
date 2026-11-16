@@ -35,6 +35,7 @@ use toml::{Table, Value};
 pub struct Settings {
     pub display: Display,
     pub touch: Touch,
+    pub mouse: Mouse,
     pub carplay: CarPlay,
     pub android_auto: AndroidAuto,
     pub wifi: Wifi,
@@ -43,6 +44,7 @@ pub struct Settings {
     pub usb: Usb,
     pub decode: Decode,
     pub camera: Camera,
+    pub map: Map,
     pub update: Update,
     pub system: System,
 }
@@ -53,6 +55,47 @@ pub enum NightMode {
     Day,
     Night,
     Auto,
+}
+
+/// What Map > Go to's routes are the best of.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RouteBy {
+    /// The least time, at the roads' speeds.
+    #[default]
+    Fastest,
+    /// The least distance.
+    Shortest,
+}
+
+/// The position arrow's size on the display's hardware cursor.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CursorSize {
+    /// Three quarters of the arrow's own size, in its colours with a
+    /// white edge: a 32 pixel cursor.
+    Small,
+    /// The arrow's own size, in one colour: a 64 pixel cursor.
+    #[default]
+    Medium,
+    /// A third larger again, in one colour.
+    Large,
+}
+
+/// How the map is made while it turns: each turned frame takes the CPU
+/// longer than the panel shows one, so the frames of a bend can be made
+/// rougher to come faster. A whole frame follows once the turning stops.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Turning {
+    /// Whole frames.
+    #[default]
+    Sharp,
+    /// The colour at half its resolution each way: a fifth quicker.
+    SoftColour,
+    /// Half the resolution, scaled up by the display, without the names:
+    /// several times as quick, and pixelated.
+    Half,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +140,29 @@ pub struct Touch {
     pub swap_xy: bool,
     pub invert_x: bool,
     pub invert_y: bool,
+}
+
+/// A mouse, or a keyboard's touchpad: a pointer on the display's hardware
+/// cursor. Its left button touches where it points, its right button is
+/// Back. Settings > System > Mouse.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct Mouse {
+    /// Read mice as a pointer. Off: a mouse's wheel and middle button are
+    /// still the knob, as before.
+    pub enabled: bool,
+    /// The pointer goes after a few seconds without a move, and comes back
+    /// with the next. Settings > System > Hide pointer.
+    pub autohide: bool,
+}
+
+impl Default for Mouse {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            autohide: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -246,6 +312,82 @@ pub struct Camera {
     pub fast_switch: bool,
     /// One entry per input; the array is replaced whole by a higher layer.
     pub inputs: Vec<CameraInput>,
+}
+
+/// The offline map: tiles drawn on a PC by scripts/map-tiles.py.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct Map {
+    /// The region shown: its folder, with map.toml, the tiles and the
+    /// road data (`/maps/<region>` on the card's map partition). Empty:
+    /// the first region there, else `/var/lib/lehu/maps` on a card without
+    /// one. Settings > Map > Region sets it.
+    pub dir: String,
+    /// Where the map was left: the zoom (0: the tile set's own start) and
+    /// the point at the centre, world pixels at zoom 22.
+    pub zoom: u8,
+    pub x: i64,
+    pub y: i64,
+    /// A position to show until there is a real one, for testing:
+    /// "latitude, longitude" in degrees. Empty: none. The map opens on it
+    /// and draws it as a dot.
+    pub fake_position: String,
+    /// A drive to replay as the position, for testing: a GPX track file
+    /// (scripts/route-gpx.py writes one), followed in real time and from
+    /// the start again at its end. Empty: none; it outranks
+    /// `fake_position`.
+    pub fake_track: String,
+    /// Spoken turn prompts while the map guides along a drive.
+    pub voice: bool,
+    /// The prompts' clips, as scripts/voice-clips.py makes them: one WAV
+    /// file a phrase fragment. Empty: `/maps/voice/en`, else
+    /// `/var/lib/lehu/voice/en` on a card without a map partition.
+    pub voice_dir: String,
+    /// Deprecated, still read: the road network and the names for Map >
+    /// Go to, when not in the region's own folder (`dir`). Empty: `dir`.
+    pub route_dir: String,
+    /// The routes Go to finds: the fastest or the shortest.
+    pub route_by: RouteBy,
+    /// Keep off motorways where another road goes: they are made dear,
+    /// not forbidden, so a place only a motorway reaches is still reached.
+    pub avoid_motorways: bool,
+    /// Say "speed camera ahead" before a speed camera on the route (from
+    /// the road data, where OpenStreetMap has them). Off by default:
+    /// warning of cameras is against the law in some countries.
+    pub speed_cameras: bool,
+    /// The destinations last driven to, the latest first, offered before
+    /// anything is typed. Written by Map > Go to.
+    pub recent: Vec<MapPlace>,
+    /// Home and Work, a choice away on the map's menu. Not set: the menu
+    /// offers to choose them. Written by the map's menu and Go to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<MapPlace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<MapPlace>,
+    /// A short chime when the speed stays over the road's limit.
+    pub speed_warning: bool,
+    /// Following a drive: 0, the map moves with the arrow; else it holds
+    /// still while the arrow moves on it, until the arrow is this many
+    /// pixels from its place (or the road turned), then catches up.
+    pub pointer_lead: u32,
+    /// The position arrow on the display's hardware cursor, where it has
+    /// one. Off: on a display plane of its own, in its colours at its own
+    /// size. Settings > Map > Hardware cursor.
+    pub cursor: bool,
+    /// The arrow's size on the cursor. Settings > Map > Cursor size.
+    pub cursor_size: CursorSize,
+    /// How the map is made while it turns. Settings > Map > While turning.
+    pub turning: Turning,
+}
+
+/// A destination Map > Go to drove to: its name, the town it is in, and
+/// where, "latitude, longitude" in degrees.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+pub struct MapPlace {
+    pub name: String,
+    pub town: String,
+    pub at: String,
 }
 
 /// Settings > Update: LEHU OS updates, carried by the phone's browser from
@@ -414,6 +556,33 @@ impl Default for CameraInput {
     }
 }
 
+impl Default for Map {
+    fn default() -> Self {
+        Self {
+            dir: String::new(),
+            zoom: 0,
+            x: 0,
+            y: 0,
+            fake_position: String::new(),
+            fake_track: String::new(),
+            voice: true,
+            voice_dir: String::new(),
+            route_dir: String::new(),
+            route_by: RouteBy::Fastest,
+            avoid_motorways: false,
+            speed_cameras: false,
+            recent: Vec::new(),
+            home: None,
+            work: None,
+            speed_warning: true,
+            pointer_lead: 0,
+            cursor: true,
+            cursor_size: CursorSize::Medium,
+            turning: Turning::Sharp,
+        }
+    }
+}
+
 impl Default for Update {
     fn default() -> Self {
         Self {
@@ -532,6 +701,8 @@ impl Settings {
         all.display.width = Some(0);
         all.display.height = Some(0);
         all.audio.volume = Some(0);
+        all.map.home = Some(MapPlace::default());
+        all.map.work = Some(MapPlace::default());
         Table::try_from(all).expect("the schema serializes")
     }
 }
@@ -975,6 +1146,71 @@ mod tests {
     }
 
     #[test]
+    fn the_map_voice_is_on_unless_turned_off() {
+        let map = Settings::default().map;
+        assert!(map.voice);
+        assert_eq!(map.voice_dir, "", "the map partition's, or the old folder");
+        let s: Settings =
+            toml::from_str("[map]\nvoice = false\nvoice-dir = \"/media/sd/voice/en\"\n").unwrap();
+        assert!(!s.map.voice);
+        assert_eq!(s.map.voice_dir, "/media/sd/voice/en");
+        assert_eq!(s.map.dir, "", "the rest stays");
+        assert!(toml::from_str::<Settings>("[map]\nvoice = \"loud\"").is_err());
+        assert!(toml::from_str::<Settings>("[map]\nvoice_dir = \"/x\"").is_err());
+    }
+
+    #[test]
+    fn routes_are_the_fastest_unless_asked() {
+        let map = Settings::default().map;
+        assert_eq!(
+            (map.route_by, map.avoid_motorways),
+            (RouteBy::Fastest, false)
+        );
+        assert!(
+            !map.speed_cameras,
+            "warning of cameras is asked for, never assumed"
+        );
+        let s: Settings =
+            toml::from_str("[map]\nroute-by = \"shortest\"\navoid-motorways = true\n").unwrap();
+        assert_eq!(
+            (s.map.route_by, s.map.avoid_motorways),
+            (RouteBy::Shortest, true)
+        );
+        assert!(toml::from_str::<Settings>("[map]\nroute-by = \"scenic\"").is_err());
+    }
+
+    #[test]
+    fn the_mouse_is_off_unless_asked_and_hides_its_pointer() {
+        let m = Settings::default().mouse;
+        assert_eq!((m.enabled, m.autohide), (false, true));
+        let s: Settings = toml::from_str("[mouse]\nenabled = true\nautohide = false\n").unwrap();
+        assert_eq!((s.mouse.enabled, s.mouse.autohide), (true, false));
+    }
+
+    #[test]
+    fn the_map_turns_in_whole_frames_unless_asked() {
+        assert_eq!(Settings::default().map.turning, Turning::Sharp);
+        let s: Settings = toml::from_str("[map]\nturning = \"soft-colour\"\n").unwrap();
+        assert_eq!(s.map.turning, Turning::SoftColour);
+        let s: Settings = toml::from_str("[map]\nturning = \"half\"\n").unwrap();
+        assert_eq!(s.map.turning, Turning::Half);
+        assert!(toml::from_str::<Settings>("[map]\nturning = \"blurry\"").is_err());
+    }
+
+    #[test]
+    fn the_arrow_is_on_the_cursor_at_medium_unless_asked() {
+        let map = Settings::default().map;
+        assert_eq!((map.cursor, map.cursor_size), (true, CursorSize::Medium));
+        let s: Settings =
+            toml::from_str("[map]\ncursor = false\ncursor-size = \"large\"\n").unwrap();
+        assert_eq!(
+            (s.map.cursor, s.map.cursor_size),
+            (false, CursorSize::Large)
+        );
+        assert!(toml::from_str::<Settings>("[map]\ncursor-size = \"huge\"").is_err());
+    }
+
+    #[test]
     fn carplay_ultra_is_on_unless_turned_off() {
         assert!(Settings::default().carplay.ultra);
         let d = dir("ultra");
@@ -1133,6 +1369,17 @@ mod tests {
                 }],
             )
             .unwrap();
+        loaded
+            .user
+            .set(
+                "map.recent",
+                vec![MapPlace {
+                    name: "Boulevard Royal".into(),
+                    town: "Luxembourg".into(),
+                    at: "49.611900, 6.128420".into(),
+                }],
+            )
+            .unwrap();
         assert!(loaded.user.is_dirty());
         assert!(loaded.user.save_if_dirty().unwrap());
         assert!(!loaded.user.save_if_dirty().unwrap());
@@ -1141,6 +1388,7 @@ mod tests {
         assert_eq!(again.settings.display.night_mode, NightMode::Night);
         assert_eq!(again.settings.camera.inputs[0].brightness, Some(40));
         assert_eq!(again.settings.camera.inputs[0].contrast, None);
+        assert_eq!(again.settings.map.recent[0].town, "Luxembourg");
         // Setting the same value again is not a change.
         let mut user = again.user;
         user.set("audio.buffer-ms", 750u32).unwrap();

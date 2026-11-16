@@ -9,12 +9,14 @@
 //! for `NAV_CARD_MS` after each guidance update while the phone guides,
 //! over the screens or as the window over the camera's picture, never over
 //! the phone's own video (which shows the route itself) and never with the
-//! camera column up or a dialog open.
+//! camera column up or a dialog open. While the phone's card is not up
+//! and the map guides along a route of ours, the card shows the map's next
+//! turn instead, kept current while the map's screen is closed.
 
 use slint::SharedString;
 
-use super::{Bridge, CAMERA, HOME, Host, MEDIA, NAV_CARD_MS, State, UPDATE_PHONE, clean};
-use crate::host::{Media, MediaKey};
+use super::{Bridge, CAMERA, HOME, Host, MAP, MEDIA, NAV_CARD_MS, State, UPDATE_PHONE, clean};
+use crate::host::{Media, MediaKey, NavCard};
 
 /// The Home tile's bar moves on this often while something plays: a thin
 /// bar a glance does not follow, not worth a redraw a second.
@@ -99,31 +101,66 @@ impl<H: Host> State<H> {
     }
 
     /// The host's guidance -> the card's words, on change; whether it shows,
-    /// every tick.
+    /// every tick. While the phone's card is not up, the map's own guidance
+    /// takes its place on the screens other than the map's (whose bar shows
+    /// it), for as long as the map guides.
     pub(super) fn pump_nav(&mut self, bridge: &Bridge<'_>, screen: i32, modal: bool, now: u64) {
         let generation = self.host.nav_generation();
+        let mut phone_changed = false;
         if !self.nav_seen || generation != self.p_nav_gen {
             self.nav_seen = true;
             self.p_nav_gen = generation;
-            let card = self.host.nav_card();
-            bridge.set_nav_arrow(card.arrow.id());
-            bridge.set_nav_maneuver(clean(&mut self.scratch, &card.maneuver));
-            bridge.set_nav_distance(clean(&mut self.scratch, &card.distance));
-            bridge.set_nav_road(clean(&mut self.scratch, &card.road));
-            bridge.set_nav_eta(clean(&mut self.scratch, &card.eta));
-            bridge.set_nav_eta_note(clean(&mut self.scratch, &card.eta_note));
-            self.nav_until = if card.active { now + NAV_CARD_MS } else { 0 };
+            phone_changed = true;
+            self.nav_until = if self.host.nav_card().active {
+                now + NAV_CARD_MS
+            } else {
+                0
+            };
         }
-        let show = now < self.nav_until
+        let phone = now < self.nav_until;
+        let ours = if phone || screen == MAP {
+            None
+        } else {
+            self.host.map_guidance()
+        };
+        match ours {
+            Some(card) => {
+                if self.p_nav_ours.as_ref() != Some(card) {
+                    let card = card.clone();
+                    self.show_card(bridge, &card);
+                    self.p_nav_ours = Some(card);
+                }
+            }
+            None => {
+                if self.p_nav_ours.take().is_some() || phone_changed {
+                    let card = self.host.nav_card().clone();
+                    self.show_card(bridge, &card);
+                }
+            }
+        }
+        let show = (phone || self.p_nav_ours.is_some())
             && !self.over_phone
             && !modal
             && !(screen == CAMERA && self.panel_up)
-            // The QR codes and what they say need the whole screen.
+            // The map's bar guides there; the QR codes and what they say
+            // need the whole screen.
+            && screen != MAP
             && screen != UPDATE_PHONE;
         if show != self.p_nav_card {
             self.p_nav_card = show;
             bridge.set_nav_card(show);
         }
+    }
+
+    /// The card's words.
+    fn show_card(&mut self, bridge: &Bridge<'_>, card: &NavCard) {
+        bridge.set_nav_arrow(card.arrow.id());
+        bridge.set_nav_then(card.then.id());
+        bridge.set_nav_maneuver(clean(&mut self.scratch, &card.maneuver));
+        bridge.set_nav_distance(clean(&mut self.scratch, &card.distance));
+        bridge.set_nav_road(clean(&mut self.scratch, &card.road));
+        bridge.set_nav_eta(clean(&mut self.scratch, &card.eta));
+        bridge.set_nav_eta_note(clean(&mut self.scratch, &card.eta_note));
     }
 
     /// A transport key from the page.

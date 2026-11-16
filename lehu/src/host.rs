@@ -11,9 +11,13 @@ use lehu_core::clock;
 use lehu_core::devices::{Presence, Registry};
 use lehu_core::settings::{self, Settings, UserFile};
 use lehu_drm::Display;
+use lehu_map::{
+    Ahead, Drive, Found, FoundKind, Marker, Route, Router, TileSet, Track, Turn, View, Viewer,
+};
 use lehu_ui::{
-    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Host, KnownDevice, Media, MediaKey,
-    NavCard, Power, Prompt, SystemNames, Update, UpdateOutcome, UpdateStage,
+    Art, AudioOutput, BtDevice, CameraLevel, CameraRequest, Destination, Host, KnownDevice, Media,
+    MediaKey, NavArrow, NavCard, Nearby, Power, Prompt, RouteStage, SystemNames, Update,
+    UpdateOutcome, UpdateStage,
 };
 use lehu_update::Updater;
 use lehu_wifi::{AccessPoint, Applied, Link, LinkProbe, Radio};
@@ -21,6 +25,56 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use crate::audio::Audio;
+use crate::chime::{self, SpeedWatch};
+use crate::voice::Speaker;
+
+/// The map's bar follows a replayed drive this often (the map itself
+/// moves along it by itself, in step with the panel).
+const MAP_TRACK_STEP_MS: u64 = 200;
+/// While the map is closed the drive goes on at this pace: the navigation
+/// card of the other screens, the prompts, the arrival. A second is as
+/// often as the card's distance changes in town.
+const MAP_CLOSED_STEP_MS: u64 = 1000;
+
+/// A route found on the board ends at its arrival, where it arrived the
+/// position from then on; the bar (or the card) says so this long.
+const MAP_ARRIVAL_MS: u64 = 10_000;
+
+/// The turn after the next one is shown with it ("then", a small arrow)
+/// when it comes this close behind it: 300 m is some 20 seconds in town
+/// and 10 on a main road, about the time it takes to change lanes, so a
+/// driver can get ready for both at once. Further apart, the card turns
+/// to it in good time anyway.
+const THEN_HINT_M: u32 = 300;
+
+/// A route shown whole (the preview) is fitted inside the panel less this
+/// much at its left, top, right and bottom: some room round it, and at the
+/// foot the map's bar while it shows the route (84 px, MapBar.height).
+const MAP_PREVIEW_INSET: [u32; 4] = [32, 32, 32, 84 + 24];
+
+/// Map > Go to offers this many destinations, and remembers this many.
+const MAP_RESULTS: usize = 20;
+const MAP_RECENT: usize = 5;
+
+/// A route being found on its thread, and where to.
+type Finding = (std::sync::mpsc::Receiver<Result<Track, String>>, Found);
+/// A route being found anew by itself: the answer to come, where to, and
+/// when it was asked.
+type Rerouting = (std::sync::mpsc::Receiver<Result<Track, String>>, Found, u64);
+
+/// A point, world pixels at zoom 22, and the way we go there (x right,
+/// y down) while we move.
+type Here = (Option<(i64, i64)>, Option<(i32, i32)>);
+
+/// A route found and shown whole, before it is driven: the drive, where
+/// to, what the bar says, the line on the map and the view that holds it.
+struct Preview {
+    track: Track,
+    to: Found,
+    card: lehu_ui::RoutePreview,
+    route: Route,
+    view: View,
+}
 
 /// What the Devices screen asked of the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +228,96 @@ pub struct AppHost {
     /// Install was confirmed: the loop ends the phone's session first.
     update_install: bool,
     video_bytes: u32,
+    /// The map: the display it goes on, the viewer while its screen is up,
+    /// the tile set and the view it shows.
+    map_display: Option<Arc<Display>>,
+    /// The mouse pointer shows on the cursor plane.
+    pointer_shown: bool,
+    map: Option<Viewer>,
+    map_set: Option<TileSet>,
+    map_view: View,
+    map_wanted: bool,
+    /// Where we are, world pixels at zoom 22, and what the map shows there.
+    map_position: Option<(i64, i64)>,
+    map_marker: Option<Marker>,
+    /// A drive replayed as the position (map.fake-track), and when it
+    /// started: it goes on while the map is closed.
+    map_track: Option<Arc<Track>>,
+    map_track_start: Option<u64>,
+    map_track_shown: u64,
+    /// The map keeps where we are in the middle, until it is dragged.
+    map_follow: bool,
+    /// The replayed drive as a route, drawn on the map, and the guidance
+    /// along it for the map's bar.
+    map_route: Option<Route>,
+    map_guide: Option<NavCard>,
+    /// The drive's speed, km/h, and the road's limit, for the bar.
+    map_speed: Option<(u32, Option<u16>)>,
+    /// The spoken turn prompts along the drive (map.voice): what has been
+    /// said, and the clips. Kept while the map is closed, as the drive goes
+    /// on; its clips are not.
+    map_voice: Option<Speaker>,
+    /// The speed cameras warned of along the drive (map.speed-cameras).
+    map_cameras: lehu_map::CameraWatch,
+    /// Without a route of ours: the speed cameras on the road ahead, and
+    /// the next one.
+    map_lookout: lehu_map::CameraLookout,
+    map_road_camera: Option<lehu_map::CameraAhead>,
+    /// Where the road network's speed cameras are, for the map to draw
+    /// (map.speed-cameras); made when first wanted.
+    map_marks: Option<lehu_map::CameraMarks>,
+    map_note: String,
+    map_label: String,
+    /// Map > Go to: the road network and the names (looked for each time
+    /// the map opens), what the last search found and how the screen shows
+    /// it, the route being found and why none was.
+    map_router: Option<Arc<Router>>,
+    /// The folder it was opened from: another region, opened anew.
+    map_router_dir: std::path::PathBuf,
+    /// The map's regions: what their sha256 checks found (a small file
+    /// beside the user's settings, read when first wanted), the check
+    /// running in the background (the region's key, and its answer to
+    /// come), and a generation Settings > Map follows.
+    map_checks: Option<lehu_map::region::Checks>,
+    map_checking: Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)>,
+    map_regions_gen: u32,
+    map_found: Vec<Found>,
+    map_dests: Vec<Destination>,
+    map_finding: Option<Finding>,
+    /// The route being found is shown whole once found; and the one shown.
+    map_finding_preview: bool,
+    map_preview: Option<Preview>,
+    map_route_note: String,
+    /// The drive is a route found here, not the replayed one; where the
+    /// last such route ended, the position from then on.
+    map_routed: bool,
+    map_left_at: Option<(i64, i64)>,
+    /// The position from elsewhere (the replayed drive, map.fake-track),
+    /// and when it started: with it a route of ours is followed by where
+    /// it is, not driven by itself. Where on the route it was last placed,
+    /// and that it reached the end.
+    map_drive: Option<(Arc<Track>, u64)>,
+    /// A route of ours ended with it: from then on it is only where we
+    /// are, without guidance of its own.
+    map_drive_only: bool,
+    map_on: Option<lehu_map::Follow>,
+    map_reached: bool,
+    /// The route being found anew, the driver having left it: its answer
+    /// to come, where to, and when it was asked.
+    map_rerouting: Option<Rerouting>,
+    /// Night by the sun (Night set to Auto): what it says, and when it
+    /// was last asked (once a minute).
+    sun: lehu_core::sun::Dusk,
+    sun_checked_at: Option<u64>,
+    /// Where the route of ours goes: its name and town, for the arrival,
+    /// and the destination itself, to find the route anew.
+    map_to: (String, String),
+    map_dest: Option<Found>,
+    /// The arrival, shown in the guidance's place until then.
+    map_arrival: Option<(NavCard, u64)>,
+    /// The speeding chime: when it is due, and its samples once made.
+    map_speeding: SpeedWatch,
+    map_chime: Vec<i16>,
 }
 
 impl AppHost {
@@ -189,6 +333,8 @@ impl AppHost {
         // A camera needs the video plane; the probe opens the device for a
         // moment, as FastCarPlay did, so the Video screen knows its rows.
         let camera_present = display.is_some() && lehu_camera::present(&settings.camera.device);
+        let map_display = display.clone();
+        let pointer_shown = false;
         let camera = display.map(Camera::new);
         Self {
             settings,
@@ -241,6 +387,57 @@ impl AppHost {
             update_gen: 0,
             update_install: false,
             video_bytes: 0,
+            map_display,
+            pointer_shown,
+            map: None,
+            map_set: None,
+            map_view: View {
+                zoom: 0,
+                x: 0,
+                y: 0,
+            },
+            map_wanted: false,
+            map_position: None,
+            map_marker: None,
+            map_track: None,
+            map_track_start: None,
+            map_track_shown: 0,
+            map_follow: true,
+            map_route: None,
+            map_guide: None,
+            map_speed: None,
+            map_voice: None,
+            map_cameras: lehu_map::CameraWatch::new(),
+            map_lookout: lehu_map::CameraLookout::new(),
+            map_road_camera: None,
+            map_marks: None,
+            map_note: String::new(),
+            map_label: String::new(),
+            map_router: None,
+            map_router_dir: std::path::PathBuf::new(),
+            map_checks: None,
+            map_checking: None,
+            map_regions_gen: 0,
+            map_found: Vec::new(),
+            map_dests: Vec::new(),
+            map_finding: None,
+            map_finding_preview: false,
+            map_preview: None,
+            map_route_note: String::new(),
+            map_routed: false,
+            map_left_at: None,
+            map_drive: None,
+            map_drive_only: false,
+            map_on: None,
+            map_reached: false,
+            map_rerouting: None,
+            sun: lehu_core::sun::Dusk::new(),
+            sun_checked_at: None,
+            map_to: (String::new(), String::new()),
+            map_dest: None,
+            map_arrival: None,
+            map_speeding: SpeedWatch::new(),
+            map_chime: Vec::new(),
         }
     }
 
@@ -286,6 +483,7 @@ impl AppHost {
     /// Every loop turn: the debounced save of the user's file, the camera's
     /// column kept current.
     pub fn tick(&mut self) {
+        self.sun_tick();
         self.sync_camera_levels();
         self.sync_bluetooth();
         if let Some(level) = self.audio.volume.tick() {
@@ -525,6 +723,995 @@ impl AppHost {
         self.settings.camera.key
     }
 
+    /// The map's screen is up: the loop should show the map.
+    pub fn map_wanted(&self) -> bool {
+        self.map_wanted
+    }
+
+    /// The map is on the video plane, or on its way there.
+    pub fn map_started(&self) -> bool {
+        self.map.is_some()
+    }
+
+    /// Its first picture is up.
+    pub fn map_ready(&self) -> bool {
+        self.map.as_ref().is_some_and(Viewer::picture_ready)
+    }
+
+    /// Show the map: the tile set read afresh (the card may have new
+    /// tiles), the view where it was left. False, with the reason on the
+    /// screen, when there is no map or no memory for it.
+    pub fn map_start(&mut self) -> bool {
+        let Some(display) = self.map_display.clone() else {
+            self.map_note = "No display for the map".into();
+            return false;
+        };
+        let dir = self.map_dir();
+        let whole = match self.map_check_region(&dir) {
+            Ok(whole) => whole,
+            Err(e) => {
+                self.map_note = e;
+                return false;
+            }
+        };
+        let set = match TileSet::open(&dir) {
+            Ok(set) => set,
+            Err(e) => {
+                log::warn!("map: {e}");
+                self.map_note = if e.contains("Map needs a newer LEHU") {
+                    "Map needs a newer LEHU".into()
+                } else {
+                    e
+                };
+                return false;
+            }
+        };
+        // The road network and the names, for Go to, when the card has
+        // them: the region's own, unless map.route-dir (deprecated) names
+        // another folder.
+        let route_dir = if self.settings.map.route_dir.is_empty() {
+            dir.clone()
+        } else {
+            std::path::PathBuf::from(&self.settings.map.route_dir)
+        };
+        if self.map_router_dir != route_dir {
+            self.map_router = None;
+            self.map_marks = None;
+        }
+        if self.map_router.is_none() {
+            self.map_router_dir.clone_from(&route_dir);
+            match Router::open(&route_dir) {
+                // The region's files passed their sha256 check: the
+                // road data is not walked through again.
+                Ok(r) if whole && route_dir == dir => {
+                    r.trust();
+                    self.map_router = Some(Arc::new(r));
+                }
+                Ok(r) => {
+                    let r = Arc::new(r);
+                    // Checked meanwhile, below the map's own threads.
+                    let early = Arc::clone(&r);
+                    let spawned =
+                        std::thread::Builder::new()
+                            .name("map-check".into())
+                            .spawn(move || {
+                                // SAFETY: nice() changes only this thread's
+                                // priority on Linux; no memory is involved.
+                                unsafe { libc::nice(10) };
+                                early.prepare();
+                            });
+                    if let Err(e) = spawned {
+                        log::warn!("map: no thread to check the roads on: {e}");
+                    }
+                    self.map_router = Some(r);
+                }
+                Err(e) => log::info!("map: no routing: {e}"),
+            }
+        }
+        let m = &self.settings.map;
+        // Where a route of ours ended outranks the settings' stand-ins.
+        self.map_position = match self.map_left_at {
+            Some(p) => Some(p),
+            None => match lehu_map::parse_position(&m.fake_position) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("map.fake-position {e}");
+                    None
+                }
+            },
+        };
+        self.map_marker = self.map_position.map(|(x, y)| Marker::Dot(x, y));
+        self.map_route = None;
+        self.map_guide = None;
+        if self.map_routed {
+            // A route found here, driven on while the map was closed.
+            self.map_arrived();
+        } else if self.map_left_at.is_none() && !m.fake_track.is_empty() {
+            self.map_track = None;
+            match std::fs::read_to_string(&m.fake_track)
+                .map_err(|e| e.to_string())
+                .and_then(|text| Track::parse_gpx(&text))
+            {
+                Ok(track) => {
+                    log::info!(
+                        "map: replaying {} ({} s a lap)",
+                        m.fake_track,
+                        track.duration() / 1000
+                    );
+                    let start = self
+                        .map_drive
+                        .as_ref()
+                        .map(|d| d.1)
+                        .or(self.map_track_start)
+                        .unwrap_or_else(lehu_core::clock::now_ms);
+                    let track = Arc::new(track);
+                    self.map_drive = Some((Arc::clone(&track), start));
+                    if !self.map_drive_only {
+                        self.map_track = Some(track);
+                        self.map_track_start = Some(start);
+                    }
+                }
+                Err(e) => log::warn!("map.fake-track {}: {e}", m.fake_track),
+            }
+        } else {
+            self.map_track = None;
+        }
+        if let (Some(track), Some(fix), Some(ms)) =
+            (self.map_track.clone(), self.map_fix(), self.map_track_ms())
+        {
+            self.map_position = Some((fix.x, fix.y));
+            self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+            self.map_route = Some(Route::from(track.line()));
+            self.map_guide = track
+                .ahead(ms)
+                .map(|a| guidance(&a, then_of(&track, &a), local_time_ms(self.zone_min)));
+            self.map_speed = Some(self.map_speed_at(&fix));
+        } else if let Some(fix) = self.map_fix() {
+            // Only where we are.
+            self.map_position = Some((fix.x, fix.y));
+            self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+            self.map_speed = Some((fix.kmh, fix.limit));
+        }
+        let m = &self.settings.map;
+        self.map_follow = true;
+        let mut view = if m.zoom == 0 {
+            View {
+                zoom: set.start_zoom,
+                x: set.center.0,
+                y: set.center.1,
+            }
+        } else {
+            View {
+                zoom: m.zoom,
+                x: m.x,
+                y: m.y,
+            }
+        };
+        // Where we are, when we know: like any navigation map.
+        if let Some((x, y)) = self.map_position {
+            (view.x, view.y) = (x, y);
+        }
+        view.zoom_by(0, set.min_zoom, set.top_zoom());
+        view.clamp(&set.bounds);
+        // The night tiles, when the set has them.
+        let night = match set.night() {
+            Some(Ok(n)) => Some(n),
+            Some(Err(e)) => {
+                log::warn!("map: night tiles: {e}");
+                None
+            }
+            None => None,
+        };
+        match Viewer::start(display, set.clone(), night, view, self.map_marker_plane()) {
+            Ok(viewer) => {
+                viewer.set_night(self.night_now());
+                self.map = Some(viewer);
+                self.map_marks_show();
+                self.map_view = view;
+                self.map_set = Some(set);
+                self.map_show();
+                self.map_note = "Loading the map".into();
+                self.update_map_label();
+                true
+            }
+            Err(e) => {
+                log::warn!("map: {e}");
+                self.map_note = e;
+                false
+            }
+        }
+    }
+
+    /// What the regions' sha256 checks found, read from its file when first
+    /// wanted: beside the user's settings (~/.lehu), the map partition
+    /// being read only.
+    fn map_checks(&mut self) -> &mut lehu_map::region::Checks {
+        let path = self
+            .user
+            .path()
+            .parent()
+            .map_or_else(
+                || std::path::PathBuf::from("/var/lib/lehu"),
+                std::path::Path::to_path_buf,
+            )
+            .join("map-checks");
+        self.map_checks
+            .get_or_insert_with(|| lehu_map::region::Checks::load(&path))
+    }
+
+    /// The region shown: `map.dir`, else the first one on the map
+    /// partition, else the folder from before there was one.
+    fn map_dir(&mut self) -> std::path::PathBuf {
+        if self.settings.map.dir.is_empty() {
+            let root = std::path::Path::new(lehu_map::region::MAPS_ROOT);
+            lehu_map::region::default_dir(root, Some(self.map_checks()))
+        } else {
+            std::path::PathBuf::from(&self.settings.map.dir)
+        }
+    }
+
+    /// The spoken prompts' clips: `map.voice-dir` while it is there (a
+    /// voice taken off the card leaves it named), else the map
+    /// partition's English set, else its first, else the folder from
+    /// before.
+    fn map_voice_dir(&self) -> std::path::PathBuf {
+        let named = std::path::PathBuf::from(&self.settings.map.voice_dir);
+        if !self.settings.map.voice_dir.is_empty() && named.is_dir() {
+            named
+        } else {
+            lehu_map::region::default_voice_dir(std::path::Path::new(lehu_map::region::MAPS_ROOT))
+        }
+    }
+
+    /// The region in `dir` checked as the map opens: its data version and
+    /// its files' sizes (fast), and what an earlier sha256 check found;
+    /// never checked, that check starts, in the background. Ok(true) when
+    /// its files have passed that check; Err: why the map cannot open, for
+    /// its screen. A folder without map.toml is left to the tile set to
+    /// say so.
+    fn map_check_region(&mut self, dir: &std::path::Path) -> Result<bool, String> {
+        use lehu_map::region::{Health, Region};
+        if !dir.join("map.toml").exists() {
+            return Ok(false);
+        }
+        let region = Region::read(dir).map_err(|e| {
+            log::warn!("map: {e}");
+            "Map damaged: copy the region again".to_string()
+        })?;
+        match region.health(Some(self.map_checks())) {
+            Health::Ready => Ok(self.map_checks().get(region.key()) == Some(Ok(()))),
+            Health::Unchecked => {
+                self.map_check_start(region);
+                Ok(false)
+            }
+            Health::NeedsNewer(v) => {
+                log::warn!(
+                    "map: {} is data version {v}; this LEHU reads up to {}",
+                    dir.display(),
+                    lehu_map::region::DATA_VERSION
+                );
+                Err("Map needs a newer LEHU".into())
+            }
+            Health::Damaged(why) => {
+                log::warn!("map: {} is damaged: {why}", dir.display());
+                Err(format!("Map damaged: copy {} again", region.name))
+            }
+        }
+    }
+
+    /// Check a region's files against their sha256, once, on a thread of
+    /// the lowest priority: a gigabyte read on the board takes minutes.
+    /// One at a time.
+    fn map_check_start(&mut self, region: lehu_map::region::Region) {
+        if self.map_checking.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let key = region.key().to_string();
+        let spawned = std::thread::Builder::new()
+            .name("map-sha256".into())
+            .spawn(move || {
+                // SAFETY: nice() changes only this thread's priority on
+                // Linux; no memory is involved.
+                unsafe { libc::nice(19) };
+                let start = std::time::Instant::now();
+                let result = region.verify();
+                log::info!(
+                    "map: {} checked in {} s: {}",
+                    region.dir.display(),
+                    start.elapsed().as_secs(),
+                    result.as_ref().map_or_else(String::as_str, |()| "whole")
+                );
+                let _ = tx.send(result);
+            });
+        match spawned {
+            Ok(_) => self.map_checking = Some((key, rx)),
+            Err(e) => log::warn!("map: no thread to check the region on: {e}"),
+        }
+    }
+
+    /// The background check's answer, once it has come: kept, and the
+    /// regions' state shown anew.
+    fn map_check_poll(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let Some((key, rx)) = &self.map_checking else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.map_checking = None;
+                return;
+            }
+        };
+        let key = key.clone();
+        self.map_checking = None;
+        if let Err(e) = self.map_checks().set(&key, result) {
+            log::warn!("map: the check could not be kept: {e}");
+        }
+        self.map_regions_gen = self.map_regions_gen.wrapping_add(1);
+    }
+
+    /// Where we are, the route and the drive, as they are now, on the map
+    /// while it is open: a drive (replayed, or a route of ours) the map
+    /// moves along by itself, following it unless it was moved by hand;
+    /// otherwise the view where it was put.
+    fn map_show(&self) {
+        let (Some(viewer), Some(set)) = (&self.map, &self.map_set) else {
+            return;
+        };
+        // A route shown whole: still, north up, all of it in view.
+        if let Some(p) = &self.map_preview {
+            let marker = match self.map_here() {
+                (Some((x, y)), Some(heading)) => Some(Marker::Arrow(x, y, heading)),
+                (Some((x, y)), None) => Some(Marker::Dot(x, y)),
+                (None, _) => None,
+            };
+            viewer.set_drive(None);
+            viewer.follow(None);
+            viewer.set_position(marker);
+            viewer.set_route(Some(p.route.clone()));
+            viewer.set_view(p.view);
+            return;
+        }
+        viewer.set_position(self.map_marker);
+        viewer.set_route(self.map_route.clone());
+        match self.map_mover() {
+            Some((track, start)) => {
+                let ago = lehu_core::clock::now_ms().saturating_sub(start);
+                let now = std::time::Instant::now();
+                viewer.set_drive(Some(Drive {
+                    track: Arc::clone(track),
+                    start: now
+                        .checked_sub(std::time::Duration::from_millis(ago))
+                        .unwrap_or(now),
+                    bounds: set.bounds,
+                    top_zoom: set.top_zoom(),
+                }));
+                viewer.follow(self.map_follow.then_some(self.map_view.zoom));
+                if !self.map_follow {
+                    viewer.set_view(self.map_view);
+                }
+            }
+            _ => {
+                viewer.set_drive(None);
+                viewer.follow(None);
+                viewer.set_view(self.map_view);
+            }
+        }
+    }
+
+    /// While a drive is replayed or a route of ours driven (the map open
+    /// or not), or the arrival shows: how long the loop may sleep before
+    /// the position should move on.
+    pub fn map_due(&self) -> Option<std::time::Duration> {
+        let now = lehu_core::clock::now_ms();
+        let arrival = self.map_arrival.as_ref().map(|(_, until)| *until);
+        let step = if self.map.is_some() {
+            MAP_TRACK_STEP_MS
+        } else {
+            MAP_CLOSED_STEP_MS
+        };
+        let drive = self
+            .map_mover()
+            .is_some()
+            .then_some(self.map_track_shown + step);
+        [arrival, drive]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(|at| std::time::Duration::from_millis(at.saturating_sub(now)))
+    }
+
+    /// Each turn of the loop: where a replayed drive (or a route of ours)
+    /// is, for the Me key, the bar and the card, the prompts and the
+    /// speeding chime (the map moves along it by itself). It goes on while
+    /// the map is closed, at a slower pace; the map itself is not needed.
+    pub fn map_tick(&mut self) {
+        self.map_check_poll();
+        self.map_marks_show();
+        if let Some(viewer) = &self.map {
+            viewer.set_pointer_lead(self.settings.map.pointer_lead);
+            viewer.set_marker_plane(self.map_marker_plane());
+            viewer.set_turning(match self.settings.map.turning {
+                lehu_core::settings::Turning::Sharp => lehu_map::Turning::Sharp,
+                lehu_core::settings::Turning::SoftColour => lehu_map::Turning::SoftColour,
+                lehu_core::settings::Turning::Half => lehu_map::Turning::Half,
+            });
+        }
+        let now = lehu_core::clock::now_ms();
+        if self
+            .map_arrival
+            .as_ref()
+            .is_some_and(|(_, until)| now >= *until)
+        {
+            self.map_arrival = None;
+        }
+        self.map_reroute_poll();
+        if self.map_mover().is_none() {
+            return;
+        }
+        let step = if self.map.is_some() {
+            MAP_TRACK_STEP_MS
+        } else {
+            MAP_CLOSED_STEP_MS
+        };
+        if now < self.map_track_shown + step {
+            return;
+        }
+        let Some(fix) = self.map_fix() else {
+            return;
+        };
+        // Followed: where the position is on the route of ours, and
+        // whether it left it.
+        if self.map_following()
+            && let (Some(route), Some(on)) = (self.map_track.clone(), self.map_on.as_mut())
+        {
+            match on.update(&route, &fix, now) {
+                lehu_map::Following::On => {}
+                lehu_map::Following::Off => self.map_reroute_off(&fix),
+                lehu_map::Following::Arrived => self.map_reached = true,
+            }
+        }
+        self.map_speaker_ready();
+        self.map_road_cameras(&fix, now);
+        let (Some(track), Some(ms)) = (&self.map_track, self.map_track_ms()) else {
+            // Only where we are: no guidance.
+            self.map_track_shown = now;
+            self.map_position = Some((fix.x, fix.y));
+            self.map_speed = Some((fix.kmh, fix.limit));
+            return;
+        };
+        let ahead = track.ahead(ms);
+        self.map_guide = ahead
+            .as_ref()
+            .map(|a| guidance(a, then_of(track, a), local_time_ms(self.zone_min)));
+        // The prompts, while the map guides.
+        let then = ahead
+            .as_ref()
+            .and_then(|a| track.then(a))
+            .map(|(next, gap)| (next.turn, gap));
+        if let (Some(speaker), Some(a)) = (&mut self.map_voice, &ahead) {
+            speaker.tick(a, fix.kmh, then, &self.audio);
+        }
+        let m = &self.settings.map;
+        let (kmh, limit) = self.map_speed_at(&fix);
+        if self.map_speeding.tick(now, kmh, limit) && m.speed_warning {
+            if self.map_chime.is_empty() {
+                self.map_chime = chime::samples();
+            }
+            log::info!("map: {} km/h where the limit is {:?}", fix.kmh, fix.limit);
+            self.audio.prompt(chime::segment(&self.map_chime));
+        }
+        self.map_track_shown = now;
+        self.map_position = Some((fix.x, fix.y));
+        self.map_speed = Some((kmh, limit));
+        self.map_camera_tick(ms, kmh);
+        self.map_arrived();
+    }
+
+    /// Following a route of ours by a position from elsewhere, not
+    /// driving it by itself.
+    fn map_following(&self) -> bool {
+        self.map_routed && self.map_drive.is_some()
+    }
+
+    /// What moves the position, and when it started: the position from
+    /// elsewhere, else the route of ours or the replayed drive.
+    fn map_mover(&self) -> Option<(&Arc<Track>, u64)> {
+        match &self.map_drive {
+            Some((drive, start)) => Some((drive, *start)),
+            None => Some((self.map_track.as_ref()?, self.map_track_start?)),
+        }
+    }
+
+    /// Where we are now, on what moves the position.
+    fn map_fix(&self) -> Option<lehu_map::Fix> {
+        let (track, start) = self.map_mover()?;
+        Some(track.at(lehu_core::clock::now_ms().saturating_sub(start)))
+    }
+
+    /// Milliseconds into the track the guidance is on: where the position
+    /// was last placed on the route followed, else the time it has gone.
+    fn map_track_ms(&self) -> Option<u64> {
+        if self.map_following() {
+            return self.map_on.as_ref().map(lehu_map::Follow::ms);
+        }
+        Some(lehu_core::clock::now_ms().saturating_sub(self.map_track_start?))
+    }
+
+    /// The speed, and the speed limit where we are: on a route followed,
+    /// the route's limit at the place the position is on it.
+    fn map_speed_at(&self, fix: &lehu_map::Fix) -> (u32, Option<u16>) {
+        match (&self.map_track, self.map_track_ms()) {
+            (Some(route), Some(ms)) if self.map_following() => (fix.kmh, route.at(ms).limit),
+            _ => (fix.kmh, fix.limit),
+        }
+    }
+
+    /// The position left the route of ours: found anew from where it is,
+    /// going its way, on a thread of its own; the route left is shown
+    /// meanwhile. One at a time.
+    fn map_reroute_off(&mut self, fix: &lehu_map::Fix) {
+        if self.map_rerouting.is_some() {
+            return;
+        }
+        let (Some(router), Some(to)) = (self.map_router.clone(), self.map_dest.clone()) else {
+            return;
+        };
+        let off = self
+            .map_on
+            .as_ref()
+            .map_or(f64::INFINITY, lehu_map::Follow::off_m);
+        log::info!(
+            "map: off the route ({off:.0} m from it at {} km/h): finding it anew",
+            fix.kmh
+        );
+        let from = (fix.x, fix.y);
+        let heading = (fix.kmh > 0 && fix.heading != (0, 0)).then_some(fix.heading);
+        let goal = (to.x, to.y);
+        let options = self.map_route_options();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("map-reroute".into())
+            .spawn(move || {
+                let _ = tx.send(router.route_with(from, heading, goal, &options));
+            });
+        if let Err(e) = spawned {
+            log::warn!("map: no thread to route on: {e}");
+            return;
+        }
+        self.map_rerouting = Some((rx, to, lehu_core::clock::now_ms()));
+    }
+
+    /// The route found anew: driven from here on. None found: the next
+    /// time the position is off the route asks again.
+    fn map_reroute_poll(&mut self) {
+        let Some((rx, _, asked)) = &self.map_rerouting else {
+            return;
+        };
+        let answer = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Ok(answer) => answer,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("no answer".into()),
+        };
+        let took = lehu_core::clock::now_ms().saturating_sub(*asked);
+        let Some((_, to, _)) = self.map_rerouting.take() else {
+            return;
+        };
+        match answer {
+            // Ended meanwhile (arrived, or stopped): kept ended.
+            Ok(_) if !self.map_routed => {}
+            Ok(track) => {
+                log::info!(
+                    "map: the route anew: {:.1} km, {} min, {} turns, in {took} ms",
+                    f64::from(track.metres()) / 1000.0,
+                    track.duration().div_ceil(60_000),
+                    track.maneuvers().len()
+                );
+                self.map_take_route(track, &to);
+            }
+            Err(e) => log::info!("map: no route anew to {}: {e}", to.name),
+        }
+    }
+
+    /// The mouse pointer shows on the cursor plane (the loop says so each
+    /// turn): the map's marker leaves the cursor for a plane of its own.
+    pub fn set_pointer_shown(&mut self, shown: bool) {
+        self.pointer_shown = shown;
+    }
+
+    /// Where the map's marker goes: the hardware cursor at its size
+    /// (map.cursor, map.cursor-size), or a plane of its own.
+    fn map_marker_plane(&self) -> lehu_map::MarkerPlane {
+        use lehu_core::settings::CursorSize;
+        use lehu_map::MarkerPlane;
+        // The mouse pointer has the cursor while it shows.
+        if !self.settings.map.cursor || self.pointer_shown {
+            return MarkerPlane::Sprite;
+        }
+        match self.settings.map.cursor_size {
+            CursorSize::Small => MarkerPlane::CursorSmall,
+            CursorSize::Medium => MarkerPlane::CursorMedium,
+            CursorSize::Large => MarkerPlane::CursorLarge,
+        }
+    }
+
+    /// The prompts' speaker (`map_voice`) made ready while they are on
+    /// (map.voice), with the clips of the voice chosen; dropped while they
+    /// are off.
+    fn map_speaker_ready(&mut self) {
+        if !self.settings.map.voice {
+            self.map_voice = None;
+            return;
+        }
+        let voice_dir = self.map_voice_dir();
+        let voice_dir = voice_dir.to_string_lossy();
+        if self.map_voice.as_ref().is_none_or(|v| v.dir() != voice_dir) {
+            self.map_voice = Some(Speaker::new(&voice_dir));
+        }
+    }
+
+    /// The speed cameras on the map while they are warned of
+    /// (map.speed-cameras), else none.
+    fn map_marks_show(&mut self) {
+        let Some(viewer) = &self.map else {
+            return;
+        };
+        let router = self
+            .map_router
+            .as_ref()
+            .filter(|r| self.settings.map.speed_cameras && r.cameras() > 0);
+        let marks = match router {
+            Some(r) => Some(
+                self.map_marks
+                    .get_or_insert_with(|| r.camera_points().into())
+                    .clone(),
+            ),
+            None => None,
+        };
+        viewer.set_cameras(marks);
+    }
+
+    /// Without a route of ours, the speed camera on the road ahead of
+    /// `fix`: for the bar, and "speed camera ahead" once as it nears, when
+    /// they are warned of (map.speed-cameras). A route of ours has its own
+    /// (`map_camera_tick`).
+    fn map_road_cameras(&mut self, fix: &lehu_map::Fix, now: u64) {
+        let router = self
+            .map_router
+            .clone()
+            .filter(|_| self.settings.map.speed_cameras && !self.map_routed);
+        let Some(router) = router else {
+            self.map_road_camera = None;
+            return;
+        };
+        self.map_road_camera = self.map_lookout.look(&router, fix, now);
+        let Some(camera) = self.map_road_camera else {
+            return;
+        };
+        if self.settings.map.voice && self.map_lookout.due(&camera, fix.kmh, now) {
+            log::info!(
+                "map: a speed camera {} m ahead on the road, at {} km/h",
+                camera.metres,
+                fix.kmh
+            );
+            if let Some(speaker) = &mut self.map_voice {
+                speaker.say(&[lehu_map::Clip::Camera], &self.audio);
+            }
+        }
+    }
+
+    /// "Speed camera ahead", once a camera on the route, when it is asked
+    /// for (map.speed-cameras) and the prompts are on.
+    fn map_camera_tick(&mut self, ms: u64, kmh: u32) {
+        if !self.settings.map.speed_cameras {
+            return;
+        }
+        let (Some(track), Some(speaker)) = (&self.map_track, &mut self.map_voice) else {
+            return;
+        };
+        if self.map_cameras.tick(track, ms, kmh) {
+            speaker.say(&[lehu_map::Clip::Camera], &self.audio);
+        }
+    }
+
+    /// Once a minute: day or night by the sun, where we are (the drive's
+    /// position, the map's, map.fake-position, else where the map was
+    /// left), once the clock is set. The map turns to its night tiles or
+    /// back when Auto changes its mind.
+    fn sun_tick(&mut self) {
+        const EVERY_MS: u64 = 60_000;
+        let now = clock::now_ms();
+        if self
+            .sun_checked_at
+            .is_some_and(|at| now.saturating_sub(at) < EVERY_MS)
+        {
+            return;
+        }
+        self.sun_checked_at = Some(now);
+        let before = self.night_now();
+        let unix_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        match self.sun_position() {
+            Some((x, y)) if unix_s >= CLOCK_SET_S => {
+                let (lat, lon) = lehu_map::degrees_from_world(x, y);
+                let elevation = lehu_core::sun::elevation(unix_s as i64, lat, lon);
+                let was = self.sun.night();
+                let night = self.sun.update(elevation);
+                if was != Some(night) {
+                    log::info!(
+                        "night by the sun: {} (the sun {elevation:.1} degrees up at {lat:.3}, {lon:.3})",
+                        if night { "night" } else { "day" }
+                    );
+                }
+            }
+            // Not known: Auto is day, as it was before the sun.
+            _ => self.sun = lehu_core::sun::Dusk::new(),
+        }
+        if self.night_now() != before
+            && let Some(viewer) = &self.map
+        {
+            viewer.set_night(self.night_now());
+        }
+    }
+
+    /// Where we are for the sun: the drive's position, the map's, where a
+    /// route ended, map.fake-position, else the middle of the map where it
+    /// was left. A country's width is a few minutes of sunset.
+    fn sun_position(&self) -> Option<(i64, i64)> {
+        if let Some(fix) = self.map_fix() {
+            return Some((fix.x, fix.y));
+        }
+        let m = &self.settings.map;
+        self.map_position
+            .or(self.map_left_at)
+            .or_else(|| lehu_map::parse_position(&m.fake_position).ok().flatten())
+            .or((m.zoom != 0).then_some((m.x, m.y)))
+    }
+
+    /// How Go to's routes are chosen, from the settings (map.route-by,
+    /// map.avoid-motorways): the screens change them by persisting those
+    /// keys.
+    pub fn map_route_options(&self) -> lehu_map::RouteOptions {
+        let m = &self.settings.map;
+        lehu_map::RouteOptions {
+            by: match m.route_by {
+                settings::RouteBy::Fastest => lehu_map::RouteBy::Fastest,
+                settings::RouteBy::Shortest => lehu_map::RouteBy::Shortest,
+            },
+            avoid_motorways: m.avoid_motorways,
+        }
+    }
+
+    /// The prompts of the drive left go with it; a new drive's start
+    /// afresh.
+    fn map_quiet(&mut self) {
+        self.map_voice = None;
+        self.map_cameras = lehu_map::CameraWatch::new();
+    }
+
+    /// A route of ours reached its end: it ends, and the arrival shows
+    /// in the guidance's place for a while.
+    fn map_arrived(&mut self) {
+        let now = lehu_core::clock::now_ms();
+        let done = if self.map_following() {
+            self.map_reached
+        } else {
+            matches!(
+                (&self.map_track, self.map_track_start),
+                (Some(track), Some(start)) if now.saturating_sub(start) >= track.duration()
+            )
+        };
+        if self.map_routed && done {
+            log::info!("map: arrived at {}", self.map_to.0);
+            let card = arrival(&self.map_to.0, &self.map_to.1);
+            self.map_end_route();
+            self.map_arrival = Some((card, now + MAP_ARRIVAL_MS));
+        }
+    }
+
+    /// Where we are, world pixels at zoom 22, for a search's distances and
+    /// a route's start: on the drive, where it is now (and the way it
+    /// goes, while it moves); else the position shown; else the middle of
+    /// the map.
+    fn map_here(&self) -> Here {
+        if let Some(fix) = self.map_fix() {
+            let heading = (fix.kmh > 0 && fix.heading != (0, 0)).then_some(fix.heading);
+            return (Some((fix.x, fix.y)), heading);
+        }
+        if let Some(p) = self.map_position {
+            return (Some(p), None);
+        }
+        let v = self.map_view_now();
+        (self.map_set.is_some().then_some((v.x, v.y)), None)
+    }
+
+    /// A route found: the drive from now on, remembered across the map
+    /// closing as the replayed one is; the destination goes first among
+    /// the recent ones.
+    fn map_take_route(&mut self, track: Track, to: &Found) {
+        // From its start, on the map at once when it is open (a route to
+        // Home from the menu, one found anew); followed, from where the
+        // position is.
+        let fix = match &self.map_drive {
+            Some((drive, start)) => drive.at(lehu_core::clock::now_ms().saturating_sub(*start)),
+            None => track.at(0),
+        };
+        self.map_position = Some((fix.x, fix.y));
+        self.map_marker = Some(Marker::Arrow(fix.x, fix.y, fix.heading));
+        self.map_route = Some(Route::from(track.line()));
+        self.map_guide = track
+            .ahead(0)
+            .map(|a| guidance(&a, then_of(&track, &a), local_time_ms(self.zone_min)));
+        self.map_track = Some(Arc::new(track));
+        self.map_track_start = Some(lehu_core::clock::now_ms());
+        self.map_track_shown = 0;
+        self.map_routed = true;
+        self.map_left_at = None;
+        self.map_on = self
+            .map_drive
+            .is_some()
+            .then(|| lehu_map::Follow::to((to.x, to.y)));
+        self.map_reached = false;
+        self.map_follow = true;
+        self.map_arrival = None;
+        self.map_to = (to.name.clone(), to.town.clone());
+        self.map_dest = Some(to.clone());
+        // The prompts start afresh on the new route.
+        self.map_quiet();
+        let place = place_of(to);
+        let mut recent = self.settings.map.recent.clone();
+        recent.retain(|p| (p.name.as_str(), p.town.as_str()) != (&place.name, &place.town));
+        recent.insert(0, place);
+        recent.truncate(MAP_RECENT);
+        if recent != self.settings.map.recent {
+            self.persist_any("map.recent", recent);
+        }
+        self.map_show();
+    }
+
+    /// Find the route from where we are to `to`, on a thread of its own;
+    /// `map_route_poll` says how it goes.
+    fn map_route_to(&mut self, to: Found) {
+        self.map_finding_preview = false;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (from, heading) = self.map_here();
+        match (self.map_router.clone(), from) {
+            (Some(router), Some(from)) => {
+                let goal = (to.x, to.y);
+                let options = self.map_route_options();
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("map-route".into())
+                        .spawn(move || {
+                            let _ = tx.send(router.route_with(from, heading, goal, &options));
+                        });
+                if let Err(e) = spawned {
+                    log::warn!("map: no thread to route on: {e}");
+                }
+            }
+            (None, _) => {
+                let _ = tx.send(Err("No road data".into()));
+            }
+            (_, None) => {
+                let _ = tx.send(Err("Where we are is not known".into()));
+            }
+        }
+        log::info!("map: routing to {}, {}", to.name, to.town);
+        self.map_finding = Some((rx, to));
+    }
+
+    /// A route found, shown whole before it is driven: what the bar says,
+    /// and the view that holds it (the map's own when there is no map).
+    fn map_preview_of(&self, track: Track, to: Found) -> Preview {
+        let line = track.line();
+        let view = match (&self.map_set, &self.map_display) {
+            (Some(set), Some(display)) => View::fitting(
+                &line,
+                (display.width(), display.height()),
+                MAP_PREVIEW_INSET,
+                set.min_zoom,
+                set.top_zoom(),
+            )
+            .map(|mut v| {
+                v.clamp(&set.bounds);
+                v
+            }),
+            _ => None,
+        }
+        .unwrap_or(self.map_view);
+        let minutes = track.duration().div_ceil(60_000).max(1);
+        let time = if minutes < 60 {
+            format!("{minutes} min")
+        } else {
+            format!("{} h {:02} min", minutes / 60, minutes % 60)
+        };
+        let eta = local_time_ms(self.zone_min)
+            .map(|now| {
+                let at = (now + track.duration()) / 60_000 % (24 * 60);
+                format!("{:02}:{:02}", at / 60, at % 60)
+            })
+            .unwrap_or_default();
+        Preview {
+            card: lehu_ui::RoutePreview {
+                name: to.name.clone(),
+                distance: distance(track.metres()),
+                time,
+                eta,
+            },
+            route: Route::from(line),
+            view,
+            track,
+            to,
+        }
+    }
+
+    /// A kept place as a destination: where it is, and how far from here.
+    fn found_of(&self, place: &settings::MapPlace) -> Option<Found> {
+        let (x, y) = lehu_map::parse_position(&place.at).ok().flatten()?;
+        let near = self.map_here().0;
+        Some(Found {
+            name: place.name.clone(),
+            town: place.town.clone(),
+            kind: FoundKind::Street,
+            x,
+            y,
+            metres: near.map(|n| lehu_map::metres_between(n, (x, y))),
+            detail: String::new(),
+        })
+    }
+
+    /// Following a drive, the view the map shows (it moves by itself);
+    /// otherwise the one it was given.
+    fn map_view_now(&self) -> View {
+        match &self.map {
+            // A route shown whole is not where the map was.
+            Some(viewer)
+                if self.map_follow && self.map_mover().is_some() && self.map_preview.is_none() =>
+            {
+                // Its zoom is the one asked for, not one closer near a turn.
+                View {
+                    zoom: self.map_view.zoom,
+                    ..viewer.view()
+                }
+            }
+            _ => self.map_view,
+        }
+    }
+
+    /// The map goes; where it was left is kept for next time.
+    pub fn map_stop(&mut self) {
+        self.map_view = self.map_view_now();
+        if let Some(viewer) = self.map.take() {
+            viewer.stop();
+        }
+        if let Some(speaker) = &mut self.map_voice {
+            speaker.release();
+        }
+        let v = self.map_view;
+        let m = &self.settings.map;
+        if self.map_set.is_some() && (v.zoom, v.x, v.y) != (m.zoom, m.x, m.y) {
+            self.persist_any("map.zoom", v.zoom);
+            self.persist_any("map.x", v.x);
+            self.persist_any("map.y", v.y);
+        }
+    }
+
+    fn update_map_label(&mut self) {
+        self.map_label.clear();
+        if let Some(set) = &self.map_set {
+            use std::fmt::Write as _;
+            let _ = write!(
+                self.map_label,
+                "{}  -  zoom {}",
+                set.name, self.map_view.zoom
+            );
+        }
+    }
+
     /// The camera view is up: the loop should run the camera.
     pub fn camera_wanted(&self) -> bool {
         self.camera_wanted
@@ -690,7 +1877,23 @@ impl Host for AppHost {
         self.resume = true;
     }
 
-    fn night_mode_changed(&mut self) {}
+    fn night_mode_changed(&mut self) {
+        if let Some(viewer) = &self.map {
+            viewer.set_night(self.night_now());
+        }
+    }
+
+    /// Night now: with Night set, always; with Day, never; with Auto, when
+    /// the sun at the head unit's position is down (see sun_tick), and day
+    /// while the position or the clock is not known. The map's tiles
+    /// follow it, and the screens' palette.
+    fn night_now(&self) -> bool {
+        match self.settings.display.night_mode {
+            settings::NightMode::Day => false,
+            settings::NightMode::Night => true,
+            settings::NightMode::Auto => self.sun.night() == Some(true),
+        }
+    }
 
     fn request_power(&mut self, action: Power) {
         self.power = Some(action);
@@ -755,6 +1958,401 @@ impl Host for AppHost {
 
     fn set_camera_running(&mut self, on: bool) {
         self.camera_wanted = on;
+    }
+
+    fn set_map_running(&mut self, on: bool) {
+        self.map_wanted = on;
+    }
+
+    fn map_pan(&mut self, dx: i32, dy: i32) {
+        // A route shown whole is looked at round itself.
+        if let (Some(p), Some(set), Some(viewer)) =
+            (&mut self.map_preview, &self.map_set, &self.map)
+        {
+            p.view.pan(dx, dy, &set.bounds);
+            viewer.set_view(p.view);
+            return;
+        }
+        // Moved by hand: from where it was, it stays where it was put,
+        // north up.
+        self.map_view = self.map_view_now();
+        let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
+            return;
+        };
+        if self.map_follow {
+            // As shown: a level closer near a turn.
+            self.map_view.zoom = viewer.view().zoom;
+        }
+        viewer.follow(None);
+        self.map_view.pan(dx, dy, &set.bounds);
+        viewer.set_view(self.map_view);
+        self.map_follow = false;
+        viewer.set_heading(None);
+    }
+
+    fn map_zoom(&mut self, step: i32) {
+        let (Some(set), Some(viewer)) = (&self.map_set, &self.map) else {
+            return;
+        };
+        if let Some(p) = &mut self.map_preview {
+            p.view.zoom_by(step, set.min_zoom, set.top_zoom());
+            viewer.set_view(p.view);
+            return;
+        }
+        self.map_view.zoom_by(step, set.min_zoom, set.top_zoom());
+        if self.map_follow && self.map_mover().is_some() {
+            viewer.follow(Some(self.map_view.zoom));
+        } else {
+            viewer.set_view(self.map_view);
+        }
+        self.update_map_label();
+    }
+
+    fn map_locate(&mut self) {
+        let (Some(set), Some(viewer), Some((x, y))) = (&self.map_set, &self.map, self.map_position)
+        else {
+            return;
+        };
+        (self.map_view.x, self.map_view.y) = (x, y);
+        self.map_view.clamp(&set.bounds);
+        viewer.set_view(self.map_view);
+        self.map_follow = true;
+        if self.map_mover().is_some() {
+            viewer.follow(Some(self.map_view.zoom));
+        }
+    }
+
+    fn map_guidance(&self) -> Option<&NavCard> {
+        match &self.map_arrival {
+            Some((card, _)) => Some(card),
+            None => self.map_guide.as_ref(),
+        }
+    }
+
+    /// Metres to the next speed camera on the route when it is `within`
+    /// metres or less, and the warning is on (map.speed-cameras): for a
+    /// sign on the screen. Cheap: a search over the route's cameras.
+    fn map_camera_ahead(&self, within: u32) -> Option<u32> {
+        if !self.settings.map.speed_cameras {
+            return None;
+        }
+        if !self.map_routed {
+            // No route of ours: the road ahead's.
+            return self
+                .map_road_camera
+                .map(|c| c.metres)
+                .filter(|&m| m <= within);
+        }
+        let (track, ms) = (self.map_track.as_ref()?, self.map_track_ms()?);
+        track.camera_ahead(ms, within).map(|(_, metres)| metres)
+    }
+
+    fn map_speed(&self) -> Option<(u32, Option<u16>)> {
+        self.map.as_ref().and(self.map_speed)
+    }
+
+    fn map_has_position(&self) -> bool {
+        self.map_position.is_some()
+    }
+
+    fn mouse_available(&self) -> bool {
+        self.map_cursor_available()
+    }
+
+    fn map_cursor_available(&self) -> bool {
+        self.map_display
+            .as_ref()
+            .is_some_and(|d| d.has_cursor_plane())
+    }
+
+    fn map_regions(&mut self) -> Vec<lehu_ui::MapRegion> {
+        use lehu_map::region::{self, Health};
+        use lehu_ui::RegionState;
+        self.map_check_poll();
+        let current = self.map_dir();
+        let state = |h: &Health| match h {
+            Health::Ready | Health::Unchecked => RegionState::Ready,
+            Health::NeedsNewer(_) => RegionState::NeedsNewer,
+            Health::Damaged(_) => RegionState::Damaged,
+        };
+        let root = std::path::Path::new(region::MAPS_ROOT);
+        let listed = region::list(root, Some(self.map_checks()));
+        let mut out: Vec<lehu_ui::MapRegion> = listed
+            .iter()
+            .map(|l| lehu_ui::MapRegion {
+                dir: l.dir.to_string_lossy().into_owned(),
+                name: l.name.clone(),
+                state: state(&l.health),
+                current: l.dir == current,
+            })
+            .collect();
+        // The map shown from a folder off the partition (the one from
+        // before, or one the settings name): listed too.
+        if !out.iter().any(|r| r.current) && current.join("map.toml").exists() {
+            let (name, health) = match region::Region::read(&current) {
+                Ok(r) => {
+                    let health = r.health(Some(self.map_checks()));
+                    (r.name, health)
+                }
+                Err(e) => ("Map".to_string(), Health::Damaged(e)),
+            };
+            out.push(lehu_ui::MapRegion {
+                dir: current.to_string_lossy().into_owned(),
+                name,
+                state: state(&health),
+                current: true,
+            });
+        }
+        out
+    }
+
+    fn map_regions_generation(&self) -> u32 {
+        self.map_regions_gen
+    }
+
+    fn map_voice_installed(&self) -> bool {
+        self.map_voice_dir().is_dir()
+    }
+
+    fn map_voices(&mut self) -> Vec<lehu_ui::MapVoice> {
+        let current = self.map_voice_dir();
+        let root = std::path::Path::new(lehu_map::region::MAPS_ROOT);
+        let mut voices: Vec<lehu_ui::MapVoice> = lehu_map::region::voice_sets(root)
+            .into_iter()
+            .map(|v| lehu_ui::MapVoice {
+                current: v.dir == current,
+                dir: v.dir.to_string_lossy().into_owned(),
+                name: v.title,
+            })
+            .collect();
+        // The folder from before, or one the settings name elsewhere.
+        if !voices.iter().any(|v| v.current) && current.is_dir() {
+            voices.insert(
+                0,
+                lehu_ui::MapVoice {
+                    dir: current.to_string_lossy().into_owned(),
+                    name: "English".into(),
+                    current: true,
+                },
+            );
+        }
+        voices
+    }
+
+    fn map_away(&self) -> bool {
+        self.map.is_some()
+            && self.map_position.is_some()
+            && !self.map_follow
+            && self.map_preview.is_none()
+    }
+
+    fn map_note(&self) -> &str {
+        if self.map_ready() { "" } else { &self.map_note }
+    }
+
+    fn map_label(&self) -> &str {
+        &self.map_label
+    }
+
+    fn map_can_search(&self) -> bool {
+        self.map_router.as_ref().is_some_and(|r| r.can_search())
+    }
+
+    fn map_search(&mut self, query: &str) {
+        let near = self.map_here().0;
+        self.map_found = if query.trim().is_empty() {
+            // The recent destinations.
+            self.settings
+                .map
+                .recent
+                .iter()
+                .filter_map(|p| {
+                    let (x, y) = lehu_map::parse_position(&p.at).ok().flatten()?;
+                    Some(Found {
+                        name: p.name.clone(),
+                        town: p.town.clone(),
+                        kind: FoundKind::Street,
+                        x,
+                        y,
+                        metres: near.map(|n| lehu_map::metres_between(n, (x, y))),
+                        detail: String::new(),
+                    })
+                })
+                .collect()
+        } else {
+            self.map_router
+                .as_ref()
+                .map_or_else(Vec::new, |r| r.search(query, near, MAP_RESULTS))
+        };
+        self.map_dests = self.map_found.iter().map(destination).collect();
+    }
+
+    /// Go to's list filled with the `limit` nearest points of interest of
+    /// a kind to where we are, the nearest first, as map_search fills it.
+    /// Empty when where we are is not known or the data has none.
+    fn map_nearest(&mut self, kind: Nearby, limit: usize) {
+        let near = self.map_here().0;
+        self.map_found = match (&self.map_router, near) {
+            (Some(r), Some(near)) => r.nearest(found_kind(kind), near, limit),
+            _ => Vec::new(),
+        };
+        self.map_dests = self.map_found.iter().map(destination).collect();
+    }
+
+    fn map_can_find(&self, kind: Nearby) -> bool {
+        self.map_router
+            .as_ref()
+            .is_some_and(|r| r.count(found_kind(kind)) > 0)
+    }
+
+    fn map_destinations(&self) -> &[Destination] {
+        &self.map_dests
+    }
+
+    fn map_go(&mut self, index: usize) {
+        if let Some(to) = self.map_found.get(index).cloned() {
+            self.map_route_to(to);
+            // Shown whole first: Home and Work, and a route found anew,
+            // are driven at once.
+            self.map_finding_preview = true;
+        }
+    }
+
+    fn map_preview(&self) -> Option<&lehu_ui::RoutePreview> {
+        self.map_preview.as_ref().map(|p| &p.card)
+    }
+
+    fn map_preview_start(&mut self) {
+        if let Some(p) = self.map_preview.take() {
+            log::info!("map: driving to {}", p.to.name);
+            self.map_take_route(p.track, &p.to);
+        }
+    }
+
+    fn map_preview_cancel(&mut self) {
+        if let Some(p) = self.map_preview.take() {
+            log::info!("map: not driving to {}", p.to.name);
+            self.map_show();
+        }
+    }
+
+    fn map_keep(&self, index: usize) -> Option<settings::MapPlace> {
+        self.map_found.get(index).map(place_of)
+    }
+
+    fn map_go_place(&mut self, place: &settings::MapPlace) {
+        match self.found_of(place) {
+            Some(to) => self.map_route_to(to),
+            None => {
+                // Said by the next poll, as a route not found.
+                let (tx, rx) = std::sync::mpsc::channel();
+                let _ = tx.send(Err(format!("{} has no position", place.name)));
+                self.map_finding = Some((
+                    rx,
+                    Found {
+                        name: place.name.clone(),
+                        town: place.town.clone(),
+                        kind: FoundKind::Street,
+                        x: 0,
+                        y: 0,
+                        metres: None,
+                        detail: String::new(),
+                    },
+                ));
+            }
+        }
+    }
+
+    fn map_place_distance(&self, place: &settings::MapPlace) -> String {
+        match self.found_of(place).and_then(|f| f.metres) {
+            Some(m) if m < 10 => "here".into(),
+            Some(m) => distance(m),
+            None => String::new(),
+        }
+    }
+
+    fn map_route_poll(&mut self) -> RouteStage {
+        let Some((rx, _)) = &self.map_finding else {
+            return RouteStage::Idle;
+        };
+        let answer = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return RouteStage::Finding,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("No route there".to_string()),
+            Ok(answer) => answer,
+        };
+        let Some((_, to)) = self.map_finding.take() else {
+            return RouteStage::Idle;
+        };
+        match answer {
+            Ok(track) if self.map_finding_preview => {
+                self.map_preview = Some(self.map_preview_of(track, to));
+                self.map_show();
+                RouteStage::Preview
+            }
+            Ok(track) => {
+                self.map_take_route(track, &to);
+                RouteStage::Found
+            }
+            Err(e) => {
+                log::info!("map: no route to {}: {e}", to.name);
+                self.map_route_note = e;
+                RouteStage::Failed
+            }
+        }
+    }
+
+    fn map_route_note(&self) -> &str {
+        &self.map_route_note
+    }
+
+    fn map_on_route(&self) -> bool {
+        self.map_routed
+    }
+
+    fn map_reroute(&mut self) -> bool {
+        let Some(to) = self.map_dest.clone().filter(|_| self.map_routed) else {
+            return false;
+        };
+        log::info!("map: the route options changed");
+        self.map_route_to(to);
+        true
+    }
+
+    fn map_rerouting(&self) -> bool {
+        self.map_rerouting.is_some()
+    }
+
+    fn map_end_route(&mut self) {
+        if !self.map_routed {
+            return;
+        }
+        let here = self.map_here().0;
+        self.map_view = self.map_view_now();
+        self.map_routed = false;
+        self.map_on = None;
+        self.map_reached = false;
+        self.map_rerouting = None;
+        self.map_quiet();
+        // A position from elsewhere goes on, only as where we are: its own
+        // turns are not guided along now.
+        if self.map_drive.is_some() {
+            self.map_drive_only = true;
+            self.map_track = None;
+            self.map_track_start = None;
+            self.map_route = None;
+            self.map_guide = None;
+            self.map_show();
+            return;
+        }
+        self.map_track = None;
+        self.map_track_start = None;
+        self.map_route = None;
+        self.map_guide = None;
+        self.map_speed = None;
+        self.map_left_at = here;
+        self.map_position = here;
+        self.map_marker = here.map(|(x, y)| Marker::Dot(x, y));
+        self.map_show();
     }
 
     fn take_camera_failure(&mut self, why: &mut String) -> bool {
@@ -989,5 +2587,297 @@ impl Host for AppHost {
             updater.outcome_seen();
         }
         self.sync_update();
+    }
+}
+
+/// A turn as the card draws and says it.
+fn arrow_of(turn: Turn) -> (NavArrow, String) {
+    match turn {
+        Turn::Straight => (NavArrow::Straight, "Continue".to_string()),
+        Turn::SlightLeft => (NavArrow::SlightLeft, "Bear left".to_string()),
+        Turn::Left => (NavArrow::Left, "Turn left".to_string()),
+        Turn::SharpLeft => (NavArrow::SharpLeft, "Turn sharp left".to_string()),
+        Turn::SlightRight => (NavArrow::SlightRight, "Bear right".to_string()),
+        Turn::Right => (NavArrow::Right, "Turn right".to_string()),
+        Turn::SharpRight => (NavArrow::SharpRight, "Turn sharp right".to_string()),
+        Turn::UTurn => (NavArrow::UTurn, "Make a U-turn".to_string()),
+        Turn::Roundabout(n) => (
+            NavArrow::Roundabout,
+            format!("Take the {} exit", ordinal(n)),
+        ),
+        Turn::Arrive => (NavArrow::Arrive, "Arrive".to_string()),
+    }
+}
+
+/// The turn after the next one when it is close behind it
+/// (`THEN_HINT_M`): the card's "then".
+fn then_of(track: &Track, ahead: &Ahead<'_>) -> Option<Turn> {
+    track
+        .then(ahead)
+        .filter(|&(_, gap)| gap <= THEN_HINT_M)
+        .map(|(next, _)| next.turn)
+}
+
+/// The bar's guidance for the next turn, and the one close behind it when
+/// there is one. `time_of_day`: now, in ms since local midnight, for the
+/// arrival as a clock time; None while the clock is not set (then the
+/// minutes left).
+fn guidance(a: &Ahead<'_>, then: Option<Turn>, time_of_day: Option<u64>) -> NavCard {
+    let (arrow, maneuver) = arrow_of(a.maneuver.turn);
+    let road = match a.maneuver.turn {
+        Turn::Arrive => "at the destination".to_string(),
+        _ => a.maneuver.road.clone(),
+    };
+    let minutes = a.left_ms.div_ceil(60_000).max(1);
+    let (eta, eta_note) = match time_of_day {
+        Some(now) => {
+            let at = (now + a.left_ms) / 60_000 % (24 * 60);
+            (
+                format!("{:02}:{:02}", at / 60, at % 60),
+                format!("{minutes} min, {}", distance(a.left_metres)),
+            )
+        }
+        None => (format!("{minutes} min"), distance(a.left_metres)),
+    };
+    NavCard {
+        active: true,
+        arrow,
+        maneuver,
+        distance: distance(a.metres),
+        road,
+        eta,
+        eta_note,
+        then: then.map_or(NavArrow::None, |t| arrow_of(t).0),
+    }
+}
+
+/// The card once a route of ours arrived: the flag, "Arrived", where.
+fn arrival(name: &str, town: &str) -> NavCard {
+    NavCard {
+        active: true,
+        arrow: NavArrow::Arrive,
+        maneuver: name.to_string(),
+        distance: "Arrived".to_string(),
+        road: if town == name {
+            String::new()
+        } else {
+            town.to_string()
+        },
+        ..NavCard::default()
+    }
+}
+
+/// A destination as kept in the settings (the recent ones, Home, Work).
+fn place_of(f: &Found) -> settings::MapPlace {
+    let (lat, lon) = lehu_map::degrees_from_world(f.x, f.y);
+    settings::MapPlace {
+        name: f.name.clone(),
+        town: f.town.clone(),
+        at: format!("{lat:.6}, {lon:.6}"),
+    }
+}
+
+/// What the screens' kind of place is in the map's data.
+fn found_kind(kind: Nearby) -> FoundKind {
+    match kind {
+        Nearby::Fuel => FoundKind::Fuel,
+        Nearby::Parking => FoundKind::Parking,
+        Nearby::Charging => FoundKind::Charging,
+    }
+}
+
+/// A destination as Go to shows it: the name, and under it the town (when
+/// it is not the name itself) and how far; a point of interest, listed
+/// under its kind, its detail and how far ("Aral · 1.2 km").
+fn destination(f: &Found) -> Destination {
+    if !f.kind.label().is_empty() {
+        let mut parts = Vec::new();
+        if !f.detail.is_empty() && f.detail != f.name {
+            parts.push(f.detail.clone());
+        }
+        if let Some(m) = f.metres {
+            parts.push(if m < 10 { "here".into() } else { distance(m) });
+        }
+        return Destination {
+            name: f.name.clone(),
+            detail: parts.join(" · "),
+            place: false,
+        };
+    }
+    let mut detail = String::new();
+    if !f.town.is_empty() && f.town != f.name {
+        detail.push_str(&f.town);
+    }
+    if let Some(m) = f.metres {
+        if !detail.is_empty() {
+            detail.push_str(", ");
+        }
+        if m < 10 {
+            detail.push_str("here");
+        } else {
+            detail.push_str(&distance(m));
+        }
+    }
+    Destination {
+        name: f.name.clone(),
+        detail,
+        place: f.kind == FoundKind::Place,
+    }
+}
+
+/// A distance as a driver reads it: the nearest 10 m under 100 m, 50 m
+/// under a kilometre, a tenth of a kilometre under ten, then whole ones.
+fn distance(metres: u32) -> String {
+    match metres {
+        0..10 => "Now".to_string(),
+        10..95 => format!("{} m", (metres + 5) / 10 * 10),
+        95..975 => format!("{} m", (metres + 25) / 50 * 50),
+        975..9950 => {
+            let tenths = (metres + 50) / 100;
+            format!("{}.{} km", tenths / 10, tenths % 10)
+        }
+        _ => format!("{} km", (metres + 500) / 1000),
+    }
+}
+
+/// 1st, 2nd, 3rd, 4th...
+fn ordinal(n: u8) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::{arrival, destination, distance, guidance, ordinal, then_of};
+    use lehu_ui::NavArrow;
+
+    #[test]
+    fn a_destination_shows_its_town_and_how_far() {
+        let found = |name: &str, town: &str, metres| lehu_map::Found {
+            name: name.into(),
+            town: town.into(),
+            kind: lehu_map::FoundKind::Street,
+            x: 0,
+            y: 0,
+            metres,
+            detail: String::new(),
+        };
+        let d = destination(&found("Rue de la Gare", "Ettelbruck", Some(24_600)));
+        assert_eq!((d.detail.as_str(), d.place), ("Ettelbruck, 25 km", false));
+        // A town is not in itself; right here is "here", not "Now".
+        assert_eq!(
+            destination(&found("Mamer", "Mamer", Some(3))).detail,
+            "here"
+        );
+        assert_eq!(
+            destination(&found("Gare", "Luxembourg", None)).detail,
+            "Luxembourg"
+        );
+        // A point of interest: its category, its detail, how far.
+        let fuel = lehu_map::Found {
+            kind: lehu_map::FoundKind::Fuel,
+            detail: "Aral".into(),
+            ..found("Station Aral Bertrange", "Bertrange", Some(1240))
+        };
+        let d = destination(&fuel);
+        assert_eq!((d.detail.as_str(), d.place), ("Aral · 1.2 km", false));
+        let parking = lehu_map::Found {
+            kind: lehu_map::FoundKind::Parking,
+            ..found("Parking", "Luxembourg", Some(300))
+        };
+        assert_eq!(destination(&parking).detail, "300 m");
+    }
+
+    #[test]
+    fn the_arrival_is_a_clock_time_once_the_clock_is_set() {
+        let gpx = r#"<gpx>
+<wpt lat="49.6010" lon="6.1300"><name></name><type>arrive</type></wpt>
+<trk><trkseg>
+<trkpt lat="49.6000" lon="6.1300"><time>2027-01-15T08:00:00Z</time></trkpt>
+<trkpt lat="49.6010" lon="6.1300"><time>2027-01-15T08:10:00Z</time></trkpt>
+</trkseg></trk></gpx>"#;
+        let track = lehu_map::Track::parse_gpx(gpx).unwrap();
+        let ahead = track.ahead(0).unwrap();
+        // 23:55 and ten minutes to go: past midnight.
+        let card = guidance(&ahead, None, Some((23 * 60 + 55) * 60_000));
+        assert_eq!(card.eta, "00:05");
+        assert_eq!(card.eta_note, "10 min, 100 m");
+        let card = guidance(&ahead, None, None);
+        assert_eq!(card.eta, "10 min");
+        assert_eq!(card.eta_note, "100 m");
+    }
+
+    /// A straight drive north, a point every 0.001 degrees (about 111 m)
+    /// and ten seconds, with turns at points 2, 4 and 10.
+    fn three_turns() -> lehu_map::Track {
+        let mut gpx = String::from("<gpx>");
+        for (at, kind) in [(2, "left"), (4, "right"), (10, "arrive")] {
+            gpx.push_str(&format!(
+                "<wpt lat=\"{:.4}\" lon=\"6.1300\"><name>Rue</name><type>{kind}</type></wpt>",
+                49.6 + f64::from(at) * 0.001
+            ));
+        }
+        gpx.push_str("<trk><trkseg>");
+        for i in 0..=10 {
+            gpx.push_str(&format!(
+                "<trkpt lat=\"{:.4}\" lon=\"6.1300\"><time>2027-01-15T08:00:{:02}Z</time></trkpt>",
+                49.6 + f64::from(i) * 0.001,
+                i * 5
+            ));
+        }
+        gpx.push_str("</trkseg></trk></gpx>");
+        lehu_map::Track::parse_gpx(&gpx).unwrap()
+    }
+
+    #[test]
+    fn a_turn_close_behind_the_next_is_shown_with_it() {
+        let track = three_turns();
+        // Before the left: the right comes 222 m after it.
+        let ahead = track.ahead(0).unwrap();
+        let then = then_of(&track, &ahead);
+        assert_eq!(guidance(&ahead, then, None).then, NavArrow::Right);
+        // Before the right: the arrival is 666 m after it, too far.
+        let ahead = track.ahead(15_000).unwrap();
+        assert_eq!(ahead.maneuver.turn, lehu_map::Turn::Right);
+        assert_eq!(then_of(&track, &ahead), None);
+        assert_eq!(guidance(&ahead, None, None).then, NavArrow::None);
+    }
+
+    #[test]
+    fn the_arrival_card_names_where() {
+        let card = arrival("Rue de la Gare", "Luxembourg");
+        assert_eq!(card.arrow, NavArrow::Arrive);
+        assert_eq!(card.distance, "Arrived");
+        assert_eq!(
+            (card.maneuver.as_str(), card.road.as_str()),
+            ("Rue de la Gare", "Luxembourg")
+        );
+        // A town is not in itself.
+        assert_eq!(arrival("Mamer", "Mamer").road, "");
+    }
+
+    #[test]
+    fn distances_read_as_a_driver_reads_them() {
+        assert_eq!(distance(4), "Now");
+        assert_eq!(distance(44), "40 m");
+        assert_eq!(distance(46), "50 m");
+        assert_eq!(distance(330), "350 m");
+        assert_eq!(distance(94), "90 m");
+        assert_eq!(distance(960), "950 m");
+        assert_eq!(distance(990), "1.0 km");
+        assert_eq!(distance(9960), "10 km");
+        assert_eq!(distance(1240), "1.2 km");
+        assert_eq!(distance(1960), "2.0 km");
+        assert_eq!(distance(12_600), "13 km");
+        assert_eq!(ordinal(1), "1st");
+        assert_eq!(ordinal(2), "2nd");
+        assert_eq!(ordinal(12), "12th");
+        assert_eq!(ordinal(23), "23rd");
     }
 }

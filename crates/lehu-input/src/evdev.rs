@@ -52,6 +52,8 @@ pub const KEY_PLAYCD: u16 = 200;
 pub const KEY_PAUSECD: u16 = 201;
 pub const KEY_PLAY: u16 = 207;
 pub const KEY_SEARCH: u16 = 217;
+pub const BTN_LEFT: u16 = 0x110;
+pub const BTN_RIGHT: u16 = 0x111;
 pub const BTN_MIDDLE: u16 = 0x112;
 pub const BTN_SOUTH: u16 = 0x130;
 pub const BTN_EAST: u16 = 0x131;
@@ -69,6 +71,8 @@ pub const KEY_ASSISTANT: u16 = 0x247;
 /// Key codes are below this.
 pub const KEY_CNT: usize = 0x300;
 
+pub const REL_X: u16 = 0x00;
+pub const REL_Y: u16 = 0x01;
 pub const REL_WHEEL: u16 = 0x08;
 pub const REL_CNT: usize = 0x10;
 

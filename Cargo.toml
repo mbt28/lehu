@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lehu", "crates/lehu-aa", "crates/lehu-camera", "crates/lehu-core", "crates/lehu-cp", "crates/lehu-drm", "crates/lehu-input", "crates/lehu-session", "crates/lehu-ui", "crates/lehu-usb", "crates/lehu-video", "crates/lehu-audio", "crates/lehu-bt", "crates/lehu-wifi", "crates/lehu-fuzz", "crates/lehu-image", "crates/lehu-update"]
+members = ["lehu", "crates/lehu-aa", "crates/lehu-camera", "crates/lehu-core", "crates/lehu-cp", "crates/lehu-drm", "crates/lehu-input", "crates/lehu-session", "crates/lehu-ui", "crates/lehu-usb", "crates/lehu-video", "crates/lehu-audio", "crates/lehu-bt", "crates/lehu-wifi", "crates/lehu-fuzz", "crates/lehu-image", "crates/lehu-update", "crates/lehu-map"]
 
 # ARMv5 has no 64-bit atomics: fontique's counter becomes 32 bits; and
 # parley's dictionary segmenter (3 MB of tables for Thai, Khmer, Lao,
@@ -11,7 +11,7 @@ fontique = { path = "vendor/fontique" }
 parley = { path = "vendor/parley" }
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-or-later"
@@ -26,6 +26,11 @@ codegen-units = 1
 panic = "abort"
 strip = true
 debug = false
+
+# The map turns every pixel of the panel five times a second while it
+# follows a drive heading up: its loops want speed more than size.
+[profile.release.package.lehu-map]
+opt-level = 3
 
 [profile.dev]
 opt-level = 1

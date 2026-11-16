@@ -30,9 +30,10 @@ mod cache;
 mod display;
 mod error;
 mod frame;
+mod pointer;
 mod request;
 
-pub use display::{Display, Show};
+pub use display::{CURSOR_SIZE, Canvas, CanvasFormat, Display, Show, Sprite};
 pub use drm::buffer::DrmFourcc as Fourcc;
 pub use error::Error;
 pub use frame::{Frame, FrameError, MAX_PLANES, Plane};

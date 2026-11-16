@@ -9,13 +9,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use drm::buffer::{DrmFourcc, DrmModifier, Handle as GemHandle, PlanarBuffer};
 use drm::control::{
     self, Device as ControlDevice, Event, FbCmd2Flags, PlaneType, ResourceHandle, connector,
     framebuffer, plane, property,
 };
-use drm::{ClientCapability, Device as _};
+use drm::{ClientCapability, Device as _, DriverCapability};
 
 use crate::band::{self, Band, Rect};
 use crate::cache::{self, Entry, FbCache, Gem};
@@ -84,6 +85,9 @@ struct PlaneProps {
     crtc_h: u32,
     /// Not every driver has it.
     zpos: Option<u32>,
+    /// `COLOR_RANGE`, where the driver has it: its id, and the values for
+    /// "YCbCr limited range" and "YCbCr full range".
+    color_range: Option<(u32, u64, u64)>,
 }
 
 /// The overlay plane the UI goes on, fixed at open.
@@ -148,7 +152,11 @@ impl Dumb {
         bpp: u32,
     ) -> Result<Self, Error> {
         let fd = card.as_fd();
-        let created = drm_ffi::mode::dumbbuffer::create(fd, width, height, bpp * 8, 0)
+        // NV12: the luma's rows, then the interleaved chroma's at half the
+        // height, in one buffer of one-byte "pixels".
+        let nv12 = format == DrmFourcc::Nv12;
+        let rows = if nv12 { height + height / 2 } else { height };
+        let created = drm_ffi::mode::dumbbuffer::create(fd, width, rows, bpp * 8, 0)
             .map_err(|e| Error::Io("CREATE_DUMB", e))?;
         let handle = created.handle;
         let destroy = || {
@@ -191,15 +199,36 @@ impl Dumb {
             destroy();
             return Err(Error::Io("mmap dumb", e));
         };
-        // SAFETY: `size` bytes just mapped, ours alone. Black to begin with.
-        unsafe { std::ptr::write_bytes(map.as_ptr(), 0, size) };
-        let planar = Planar {
-            size: (width, height),
-            format,
-            modifier: None,
-            pitches: [created.pitch, 0, 0, 0],
-            handles: [control::from_u32(handle), None, None, None],
-            offsets: [0; 4],
+        let luma = created.pitch as usize * height as usize;
+        // SAFETY: `size` bytes just mapped, ours alone. Black to begin with:
+        // in NV12 that is luma 16 and neutral chroma, not zeros (green).
+        unsafe {
+            if nv12 && luma <= size {
+                std::ptr::write_bytes(map.as_ptr(), 16, luma);
+                std::ptr::write_bytes(map.as_ptr().add(luma), 128, size - luma);
+            } else {
+                std::ptr::write_bytes(map.as_ptr(), 0, size);
+            }
+        }
+        let gem = control::from_u32(handle);
+        let planar = if nv12 {
+            Planar {
+                size: (width, height),
+                format,
+                modifier: None,
+                pitches: [created.pitch, created.pitch, 0, 0],
+                handles: [gem, gem, None, None],
+                offsets: [0, luma as u32, 0, 0],
+            }
+        } else {
+            Planar {
+                size: (width, height),
+                format,
+                modifier: None,
+                pitches: [created.pitch, 0, 0, 0],
+                handles: [gem, None, None, None],
+                offsets: [0; 4],
+            }
         };
         match card.add_planar_framebuffer(&planar, FbCmd2Flags::empty()) {
             Ok(fb) => Ok(Self {
@@ -286,6 +315,10 @@ struct State {
     cache: FbCache,
     /// The camera owns the video plane: the decoder's frames wait.
     video_held: bool,
+    /// A map canvas on the video plane is full-range YCbCr (the JPEG
+    /// tiles as the engine decodes them), told to the plane when it has
+    /// `COLOR_RANGE`; the phone's video and the camera are limited range.
+    canvas_full_range: bool,
     /// Black buffer for the video plane. Some drivers refuse to enable the
     /// CRTC with no primary plane, so a UI-only modeset (the home screen
     /// before any video) may need the primary enabled with something. Freed
@@ -294,8 +327,41 @@ struct State {
     placeholder: Option<Dumb>,
     /// Video commits since the placeholder left the plane.
     placeholder_live: u32,
+    /// The sprite plane shows a picture.
+    sprite_on: bool,
+    /// The driver refused the sprite plane once: never asked again.
+    sprite_refused: bool,
+    /// The marker the map wants on the cursor plane, shown or, while the
+    /// UI covers it, not: the cursor is above every plane, the UI's too,
+    /// so a UI window over it takes it down and its going brings it back.
+    cursor_want: Option<CursorAt>,
+    /// The framebuffer the cursor plane's committed state holds, 0 off.
+    /// The driver turns a framebuffer into the cursor's palette and
+    /// pattern only when the plane gets a new one.
+    cursor_fb: u32,
+    /// The driver refused the cursor plane once: never asked again.
+    cursor_refused: bool,
+    /// The mouse pointer, shown: it has the cursor plane before the
+    /// marker, over the UI too. Its picture, made when first shown.
+    pointer: Option<CursorAt>,
+    pointer_buf: Option<Dumb>,
     warned: Warned,
 }
+
+/// A cursor canvas, `size` a side, at (`x`, `y`) of the panel, its top
+/// left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CursorAt {
+    fb: u32,
+    size: u32,
+    x: i32,
+    y: i32,
+}
+
+/// The cursor plane's smallest side, in pixels; 64 where the driver says
+/// it takes that (`cursor_max`). The F1C200s's pattern memory holds 16
+/// colours at 32 x 32 (4 at 64 x 32, 2 at 64 x 64).
+pub const CURSOR_SIZE: u32 = 32;
 
 /// The panel. Shared between threads through an `Arc`: every method takes
 /// `&self`.
@@ -316,10 +382,26 @@ pub struct Display {
     /// The video plane takes RGB565: the placeholder's format, else XRGB8888.
     video_rgb565: bool,
     ui_plane: Option<UiPlane>,
+    /// A plane with per-pixel alpha between the video and the UI (the
+    /// map's marker): its id and properties.
+    sprite_plane: Option<(u32, PlaneProps)>,
+    /// The cursor plane, above all the others (the map's marker, when
+    /// there is one): its id and properties. None with LEHU_MAP_CURSOR=0.
+    cursor_plane: Option<(u32, PlaneProps)>,
+    /// The largest square the cursor takes: 32 or 64.
+    cursor_max: u32,
+    /// The map's marker may take the cursor plane (not with
+    /// LEHU_MAP_CURSOR=0); the mouse pointer always may.
+    map_cursor: bool,
     ui_pitch: u32,
     /// Frames of the phone's video presented so far; read lock-free.
     video_frames: AtomicU32,
     state: Mutex<State>,
+    /// LEHU_SHOT_DIR in the environment: a folder where, whenever a file
+    /// `take` appears in it, the next canvas shown is written out with the
+    /// sprite and the UI over it (for screenshots of the map, which no
+    /// tool reads off the video plane; scripts/map-shot.py composes them).
+    shot_dir: Option<std::path::PathBuf>,
 }
 
 fn find_prop(card: &Card, handle: impl ResourceHandle, name: &str) -> Option<property::Handle> {
@@ -337,6 +419,31 @@ fn prop(card: &Card, handle: impl ResourceHandle, name: &'static str) -> Result<
         .ok_or(Error::Property(name))
 }
 
+/// An enum property of `handle` by `name`, with the raw values of two of
+/// its choices by their names; None unless all three are there.
+fn enum_prop(
+    card: &Card,
+    handle: impl ResourceHandle,
+    name: &str,
+    a: &str,
+    b: &str,
+) -> Option<(u32, u64, u64)> {
+    let id = find_prop(card, handle, name)?;
+    let info = card.get_property(id).ok()?;
+    let property::ValueType::Enum(values) = info.value_type() else {
+        return None;
+    };
+    let (raw, names) = values.values();
+    let of = |want: &str| {
+        names
+            .iter()
+            .zip(raw)
+            .find(|(e, _)| e.name().to_bytes() == want.as_bytes())
+            .map(|(_, &v)| v)
+    };
+    Some((u32::from(id), of(a)?, of(b)?))
+}
+
 fn plane_props(card: &Card, plane: plane::Handle) -> Result<PlaneProps, Error> {
     Ok(PlaneProps {
         fb: prop(card, plane, "FB_ID")?,
@@ -350,6 +457,13 @@ fn plane_props(card: &Card, plane: plane::Handle) -> Result<PlaneProps, Error> {
         crtc_w: prop(card, plane, "CRTC_W")?,
         crtc_h: prop(card, plane, "CRTC_H")?,
         zpos: find_prop(card, plane, "zpos").map(u32::from),
+        color_range: enum_prop(
+            card,
+            plane,
+            "COLOR_RANGE",
+            "YCbCr limited range",
+            "YCbCr full range",
+        ),
     })
 }
 
@@ -367,6 +481,18 @@ fn plane_type(card: &Card, plane: plane::Handle) -> Option<PlaneType> {
     [PlaneType::Overlay, PlaneType::Primary, PlaneType::Cursor]
         .into_iter()
         .find(|t| *t as u64 == value)
+}
+
+/// The cursor at `a` shows on a `width` x `height` panel: some of it on
+/// the panel, none of it under the UI window `ui`.
+fn cursor_visible(a: CursorAt, width: u32, height: u32, ui: Option<Rect>) -> bool {
+    let (x0, y0) = (i64::from(a.x), i64::from(a.y));
+    let (x1, y1) = (x0 + i64::from(a.size), y0 + i64::from(a.size));
+    let on_panel = x1 > 0 && y1 > 0 && x0 < i64::from(width) && y0 < i64::from(height);
+    let under_ui = ui.is_some_and(|r| {
+        x1 > i64::from(r.x0) && x0 < i64::from(r.x1) && y1 > i64::from(r.y0) && y0 < i64::from(r.y1)
+    });
+    on_panel && !under_ui
 }
 
 /// What libdrm's drmIsMaster does: AUTH_MAGIC is a master-only ioctl, so
@@ -488,6 +614,58 @@ impl Display {
             }
         };
         let ui = ui.filter(|(p, _)| *p != video_plane);
+        // The sprite plane: another overlay that takes ARGB8888.
+        let mut sprite = None;
+        for p in card
+            .plane_handles()
+            .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+        {
+            let Ok(pi) = card.get_plane(p) else { continue };
+            if p == video_plane
+                || ui.is_some_and(|(u, _)| u == p)
+                || !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
+                || plane_type(&card, p) != Some(PlaneType::Overlay)
+                || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
+            {
+                continue;
+            }
+            if let Ok(props) = plane_props(&card, p) {
+                sprite = Some((u32::from(p), props));
+                break;
+            }
+        }
+
+        // The cursor plane: one that takes ARGB8888 on our CRTC. The mouse
+        // pointer's; the map's marker's too, unless LEHU_MAP_CURSOR=0.
+        let mut cursor = None;
+        for p in card
+            .plane_handles()
+            .map_err(|e| Error::Io("GETPLANERESOURCES", e))?
+        {
+            let Ok(pi) = card.get_plane(p) else { continue };
+            if !res.filter_crtcs(pi.possible_crtcs()).contains(&crtc)
+                || plane_type(&card, p) != Some(PlaneType::Cursor)
+                || !pi.formats().contains(&(DrmFourcc::Argb8888 as u32))
+            {
+                continue;
+            }
+            if let Ok(props) = plane_props(&card, p) {
+                cursor = Some((u32::from(p), props));
+                break;
+            }
+        }
+        let map_cursor = !std::env::var("LEHU_MAP_CURSOR").is_ok_and(|v| v == "0");
+        if cursor.is_some() && !map_cursor {
+            log::info!("{path}: LEHU_MAP_CURSOR=0: the map's marker keeps off the cursor plane");
+        }
+        // As the driver says, both ways; 64 x 64 squares only where it is.
+        let cap = |c| card.get_driver_capability(c).unwrap_or(0);
+        let cursor_max =
+            if cap(DriverCapability::CursorWidth).min(cap(DriverCapability::CursorHeight)) >= 64 {
+                64
+            } else {
+                CURSOR_SIZE
+            };
 
         let video_props = plane_props(&card, video_plane)?;
         let ui_plane = match ui {
@@ -546,8 +724,13 @@ impl Display {
             video_props,
             video_rgb565,
             ui_plane,
+            sprite_plane: sprite,
+            cursor_plane: cursor,
+            cursor_max,
+            map_cursor,
             ui_pitch,
             video_frames: AtomicU32::new(0),
+            shot_dir: std::env::var_os("LEHU_SHOT_DIR").map(std::path::PathBuf::from),
             state: Mutex::new(State {
                 request: Request::new(),
                 modeset_done: false,
@@ -555,8 +738,16 @@ impl Display {
                 band: Band::default(),
                 cache: FbCache::with_capacity(CACHE_CAPACITY),
                 video_held: false,
+                canvas_full_range: false,
                 placeholder: None,
                 placeholder_live: 0,
+                sprite_on: false,
+                sprite_refused: false,
+                cursor_want: None,
+                cursor_fb: 0,
+                cursor_refused: false,
+                pointer: None,
+                pointer_buf: None,
                 warned: Warned::default(),
             }),
         })
@@ -668,6 +859,9 @@ impl Display {
         req.add(plane, p.crtc_y, 0);
         req.add(plane, p.crtc_w, u64::from(self.width));
         req.add(plane, p.crtc_h, u64::from(self.height));
+        if let Some((id, limited, _)) = p.color_range {
+            req.add(plane, id, limited);
+        }
     }
 
     /// The UI plane over `r` only, the same pixels of the buffer as of the
@@ -686,8 +880,9 @@ impl Display {
         req.add(ui.id, p.crtc_y, u64::from(r.y0));
         req.add(ui.id, p.crtc_w, u64::from(r.width()));
         req.add(ui.id, p.crtc_h, u64::from(r.height()));
+        // Above the video, and above the sprite between them.
         if let Some(z) = p.zpos {
-            req.add(ui.id, z, 1);
+            req.add(ui.id, z, 2);
         }
     }
 
@@ -780,6 +975,7 @@ impl Display {
         st.request.clear();
         let flags = self.add_modeset(st);
         self.add_ui_window(&mut st.request, ui, fb, r);
+        let mut cursor_fb = self.add_cursor(st, Some(r));
 
         // Once the mode is up, commit without waiting for the flip: a
         // blocking commit parks the caller for a vblank (about 16 ms) on
@@ -818,6 +1014,7 @@ impl Display {
                 st.request.clear();
                 let flags = self.add_modeset(st);
                 self.add_ui_window(&mut st.request, ui, fb, r);
+                cursor_fb = self.add_cursor(st, Some(r));
                 self.add_plane_full(
                     &mut st.request,
                     self.video_plane,
@@ -845,6 +1042,7 @@ impl Display {
         }
         st.modeset_done = true;
         st.band.set(r);
+        st.cursor_fb = cursor_fb;
         true
     }
 
@@ -861,11 +1059,13 @@ impl Display {
         st.request.clear();
         st.request.add(ui.id, ui.props.fb, 0);
         st.request.add(ui.id, ui.props.crtc, 0);
+        let cursor_fb = self.add_cursor(&mut st, None);
         let flags = if wait { 0 } else { NONBLOCK };
         if self.commit(&mut st, flags).is_err() {
             return false;
         }
         st.band.clear();
+        st.cursor_fb = cursor_fb;
         true
     }
 
@@ -901,6 +1101,19 @@ impl Display {
     pub fn show_camera(&self, frame: &Frame) -> Show {
         let mut st = self.lock();
         self.show_locked(&mut st, frame, true)
+    }
+
+    /// The video plane can be told its YCbCr range (`COLOR_RANGE`): with
+    /// it, a map canvas may be left full range as the JPEG engine decodes
+    /// it, and the display converts accordingly.
+    pub fn has_color_range(&self) -> bool {
+        self.video_props.color_range.is_some()
+    }
+
+    /// Map canvases shown from now are full-range YCbCr (true) or limited
+    /// (false); nothing happens without `has_color_range`.
+    pub fn set_canvas_full_range(&self, full: bool) {
+        self.lock().canvas_full_range = full;
     }
 
     /// While held, `show_video` returns `Busy` without touching the plane.
@@ -963,6 +1176,11 @@ impl Display {
 
         st.request.clear();
         let flags = self.add_modeset(st);
+        if st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
+        st.cursor_want = None;
+        let cursor_fb = self.add_cursor(st, None);
         self.add_plane_full(
             &mut st.request,
             self.video_plane,
@@ -1002,6 +1220,8 @@ impl Display {
             return Show::Failed;
         }
         st.modeset_done = true;
+        st.sprite_on = false;
+        st.cursor_fb = cursor_fb;
         // Only the phone's frames say "video is flowing".
         if !camera {
             self.video_frames.fetch_add(1, Ordering::Relaxed);
@@ -1103,6 +1323,604 @@ impl Display {
     }
 }
 
+/// A picture the program draws itself (the map) for the video plane: a
+/// dumb buffer, mapped, larger than the panel, of which the plane shows a
+/// panel-sized window. Moving the window is a commit, no copy. Owned by
+/// whoever draws into it, on any thread: the mapping is its alone.
+/// Write-combined memory: written in rows, never read back.
+pub struct Canvas {
+    dumb: Dumb,
+    width: u32,
+    height: u32,
+    format: CanvasFormat,
+    /// For the cursor plane: ARGB8888 with premultiplied alpha, as DRM
+    /// planes take it unless told otherwise.
+    cursor: bool,
+}
+
+/// A canvas's pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanvasFormat {
+    /// RGB565, two bytes a pixel, little-endian.
+    Rgb565,
+    /// XRGB8888, four bytes a pixel, little-endian (B, G, R, X).
+    Xrgb8888,
+    /// NV12, limited range: `height` rows of luma, then `height / 2` rows
+    /// of Cb, Cr pairs, all `pitch` apart. The window may sit at
+    /// any pixel: at an odd one the chroma (one pair for two by two
+    /// pixels) is half a pixel off, which nobody sees, where steps of two
+    /// show as a judder when the map glides.
+    Nv12,
+    /// ARGB8888, four bytes a pixel, little-endian (B, G, R, A), alpha
+    /// not premultiplied: a sprite's.
+    Argb8888,
+}
+
+/// A part of a sprite canvas on the sprite plane: the `w` x `h` pixels
+/// at (`sx`, `sy`) of `canvas`, at (`x`, `y`) of the panel. The parts
+/// off the panel are cut off.
+#[derive(Clone, Copy)]
+pub struct Sprite<'a> {
+    pub canvas: &'a Canvas,
+    pub sx: u32,
+    pub sy: u32,
+    pub w: u32,
+    pub h: u32,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Canvas {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn format(&self) -> CanvasFormat {
+        self.format
+    }
+
+    /// Bytes from one row to the next (of either plane, in NV12).
+    pub fn pitch(&self) -> usize {
+        self.dumb.pitch as usize
+    }
+
+    /// Where the chroma rows begin, in NV12; the buffer's end otherwise.
+    pub fn chroma_offset(&self) -> usize {
+        match self.format {
+            CanvasFormat::Nv12 => self.pitch() * self.height as usize,
+            _ => self.dumb.size,
+        }
+    }
+
+    /// The whole buffer, rows `pitch` apart.
+    pub fn pixels(&mut self) -> &mut [u8] {
+        // SAFETY: the mapping made in `Dumb::create`, `size` bytes, alive as
+        // long as the canvas; `&mut self` makes this the only view of it.
+        unsafe { std::slice::from_raw_parts_mut(self.dumb.map.as_ptr(), self.dumb.size) }
+    }
+}
+
+impl Display {
+    /// A canvas of `width` x `height` for the video plane, black: NV12 when
+    /// asked for (the video plane always takes it; `width` and `height`
+    /// even), else in the plane's RGB format (RGB565 when it takes it,
+    /// else XRGB8888).
+    pub fn canvas(&self, width: u32, height: u32, nv12: bool) -> Result<Canvas, Error> {
+        let (format, fourcc, bpp) = if nv12 {
+            if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                return Err(Error::Io(
+                    "canvas",
+                    io::Error::other("NV12 wants an even size"),
+                ));
+            }
+            (CanvasFormat::Nv12, DrmFourcc::Nv12, 1)
+        } else if self.video_rgb565 {
+            (CanvasFormat::Rgb565, DrmFourcc::Rgb565, 2)
+        } else {
+            (CanvasFormat::Xrgb8888, DrmFourcc::Xrgb8888, 4)
+        };
+        let dumb = Dumb::create(&self.card, width, height, fourcc, bpp)?;
+        Ok(Canvas {
+            dumb,
+            width,
+            height,
+            format,
+            cursor: false,
+        })
+    }
+
+    /// There is a plane with per-pixel alpha above the video and beneath
+    /// the UI, and the driver has not refused it.
+    pub fn has_sprite(&self) -> bool {
+        self.sprite_plane.is_some() && !self.lock().sprite_refused
+    }
+
+    /// A transparent ARGB8888 canvas of `width` x `height` for the sprite
+    /// plane.
+    pub fn sprite_canvas(&self, width: u32, height: u32) -> Result<Canvas, Error> {
+        let dumb = Dumb::create(&self.card, width, height, DrmFourcc::Argb8888, 4)?;
+        Ok(Canvas {
+            dumb,
+            width,
+            height,
+            format: CanvasFormat::Argb8888,
+            cursor: false,
+        })
+    }
+
+    /// There is a cursor plane (refused or not): without taking the lock.
+    /// The mouse pointer is shown on it.
+    pub fn has_cursor_plane(&self) -> bool {
+        self.cursor_plane.is_some()
+    }
+
+    /// The map's marker may use the cursor plane: there is one, the driver
+    /// has not refused it, and LEHU_MAP_CURSOR=0 does not keep it off.
+    pub fn has_cursor(&self) -> bool {
+        self.cursor_plane.is_some() && self.map_cursor && !self.lock().cursor_refused
+    }
+
+    /// The mouse pointer with its tip at (`x`, `y`) of the panel, or none.
+    /// It takes the cursor plane from the map's marker and shows above
+    /// everything, the screens too. Committed at once when nothing else
+    /// is pending, else carried by the next commit; false then: call again
+    /// a moment later, so it lands while the panel is still.
+    pub fn set_pointer(&self, at: Option<(i32, i32)>) -> bool {
+        if self.cursor_plane.is_none() {
+            return true;
+        }
+        let mut st = self.lock();
+        if st.cursor_refused || !st.modeset_done {
+            return true;
+        }
+        st.pointer = match at {
+            Some((x, y)) => match self.pointer_fb(&mut st) {
+                Some(fb) => Some(CursorAt {
+                    fb,
+                    size: crate::pointer::SIZE,
+                    x: x - crate::pointer::HOT.0,
+                    y: y - crate::pointer::HOT.1,
+                }),
+                None => return true,
+            },
+            None => None,
+        };
+        let ui = st.band.shown();
+        st.request.clear();
+        let cursor_fb = self.add_cursor(&mut st, ui);
+        if st.request.is_empty() {
+            return true;
+        }
+        // No flip event: the loop's flips are the planes' own.
+        match self.commit(&mut st, drm_ffi::DRM_MODE_ATOMIC_NONBLOCK) {
+            Ok(()) => {
+                st.cursor_fb = cursor_fb;
+                true
+            }
+            Err(e) if e.kind() == io::ErrorKind::ResourceBusy => false,
+            Err(e) => {
+                log::warn!("the pointer's commit failed: {e}");
+                true
+            }
+        }
+    }
+
+    /// The pointer's framebuffer, its picture drawn the first time.
+    fn pointer_fb(&self, st: &mut State) -> Option<u32> {
+        if st.pointer_buf.is_none() {
+            let size = crate::pointer::SIZE;
+            match Dumb::create(&self.card, size, size, DrmFourcc::Argb8888, 4) {
+                Ok(d) => {
+                    // SAFETY: the mapping made in `Dumb::create`, `size`
+                    // bytes, alive as long as the buffer; the lock makes
+                    // this the only view of it.
+                    let px = unsafe { std::slice::from_raw_parts_mut(d.map.as_ptr(), d.size) };
+                    crate::pointer::draw(px, d.pitch as usize);
+                    st.pointer_buf = Some(d);
+                }
+                Err(e) => {
+                    log::warn!("no memory for the mouse pointer: {e}");
+                    return None;
+                }
+            }
+        }
+        st.pointer_buf.as_ref().map(|d| u32::from(d.fb))
+    }
+
+    /// The largest square the cursor plane takes, `CURSOR_SIZE` or 64.
+    pub fn cursor_max(&self) -> u32 {
+        self.cursor_max
+    }
+
+    /// A transparent square for the cursor plane, `size` a side (from
+    /// `CURSOR_SIZE` to `cursor_max`): ARGB8888, alpha premultiplied. A
+    /// `Sprite` of it is its whole, at any place, partly off the panel too.
+    pub fn cursor_canvas(&self, size: u32) -> Result<Canvas, Error> {
+        let size = size.clamp(CURSOR_SIZE, self.cursor_max);
+        let dumb = Dumb::create(&self.card, size, size, DrmFourcc::Argb8888, 4)?;
+        Ok(Canvas {
+            dumb,
+            width: size,
+            height: size,
+            format: CanvasFormat::Argb8888,
+            cursor: true,
+        })
+    }
+
+    /// The cursor plane holds `canvas` now: drawing into it would not
+    /// show, the driver having taken its pixels already.
+    pub fn cursor_holds(&self, canvas: &Canvas) -> bool {
+        self.lock().cursor_fb == u32::from(canvas.dumb.fb)
+    }
+
+    /// The cursor's place for a sprite of a cursor canvas.
+    fn cursor_at(s: &Sprite<'_>) -> CursorAt {
+        CursorAt {
+            fb: u32::from(s.canvas.dumb.fb),
+            size: s.canvas.width,
+            x: s.x,
+            y: s.y,
+        }
+    }
+
+    /// The cursor plane as `want` and the UI window `ui` have it, in the
+    /// request; the framebuffer it then holds (0: off). Nothing is added
+    /// when it stays off.
+    fn add_cursor(&self, st: &mut State, ui: Option<Rect>) -> u32 {
+        let Some((id, p)) = &self.cursor_plane else {
+            return 0;
+        };
+        // The pointer first, wherever it is; the marker where the UI leaves
+        // it room.
+        let at = st.pointer.or_else(|| {
+            st.cursor_want
+                .filter(|a| cursor_visible(*a, self.width, self.height, ui))
+        });
+        let req = &mut st.request;
+        match at {
+            Some(a) => {
+                let size = u64::from(a.size);
+                req.add(*id, p.fb, u64::from(a.fb));
+                req.add(*id, p.crtc, u64::from(self.crtc));
+                req.add(*id, p.src_x, 0);
+                req.add(*id, p.src_y, 0);
+                req.add(*id, p.src_w, size << 16);
+                req.add(*id, p.src_h, size << 16);
+                // CRTC_X and CRTC_Y are signed: off the left or top edge
+                // is a negative number, as the property's 64 bits.
+                req.add(*id, p.crtc_x, i64::from(a.x) as u64);
+                req.add(*id, p.crtc_y, i64::from(a.y) as u64);
+                req.add(*id, p.crtc_w, size);
+                req.add(*id, p.crtc_h, size);
+                a.fb
+            }
+            None => {
+                if st.cursor_fb != 0 {
+                    req.add(*id, p.fb, 0);
+                    req.add(*id, p.crtc, 0);
+                }
+                0
+            }
+        }
+    }
+
+    /// The sprite plane off, in the request.
+    fn add_sprite_off(&self, req: &mut Request) {
+        if let Some((id, p)) = &self.sprite_plane {
+            req.add(*id, p.fb, 0);
+            req.add(*id, p.crtc, 0);
+        }
+    }
+
+    /// The sprite plane showing `s`, in the request; false when none of
+    /// it is on the panel.
+    fn add_sprite(&self, req: &mut Request, s: &Sprite<'_>) -> bool {
+        let Some((id, p)) = &self.sprite_plane else {
+            return false;
+        };
+        // Cut to the panel: the plane is never placed partly off it.
+        let (pw, ph) = (i64::from(self.width), i64::from(self.height));
+        let (x0, y0) = (i64::from(s.x).max(0), i64::from(s.y).max(0));
+        let x1 = (i64::from(s.x) + i64::from(s.w)).min(pw);
+        let y1 = (i64::from(s.y) + i64::from(s.h)).min(ph);
+        if x0 >= x1 || y0 >= y1 {
+            return false;
+        }
+        let sx = i64::from(s.sx) + x0 - i64::from(s.x);
+        let sy = i64::from(s.sy) + y0 - i64::from(s.y);
+        let (w, h) = ((x1 - x0) as u64, (y1 - y0) as u64);
+        req.add(*id, p.fb, u64::from(u32::from(s.canvas.dumb.fb)));
+        req.add(*id, p.crtc, u64::from(self.crtc));
+        req.add(*id, p.src_x, (sx as u64) << 16);
+        req.add(*id, p.src_y, (sy as u64) << 16);
+        req.add(*id, p.src_w, w << 16);
+        req.add(*id, p.src_h, h << 16);
+        req.add(*id, p.crtc_x, x0 as u64);
+        req.add(*id, p.crtc_y, y0 as u64);
+        req.add(*id, p.crtc_w, w);
+        req.add(*id, p.crtc_h, h);
+        if let Some(z) = p.zpos {
+            req.add(*id, z, 1);
+        }
+        true
+    }
+
+    /// Wait for the panel's refresh number `sequence`, or the next one if
+    /// it has gone by (None: the next refresh); the number of the one
+    /// waited for. Refreshes are counted by the kernel from when the CRTC
+    /// came up; the display's lock is not held meanwhile.
+    pub fn wait_vblank(&self, sequence: Option<u32>) -> io::Result<u32> {
+        const ABSOLUTE: u32 = 0;
+        const RELATIVE: u32 = 1;
+        const NEXT_ON_MISS: u32 = 0x1000_0000;
+        let (kind, n) = match sequence {
+            Some(n) => (ABSOLUTE | NEXT_ON_MISS, n),
+            None => (RELATIVE, 1),
+        };
+        drm_ffi::wait_vblank(self.card.as_fd(), kind, n, 0).map(|r| r.sequence)
+    }
+
+    /// As `wait_vblank`, with the refresh's time on the monotonic clock
+    /// (as the kernel took it at the refresh, not when this thread woke).
+    pub fn wait_vblank_time(&self, sequence: Option<u32>) -> io::Result<(u32, Duration)> {
+        const ABSOLUTE: u32 = 0;
+        const RELATIVE: u32 = 1;
+        const NEXT_ON_MISS: u32 = 0x1000_0000;
+        let (kind, n) = match sequence {
+            Some(n) => (ABSOLUTE | NEXT_ON_MISS, n),
+            None => (RELATIVE, 1),
+        };
+        let r = drm_ffi::wait_vblank(self.card.as_fd(), kind, n, 0)?;
+        let at = Duration::new(
+            u64::try_from(r.tval_sec).unwrap_or(0),
+            u32::try_from(r.tval_usec).unwrap_or(0).min(999_999) * 1000,
+        );
+        Ok((r.sequence, at))
+    }
+
+    /// Take the sprite down, waiting for the flip.
+    pub fn hide_sprite(&self) {
+        let mut st = self.lock();
+        st.cursor_want = None;
+        if !st.sprite_on && st.cursor_fb == 0 {
+            return;
+        }
+        st.request.clear();
+        if st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
+        let cursor_fb = self.add_cursor(&mut st, None);
+        if self.commit(&mut st, 0).is_ok() {
+            st.sprite_on = false;
+            st.cursor_fb = cursor_fb;
+        }
+    }
+
+    /// Show the panel-sized window of `canvas` whose top left is (`x`,
+    /// `y`), 1:1, on the video plane. Like `show_camera`: the decoder's
+    /// frames wait while `hold_video` holds them, a pending flip gives
+    /// `Busy`, and the canvas stays on scanout until a later picture
+    /// replaces it (keep the last three shown alive). The sprite plane
+    /// goes off.
+    pub fn show_canvas(&self, canvas: &Canvas, x: u32, y: u32) -> Show {
+        self.show_canvas_with(canvas, x, y, None)
+    }
+
+    /// `show_canvas`, and the sprite plane in the same commit: showing
+    /// `sprite`, or off. A sprite canvas shown stays on scanout as a
+    /// canvas does. Should the driver refuse the sprite plane, the canvas
+    /// is shown without it, and `has_sprite` is false from then on.
+    pub fn show_canvas_with(
+        &self,
+        canvas: &Canvas,
+        x: u32,
+        y: u32,
+        sprite: Option<Sprite<'_>>,
+    ) -> Show {
+        let src = [x << 16, y << 16, self.width << 16, self.height << 16];
+        self.show_canvas_src(canvas, src, sprite)
+    }
+
+    /// As `show_canvas_with`, the part of `canvas` at `src` (x, y, width,
+    /// height, in 1/65536 pixels) scaled to the panel by the display's
+    /// scaler: a picture enlarged or shrunk smoothly, as when the map
+    /// changes zoom.
+    pub fn show_canvas_scaled(
+        &self,
+        canvas: &Canvas,
+        src: [u32; 4],
+        sprite: Option<Sprite<'_>>,
+    ) -> Show {
+        self.show_canvas_src(canvas, src, sprite)
+    }
+
+    fn show_canvas_src(&self, canvas: &Canvas, src: [u32; 4], sprite: Option<Sprite<'_>>) -> Show {
+        let shown = self.show_canvas_once(canvas, src, sprite.as_ref());
+        if shown != Show::Failed || sprite.is_none() {
+            return shown;
+        }
+        // Without it, then: if that is shown, the sprite (or the cursor)
+        // was the trouble.
+        let again = self.show_canvas_once(canvas, src, None);
+        if again == Show::Shown {
+            if sprite.is_some_and(|s| s.canvas.cursor) {
+                self.lock().cursor_refused = true;
+                log::warn!("the cursor plane was refused; the map draws its marker itself");
+            } else {
+                self.lock().sprite_refused = true;
+                log::warn!("the sprite plane was refused; the map draws its marker itself");
+            }
+        }
+        again
+    }
+
+    fn show_canvas_once(
+        &self,
+        canvas: &Canvas,
+        src: [u32; 4],
+        sprite: Option<&Sprite<'_>>,
+    ) -> Show {
+        let [x, y, w, h] = src.map(u64::from);
+        if w == 0
+            || h == 0
+            || x + w > u64::from(canvas.width) << 16
+            || y + h > u64::from(canvas.height) << 16
+        {
+            return Show::Failed;
+        }
+        let mut st = self.lock();
+        st.request.clear();
+        let flags = self.add_modeset(&mut st);
+        let p = &self.video_props;
+        let plane = self.video_plane;
+        let full_range = st.canvas_full_range;
+        let req = &mut st.request;
+        req.add(plane, p.fb, u64::from(u32::from(canvas.dumb.fb)));
+        req.add(plane, p.crtc, u64::from(self.crtc));
+        req.add(plane, p.src_x, x);
+        req.add(plane, p.src_y, y);
+        req.add(plane, p.src_w, w);
+        req.add(plane, p.src_h, h);
+        req.add(plane, p.crtc_x, 0);
+        req.add(plane, p.crtc_y, 0);
+        req.add(plane, p.crtc_w, u64::from(self.width));
+        req.add(plane, p.crtc_h, u64::from(self.height));
+        if let Some((id, limited, full)) = p.color_range {
+            req.add(plane, id, if full_range { full } else { limited });
+        }
+        let on_cursor = sprite.is_some_and(|s| s.canvas.cursor);
+        let shot_sprite = sprite;
+        st.cursor_want = sprite
+            .filter(|_| on_cursor && !st.cursor_refused)
+            .map(Self::cursor_at);
+        let ui = st.band.shown();
+        let cursor_fb = self.add_cursor(&mut st, ui);
+        let sprite = sprite.filter(|_| !on_cursor && !st.sprite_refused);
+        let sprite_on = match sprite {
+            Some(s) => self.add_sprite(&mut st.request, s),
+            None => false,
+        };
+        if !sprite_on && st.sprite_on {
+            self.add_sprite_off(&mut st.request);
+        }
+        if st.modeset_done {
+            return match self.commit(&mut st, flags | NONBLOCK) {
+                Ok(()) => {
+                    st.sprite_on = sprite_on;
+                    st.cursor_fb = cursor_fb;
+                    if let Some(dir) = &self.shot_dir
+                        && std::fs::remove_file(dir.join("take")).is_ok()
+                        && let Err(e) = self.write_shot(dir, &st, canvas, src, shot_sprite)
+                    {
+                        log::warn!("shot: {e}");
+                    }
+                    Show::Shown
+                }
+                Err(e) if e.kind() == io::ErrorKind::ResourceBusy => Show::Busy,
+                Err(e) => {
+                    if !st.warned.video_commit {
+                        st.warned.video_commit = true;
+                        log::warn!("canvas commit failed: {e}");
+                    }
+                    Show::Failed
+                }
+            };
+        }
+        match self.commit(&mut st, flags) {
+            Ok(()) => {
+                st.modeset_done = true;
+                st.sprite_on = sprite_on;
+                st.cursor_fb = cursor_fb;
+                Show::Shown
+            }
+            Err(e) => {
+                log::warn!("canvas commit failed: {e}");
+                Show::Failed
+            }
+        }
+    }
+
+    /// What the panel shows, to `dir`: `shot.txt` with the sizes and
+    /// places, and the bytes of the canvas (`shot-canvas.bin`), the sprite
+    /// shown (`shot-sprite.bin`) and the UI buffer (`shot-ui.bin`).
+    fn write_shot(
+        &self,
+        dir: &std::path::Path,
+        st: &State,
+        canvas: &Canvas,
+        src: [u32; 4],
+        sprite: Option<&Sprite<'_>>,
+    ) -> io::Result<()> {
+        use std::io::Write;
+        let bytes = |d: &Dumb| -> &[u8] {
+            // SAFETY: the mapping made in `Dumb::create`, `size` bytes,
+            // alive while the buffer is; read under the display's lock.
+            unsafe { std::slice::from_raw_parts(d.map.as_ptr(), d.size) }
+        };
+        let mut head = String::new();
+        head += &format!("panel {} {}\n", self.width, self.height);
+        head += &format!(
+            "canvas {} {} {} {} {:?} {}\n",
+            canvas.width,
+            canvas.height,
+            canvas.dumb.pitch,
+            canvas.chroma_offset(),
+            canvas.format,
+            st.canvas_full_range
+        );
+        head += &format!("src {} {} {} {}\n", src[0], src[1], src[2], src[3]);
+        std::fs::write(dir.join("shot-canvas.bin"), bytes(&canvas.dumb))?;
+        let shown = |s: &&Sprite<'_>| {
+            if s.canvas.cursor {
+                st.cursor_fb != 0
+            } else {
+                st.sprite_on
+            }
+        };
+        if let Some(s) = sprite.filter(shown) {
+            // The cursor's pixels are premultiplied; it is hidden where
+            // the UI would cover it, so the order of the two is moot.
+            head += &format!(
+                "sprite {} {} {} {} {} {} {} {} {} {}\n",
+                s.canvas.width,
+                s.canvas.height,
+                s.canvas.dumb.pitch,
+                s.sx,
+                s.sy,
+                s.w,
+                s.h,
+                s.x,
+                s.y,
+                if s.canvas.cursor {
+                    "premultiplied"
+                } else {
+                    "straight"
+                }
+            );
+            std::fs::write(dir.join("shot-sprite.bin"), bytes(&s.canvas.dumb))?;
+        }
+        if let (Some(ui), Some(r), Some(p)) = (&st.ui, st.band.shown(), &self.ui_plane) {
+            head += &format!(
+                "ui {} {} {} {} {} {:?} {}\n",
+                r.x0, r.y0, r.x1, r.y1, ui.pitch, p.format, p.bpp
+            );
+            std::fs::write(dir.join("shot-ui.bin"), bytes(ui))?;
+        }
+        std::fs::File::create(dir.join("shot.txt"))?.write_all(head.as_bytes())?;
+        log::info!("shot: written to {}", dir.display());
+        Ok(())
+    }
+
+    /// Free a canvas. If it is still on the plane the kernel takes it off.
+    pub fn free_canvas(&self, canvas: Canvas) {
+        canvas.dumb.destroy(&self.card);
+    }
+}
+
 impl Drop for Display {
     fn drop(&mut self) {
         let st = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
@@ -1110,6 +1928,9 @@ impl Drop for Display {
             ui.destroy(&self.card);
         }
         if let Some(p) = st.placeholder.take() {
+            p.destroy(&self.card);
+        }
+        if let Some(p) = st.pointer_buf.take() {
             p.destroy(&self.card);
         }
         st.cache.flush(&self.card);
@@ -1126,6 +1947,42 @@ mod tests {
     fn a_display_is_shared_between_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Display>();
+    }
+
+    #[test]
+    fn the_cursor_hides_under_the_ui_and_off_the_panel() {
+        let at = |x, y| CursorAt {
+            fb: 1,
+            size: 32,
+            x,
+            y,
+        };
+        let bar = Rect {
+            x0: 0,
+            y0: 396,
+            x1: 800,
+            y1: 480,
+        };
+        assert!(cursor_visible(at(384, 314), 800, 480, Some(bar)));
+        assert!(cursor_visible(at(384, 314), 800, 480, None));
+        // Touching the bar's top row: under it.
+        assert!(!cursor_visible(at(384, 365), 800, 480, Some(bar)));
+        // One row above it: clear.
+        assert!(cursor_visible(at(384, 364), 800, 480, Some(bar)));
+        // Partly off the left and top: shown; wholly off: not.
+        assert!(cursor_visible(at(-31, -31), 800, 480, None));
+        assert!(!cursor_visible(at(-32, 10), 800, 480, None));
+        assert!(!cursor_visible(at(800, 10), 800, 480, None));
+        assert!(!cursor_visible(at(10, 480), 800, 480, None));
+        // A 64 pixel cursor: by its own size.
+        let big = |x, y| CursorAt {
+            size: 64,
+            ..at(x, y)
+        };
+        assert!(!cursor_visible(big(384, 333), 800, 480, Some(bar)));
+        assert!(cursor_visible(big(384, 332), 800, 480, Some(bar)));
+        assert!(cursor_visible(big(-63, -63), 800, 480, None));
+        assert!(!cursor_visible(big(-64, 10), 800, 480, None));
     }
 
     #[test]

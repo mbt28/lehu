@@ -12,13 +12,13 @@
 //! `FAST_PERCENT` a detent -- a list stepped through (Output, Channel,
 //! Country) only when Enter takes it.
 
-use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
+use lehu_core::settings::{BUFFER_MAX_MS, CursorSize, NightMode, Turning};
 use slint::SharedString;
 use toml::Value;
 
 use super::{
     ACCESS_POINT, AUDIO, Ask, BUFFER_SAVE_MS, BUFFER_STEP_MS, Bridge, DEVICES, FAST_DETENT_MS,
-    FAST_PERCENT, Host, SETTINGS, SYSTEM, State, VIDEO,
+    FAST_PERCENT, Host, MAP_SETTINGS, SETTINGS, SYSTEM, State, VIDEO,
 };
 use crate::host::UpdateStage;
 use crate::keys::OsdKey;
@@ -42,6 +42,14 @@ pub(super) enum Pick {
     Country,
     /// The phone's frame rate (Video).
     Fps,
+    /// The map's region (Settings > Map).
+    Region,
+    /// The spoken prompts' voice (Settings > Map).
+    Voice,
+    /// The arrow's size on the hardware cursor (Settings > Map).
+    CursorSize,
+    /// How the map is made while it turns (Settings > Map).
+    Turning,
 }
 
 impl Pick {
@@ -58,6 +66,10 @@ impl Pick {
             14 => Pick::Channel,
             15 => Pick::Country,
             16 => Pick::Fps,
+            17 => Pick::Region,
+            18 => Pick::Voice,
+            19 => Pick::CursorSize,
+            20 => Pick::Turning,
             _ => Pick::None,
         }
     }
@@ -77,6 +89,10 @@ impl Pick {
             Pick::Channel => 14,
             Pick::Country => 15,
             Pick::Fps => 16,
+            Pick::Region => 17,
+            Pick::Voice => 18,
+            Pick::CursorSize => 19,
+            Pick::Turning => 20,
         }
     }
 
@@ -91,12 +107,17 @@ impl Pick {
                 | Pick::Output
                 | Pick::Channel
                 | Pick::Country
+                | Pick::Region
+                | Pick::Voice
         )
     }
 
     /// Stepped through a list (`State::pick_list`).
     fn listed(self) -> bool {
-        matches!(self, Pick::Output | Pick::Channel | Pick::Country)
+        matches!(
+            self,
+            Pick::Output | Pick::Channel | Pick::Country | Pick::Region | Pick::Voice
+        )
     }
 
     /// A level from 0 to 100 %: turned fast, it moves further a detent.
@@ -119,6 +140,40 @@ pub(super) fn night_index(mode: NightMode) -> i32 {
         NightMode::Day => 0,
         NightMode::Night => 1,
         NightMode::Auto => 2,
+    }
+}
+
+/// The Cursor size row's options, in order.
+pub(super) fn cursor_size_index(size: CursorSize) -> i32 {
+    match size {
+        CursorSize::Small => 0,
+        CursorSize::Medium => 1,
+        CursorSize::Large => 2,
+    }
+}
+
+/// The While turning row's options, in order.
+pub(super) fn turning_index(turning: Turning) -> i32 {
+    match turning {
+        Turning::Sharp => 0,
+        Turning::SoftColour => 1,
+        Turning::Half => 2,
+    }
+}
+
+fn turning_of(index: i32) -> Turning {
+    match index {
+        0 => Turning::Sharp,
+        1 => Turning::SoftColour,
+        _ => Turning::Half,
+    }
+}
+
+fn cursor_size_of(index: i32) -> CursorSize {
+    match index {
+        0 => CursorSize::Small,
+        1 => CursorSize::Medium,
+        _ => CursorSize::Large,
     }
 }
 
@@ -165,6 +220,7 @@ impl<H: Host> State<H> {
             Pick::Band | Pick::Width | Pick::Channel | Pick::Country => ACCESS_POINT,
             Pick::Night | Pick::Fps => VIDEO,
             Pick::Power => SYSTEM,
+            Pick::Region | Pick::Voice | Pick::CursorSize | Pick::Turning => MAP_SETTINGS,
             _ => SETTINGS,
         }
     }
@@ -205,9 +261,13 @@ impl<H: Host> State<H> {
             // could not be read, has nothing to pick: said, not started.
             let start = match row {
                 Pick::Output => self.output_start(),
+                Pick::Region => self.region_start(),
+                Pick::Voice => self.voice_start(),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => self.ap_start(row),
                 Pick::Night => Some(night_index(night)),
                 Pick::Fps => Some(i32::from(self.host.settings().android_auto.fps >= 60)),
+                Pick::CursorSize => Some(cursor_size_index(self.host.settings().map.cursor_size)),
+                Pick::Turning => Some(turning_index(self.host.settings().map.turning)),
                 Pick::Power => Some(2), // Cancel: nothing goes down by accident
                 _ => Some(0),
             };
@@ -251,8 +311,30 @@ impl<H: Host> State<H> {
                         self.persist("android-auto.fps", Value::Integer(want));
                     }
                 }
+                Pick::CursorSize => {
+                    let size = cursor_size_of(taken);
+                    if size != self.host.settings().map.cursor_size {
+                        match Value::try_from(size) {
+                            // The map takes it at its next tick.
+                            Ok(value) => self.persist("map.cursor-size", value),
+                            Err(e) => log::error!("cursor size: {e}"),
+                        }
+                    }
+                }
+                Pick::Turning => {
+                    let turning = turning_of(taken);
+                    if turning != self.host.settings().map.turning {
+                        match Value::try_from(turning) {
+                            // The map takes it at its next tick.
+                            Ok(value) => self.persist("map.turning", value),
+                            Err(e) => log::error!("turning: {e}"),
+                        }
+                    }
+                }
                 Pick::Buffer => self.save_buffer(),
                 Pick::Output => self.output_take(taken),
+                Pick::Region => self.region_take(bridge, taken),
+                Pick::Voice => self.voice_take(bridge, taken),
                 Pick::Band | Pick::Width | Pick::Channel | Pick::Country => {
                     self.ap_take(row, taken)
                 }

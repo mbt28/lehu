@@ -10,7 +10,7 @@ reached either way. Bluetooth keyboards and remotes work as well.
 
 ## Home
 
-Four tiles:
+Five tiles:
 
 - **The phone**: CarPlay or Android Auto, the phone's name and its link.
   Select it to go back to the phone. With no phone connected, this tile
@@ -19,11 +19,23 @@ Four tiles:
 - **Now playing**: the title, the artist and the progress. Opens the media
   page, with the album art and large previous, play/pause and next keys.
 - **Linked Phones**: the phones LEHU knows.
+- **Map**: the offline map from the SD card ([map.md](map.md)). The knob
+  zooms and its click opens the map's menu (so does the bar's menu key):
+  Go to, Home, Work, Route, Voice, and Stop route while a route is driven.
+  Go to offers the recent destinations, one tap each, the nearest fuel,
+  parking or charging, or a keyboard to type a street or a place, with the
+  two best matches over it (List shows them all). A tap on one finds the
+  route on the head unit and shows it whole for a few seconds, with Start
+  and Cancel (the knob's click starts, Back cancels; left alone it starts
+  by itself), then guides along it. Home and Work, once chosen, are one
+  choice away. Route chooses the fastest or the shortest route, avoiding
+  motorways or not, and warning of speed cameras or not.
 - **Settings**.
 
 While the phone gives directions, a card at the top shows the next turn,
 its distance, the road and the arrival time, over LEHU's screens and over
-the camera.
+the camera. While LEHU's own map guides along a route and the phone does
+not, the card shows the map's next turn instead, also with the map closed.
 
 ## Settings
 
@@ -31,8 +43,9 @@ the camera.
 |---|---|
 | Connection | **Linked Phones**: known phones, to connect, stop or forget. **Wireless**: the access point (name, password, band, width, channel, country), the link speed, the Bluetooth name and Bluetooth devices |
 | Audio | the volume; levels for music, navigation, alerts and calls; the music buffer; the output device |
-| Video | Night (Day, Night or Auto, for the phone's projection; Night also dims LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
-| System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Power**: reboot or power off |
+| Video | Night (Day, Night or Auto, for the phone's projection; Night, and Auto once the sun is down, also dim LEHU's own screens); Android Auto's frame rate; the reversing camera, its key and fast switch |
+| Map | **Region**: the map shown, from those on the card. **Voice**: the spoken prompts' voice. **Hardware cursor**: the position arrow on the display's hardware cursor, where it has one, and its **Cursor size** (Small, Medium or Large). **While turning**: how the map is made in a bend, Sharp, Soft colour (a little faster) or Half (much faster, pixelated) |
+| System | **Update**: the version running, and a new version of the system brought by the phone. **Info**: the kernel, LEHU OS and LEHU versions, live memory and CPU use, the connection and its bitrate. **Mouse** and **Hide pointer**: a mouse as a pointer, and the pointer going when still. **Power**: reboot or power off |
 
 Every change applies at once. Destructive actions (forget a phone, reboot,
 power off) ask first and open on Cancel.
@@ -78,6 +91,16 @@ finish. Turning fast moves volume and levels in larger steps.
 
 The ring appears only after a key or the knob is used; touch never shows
 it. When you come back to a page, the ring is on the row you left.
+
+**Mouse**: with Settings › System › **Mouse** on, a mouse, or a Bluetooth
+keyboard's touchpad, moves a pointer over the screens and the phone's
+picture. The left button touches where it points, so a drag drags. The
+right button is Back. The wheel and its click stay the knob's. The pointer
+is shown on the display's hardware cursor, so the rows appear only where
+the display has one. With **Hide pointer** on, the pointer goes after 3
+seconds without a move and comes back with the next. While the pointer
+shows over the map, the position arrow leaves the hardware cursor for a
+plane of its own, and returns when the pointer goes.
 
 ## Bluetooth keyboards and remotes
 

@@ -5,13 +5,16 @@
 
 mod art;
 mod audio;
+mod chime;
 mod host;
 mod input;
 mod media;
 mod mem;
+mod pointer;
 mod run;
 mod session;
 mod status;
+mod voice;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

@@ -220,6 +220,174 @@ pub struct NavCard {
     pub eta: String,
     /// What `eta` is, under it: "arrival", "to go"; empty with no eta.
     pub eta_note: String,
+    /// The manoeuvre after this one, when it comes close behind it: the
+    /// card's small "then" arrow. `None`: no hint.
+    pub then: NavArrow,
+}
+
+/// A destination Map > Go to offers: its name, and under it the town it is
+/// in and how far it is ("Luxembourg, 1.2 km"). `place`: a city, a town, a
+/// village or a part of one, rather than a street.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Destination {
+    pub name: String,
+    pub detail: String,
+    pub place: bool,
+}
+
+/// What Map > Go to finds the nearest of, besides names: its number is
+/// `Bridge.dest-near`'s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nearby {
+    /// Filling stations.
+    Fuel,
+    /// Public car parks.
+    Parking,
+    /// Charging stations for electric cars.
+    Charging,
+}
+
+impl Nearby {
+    /// In the order Go to offers them.
+    pub const ALL: [Nearby; 3] = [Nearby::Fuel, Nearby::Parking, Nearby::Charging];
+
+    /// As the screens number it (0 is none).
+    pub fn id(self) -> i32 {
+        match self {
+            Nearby::Fuel => 1,
+            Nearby::Parking => 2,
+            Nearby::Charging => 3,
+        }
+    }
+
+    pub fn from_id(id: i32) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+}
+
+/// A place kept for the map's menu, one choice away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapSlot {
+    Home,
+    Work,
+}
+
+impl MapSlot {
+    /// The setting it is kept in.
+    pub fn key(self) -> &'static str {
+        match self {
+            MapSlot::Home => "map.home",
+            MapSlot::Work => "map.work",
+        }
+    }
+
+    /// As the menu names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            MapSlot::Home => "Home",
+            MapSlot::Work => "Work",
+        }
+    }
+
+    /// The place kept there, if any.
+    pub fn place(self, map: &settings::Map) -> Option<&settings::MapPlace> {
+        match self {
+            MapSlot::Home => map.home.as_ref(),
+            MapSlot::Work => map.work.as_ref(),
+        }
+    }
+}
+
+/// A route Go to found, shown whole on the map before it is driven: where
+/// to, how far, how long and when it arrives.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutePreview {
+    pub name: String,
+    /// "12 km"
+    pub distance: String,
+    /// "14 min"
+    pub time: String,
+    /// The arrival, "14:46"; empty while the clock is not set.
+    pub eta: String,
+}
+
+/// How a map region stands, for Settings > Map.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RegionState {
+    /// On the card and whole (or its full check still to come).
+    #[default]
+    Ready,
+    /// Written for a later LEHU.
+    NeedsNewer,
+    /// A file missing, cut short or changed: copy it again.
+    Damaged,
+}
+
+impl RegionState {
+    /// The map can be shown with it.
+    pub fn usable(self) -> bool {
+        self == Self::Ready
+    }
+
+    /// What follows the region's name where it is not plain ready.
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Ready => "",
+            Self::NeedsNewer => "Needs a newer LEHU",
+            Self::Damaged => "Damaged",
+        }
+    }
+}
+
+/// A map region, as Settings > Map > Region lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapRegion {
+    /// The folder the setting names (`map.dir`).
+    pub dir: String,
+    pub name: String,
+    pub state: RegionState,
+    /// The one the map shows.
+    pub current: bool,
+}
+
+impl MapRegion {
+    /// "Hungary", "Hungary · Damaged".
+    pub fn label(&self) -> String {
+        match self.state.note() {
+            "" => self.name.clone(),
+            note => format!("{} · {note}", self.name),
+        }
+    }
+}
+
+/// A voice for the spoken prompts, as Settings > Map > Voice lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapVoice {
+    /// Its folder (`map.voice-dir`).
+    pub dir: String,
+    /// "Anna, Hungarian".
+    pub name: String,
+    /// The one the prompts speak with.
+    pub current: bool,
+}
+
+/// Where finding the route to a destination is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteStage {
+    /// Nothing asked, or the last answer taken.
+    #[default]
+    Idle,
+    /// Being found, on a thread of its own.
+    Finding,
+    /// Found: the map drives it now.
+    Found,
+    /// Found, and shown whole on the map (`map_preview` says where to,
+    /// how far, how long): `map_preview_start` drives it,
+    /// `map_preview_cancel` drops it. Go to's destinations come this way;
+    /// Home, Work and a route found anew are driven at once.
+    Preview,
+    /// None found: `map_route_note` says why.
+    Failed,
 }
 
 /// An ALSA playback device, as the Output row offers it.
@@ -370,6 +538,12 @@ pub trait Host {
     fn request_resume(&mut self);
     /// The Night setting changed; a running session switches at once.
     fn night_mode_changed(&mut self);
+    /// The screens are in their night palette now: with Night, always;
+    /// with Day, never; with Auto, as the program decides (the sun where
+    /// the head unit is). Asked every tick: it must be cheap.
+    fn night_now(&self) -> bool {
+        self.settings().display.night_mode == settings::NightMode::Night
+    }
     /// Reboot or shut down, once the question was answered.
     fn request_power(&mut self, action: Power);
 
@@ -403,6 +577,159 @@ pub trait Host {
     fn take_camera_failure(&mut self, why: &mut String) -> bool;
     /// A switch asked from outside the screens, once.
     fn take_camera_request(&mut self) -> CameraRequest;
+
+    // ── map ──────────────────────────────────────────────────────────────
+    /// The map screen is up (or gone): the loop shows (or stops) the map.
+    fn set_map_running(&mut self, _on: bool) {}
+    /// Move the map's view by pixels of the panel, right and down positive:
+    /// what lies that way comes into view.
+    fn map_pan(&mut self, _dx: i32, _dy: i32) {}
+    /// Zoom in (+1) or out (-1).
+    fn map_zoom(&mut self, _step: i32) {}
+    /// Centre the map on where we are.
+    fn map_locate(&mut self) {}
+    /// There is a position to centre on.
+    fn map_has_position(&self) -> bool {
+        false
+    }
+    /// The display has a hardware cursor for the map's position arrow:
+    /// Settings > Map offers it.
+    fn map_cursor_available(&self) -> bool {
+        false
+    }
+    /// The display has a cursor plane to show a mouse pointer on:
+    /// Settings > System offers the mouse.
+    fn mouse_available(&self) -> bool {
+        false
+    }
+    /// There is a position and the map was moved off it: the bar's Me key
+    /// and the menu's My position are there.
+    fn map_away(&self) -> bool {
+        false
+    }
+    /// The map's own guidance along a route (or the arrival, for a while
+    /// after a route of ours ended), for its bar and, while the map is
+    /// closed, the navigation card of the other screens; None when it is
+    /// not guiding. It goes on while the map is closed.
+    fn map_guidance(&self) -> Option<&NavCard> {
+        None
+    }
+    /// Metres to the next speed camera on the route of ours when it is
+    /// `within` metres or less and they are warned of (map.speed-cameras);
+    /// None otherwise. Asked every tick while the map guides: cheap.
+    fn map_camera_ahead(&self, _within: u32) -> Option<u32> {
+        None
+    }
+    /// How fast we go, km/h, and the road's speed limit when it is
+    /// known; None when there is no position on the move.
+    fn map_speed(&self) -> Option<(u32, Option<u16>)> {
+        None
+    }
+    /// Over the map, while there is no picture: why, or that it loads.
+    fn map_note(&self) -> &str {
+        ""
+    }
+    /// The bar's words: the map and the zoom.
+    fn map_label(&self) -> &str {
+        ""
+    }
+    /// There are names to search and roads to route over: the bar has a
+    /// Go to key.
+    fn map_can_search(&self) -> bool {
+        false
+    }
+    /// Search the destinations for `query`; empty: the recent ones. The
+    /// results are `map_destinations` from now.
+    fn map_search(&mut self, _query: &str) {}
+    /// The destinations the last search found, the best first.
+    fn map_destinations(&self) -> &[Destination] {
+        &[]
+    }
+    /// There are places of this kind to find the nearest of.
+    fn map_can_find(&self, _kind: Nearby) -> bool {
+        false
+    }
+    /// The `limit` nearest places of a kind to where we are, the nearest
+    /// first, as a search: they are `map_destinations` from now, each
+    /// with a few words and how far ("Aral · 1.2 km"). None when where we
+    /// are is not known.
+    fn map_nearest(&mut self, _kind: Nearby, _limit: usize) {}
+    /// Find the route from where we are to one of them, on a thread of
+    /// its own; `map_route_poll` says how it goes.
+    fn map_go(&mut self, _index: usize) {}
+    /// How finding the route goes; Found and Failed are said once, then
+    /// it is Idle again. Found: the map now drives the route.
+    fn map_route_poll(&mut self) -> RouteStage {
+        RouteStage::Idle
+    }
+    /// The route found and shown whole, until it is started or dropped.
+    fn map_preview(&self) -> Option<&RoutePreview> {
+        None
+    }
+    /// Drive the route shown whole, as a route found is driven.
+    fn map_preview_start(&mut self) {}
+    /// Drop it: the map as it was before, a route driven before going on.
+    fn map_preview_cancel(&mut self) {}
+    /// Destination `index` of the last search as a place to keep (Home,
+    /// Work); None when there is no such destination.
+    fn map_keep(&self, _index: usize) -> Option<settings::MapPlace> {
+        None
+    }
+    /// Find the route to a kept place, as `map_go` does for a destination.
+    fn map_go_place(&mut self, _place: &settings::MapPlace) {}
+    /// How far a kept place is from here, as Go to says it ("3.1 km",
+    /// "here"); empty when it is not known.
+    fn map_place_distance(&self, _place: &settings::MapPlace) -> String {
+        String::new()
+    }
+    /// Why no route was found.
+    fn map_route_note(&self) -> &str {
+        ""
+    }
+    /// A route found on the board is being driven: the bar has a Stop key.
+    fn map_on_route(&self) -> bool {
+        false
+    }
+    /// Stop guiding along it; where we are stays.
+    fn map_end_route(&mut self) {}
+    /// Find the route of ours anew, from where we are, with the route
+    /// options as they are now (map.route-by, map.avoid-motorways), as
+    /// `map_go_place` finds one: `map_route_poll` says how it goes. False
+    /// when there is no route of ours.
+    fn map_reroute(&mut self) -> bool {
+        false
+    }
+    /// The route of ours is being found anew by itself, the driver having
+    /// left it: the bar says so meanwhile.
+    fn map_rerouting(&self) -> bool {
+        false
+    }
+    /// The map regions on the card, read afresh: Settings >
+    /// Map lists them. One is `current`: the one the map shows.
+    fn map_regions(&mut self) -> Vec<MapRegion> {
+        Vec::new()
+    }
+    /// Changes when a region's state may have (its check in the
+    /// background ended): the list is read again.
+    fn map_regions_generation(&self) -> u32 {
+        0
+    }
+    /// The spoken prompts' clips are on the card.
+    fn map_voice_installed(&self) -> bool {
+        true
+    }
+    /// The voices on the card, the one the prompts speak with current.
+    fn map_voices(&mut self) -> Vec<MapVoice> {
+        if self.map_voice_installed() {
+            vec![MapVoice {
+                dir: String::new(),
+                name: "English".into(),
+                current: true,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
     /// While on, the next key on a Bluetooth keyboard is learned, not acted on.
     fn set_key_learning(&mut self, on: bool);
     /// The key that was learned, once (its Linux key code).

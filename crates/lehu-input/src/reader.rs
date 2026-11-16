@@ -18,6 +18,7 @@ use crate::evdev::{self, RawEvent, Read, has};
 use crate::hotplug::{self, NodeName, Notice, PATH_BUF};
 use crate::keymap;
 use crate::keys::{Controls, Keyboard, Keys};
+use crate::mouse::Mouse;
 use crate::touch::{Calibration, Snapshot, Touch};
 use crate::{Config, MAX_SLOTS, Shared, Sink};
 
@@ -45,6 +46,9 @@ struct KeyDev {
     file: File,
     node: NodeName,
     kb: Keyboard,
+    /// A mouse (or a touchpad that reports as one): its moves and its
+    /// left and right buttons are the pointer's while the mouse is on.
+    pointer: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +75,9 @@ pub(crate) struct Reader<S: Sink> {
     keyboards: Vec<KeyDev>,
     keys: Keys,
     controls: Controls,
+    /// Every mouse's pointer, and whether mice are read as one.
+    mouse: Mouse,
+    mouse_on: bool,
     retries: Vec<Retry>,
     events: [RawEvent; BATCH],
     fds: Vec<libc::pollfd>,
@@ -93,6 +100,8 @@ impl<S: Sink> Reader<S> {
             (CString::new(path).ok(), name)
         };
         let keys = Keys::new(shared.route());
+        let mouse = Mouse::new(config.panel, shared.route());
+        let mouse_on = shared.mouse();
         let controls = Controls {
             camera_key: shared.camera_key(),
             learning: shared.learning(),
@@ -110,6 +119,8 @@ impl<S: Sink> Reader<S> {
             keyboards: Vec::with_capacity(MAX_KEYBOARDS),
             keys,
             controls,
+            mouse,
+            mouse_on,
             retries: Vec::with_capacity(MAX_RETRIES),
             events: [RawEvent::default(); BATCH],
             fds: Vec::with_capacity(3 + MAX_KEYBOARDS),
@@ -203,6 +214,7 @@ impl<S: Sink> Reader<S> {
             self.read_inotify(now);
         }
         self.keys.release_all(&mut self.sink);
+        self.mouse.release(&mut self.sink);
         if let Some(t) = &mut self.touch {
             t.state.device_gone(&mut self.sink);
         }
@@ -215,6 +227,12 @@ impl<S: Sink> Reader<S> {
         if let Some(t) = &mut self.touch {
             t.state.set_route(route, &mut self.sink);
         }
+        self.mouse.set_route(route, &mut self.sink);
+        let mouse_on = self.shared.mouse();
+        if self.mouse_on && !mouse_on {
+            self.mouse.release(&mut self.sink);
+        }
+        self.mouse_on = mouse_on;
         self.controls.camera_key = self.shared.camera_key();
         self.controls.learning = self.shared.learning();
     }
@@ -305,17 +323,31 @@ impl<S: Sink> Reader<S> {
             events,
             keys,
             controls,
+            mouse,
+            mouse_on,
             sink,
             shared,
             ..
         } = self;
         let dev = &mut keyboards[i];
         let fd = dev.file.as_raw_fd();
+        let pointer = dev.pointer && *mouse_on;
         loop {
             match evdev::read_events(fd, &mut events[..]) {
                 Read::Events(n) => {
                     let learning = controls.learning;
                     for ev in &events[..n] {
+                        // The pointer's moves and buttons; the report ends
+                        // its frame and the keys' alike.
+                        if pointer {
+                            if Mouse::takes(ev) {
+                                mouse.event(ev, &mut *sink);
+                                continue;
+                            }
+                            if ev.kind == evdev::EV_SYN && ev.code == evdev::SYN_REPORT {
+                                mouse.event(ev, &mut *sink);
+                            }
+                        }
                         if keys.event(&mut dev.kb, ev, now, controls, &mut *sink) {
                             let mut state = [0usize; evdev::KEY_WORDS];
                             if evdev::key_state(fd, &mut state).is_err() {
@@ -337,6 +369,9 @@ impl<S: Sink> Reader<S> {
     fn drop_keyboard(&mut self, i: usize) {
         let dev = self.keyboards.remove(i);
         self.keys.device_gone(dev.kb.id, &mut self.sink);
+        if dev.pointer {
+            self.mouse.release(&mut self.sink);
+        }
         log::info!("input: - {}", dev.node);
     }
 
@@ -564,13 +599,17 @@ impl<S: Sink> Reader<S> {
         // device reports keys too and must not be taken, let alone grabbed.
         // A device counts when it has keys this reader uses, a hat, or a
         // wheel: a keyboard's touchpad half is read for its wheel and click.
-        if bluetooth
-            && (keymap::useful_keys(&key)
-                || has(&abs, evdev::ABS_HAT0X)
-                || has(&abs, evdev::ABS_HAT0Y)
-                || has(&rel, evdev::REL_WHEEL))
+        // A mouse counts on any bus: its moves are the pointer's.
+        let pointer =
+            has(&rel, evdev::REL_X) && has(&rel, evdev::REL_Y) && has(&key, evdev::BTN_LEFT);
+        if pointer
+            || bluetooth
+                && (keymap::useful_keys(&key)
+                    || has(&abs, evdev::ABS_HAT0X)
+                    || has(&abs, evdev::ABS_HAT0Y)
+                    || has(&rel, evdev::REL_WHEEL))
         {
-            self.open_keyboard(file, name);
+            self.open_keyboard(file, name, pointer);
         }
     }
 
@@ -620,7 +659,7 @@ impl<S: Sink> Reader<S> {
         });
     }
 
-    fn open_keyboard(&mut self, file: File, name: NodeName) {
+    fn open_keyboard(&mut self, file: File, name: NodeName, pointer: bool) {
         if self.keyboards.len() >= MAX_KEYBOARDS {
             log::warn!("input: {name}: already {MAX_KEYBOARDS} keyboards; not read");
             return;
@@ -633,11 +672,16 @@ impl<S: Sink> Reader<S> {
             log::warn!("input: {name}: no exclusive grab ({e})");
         }
         let mut namebuf = [0u8; 80];
-        log::info!("input: + {name} '{}'", evdev::name(fd, &mut namebuf));
+        log::info!(
+            "input: + {name} '{}'{}",
+            evdev::name(fd, &mut namebuf),
+            if pointer { " (a mouse)" } else { "" }
+        );
         self.keyboards.push(KeyDev {
             file,
             node: name,
             kb: Keyboard::new(fd),
+            pointer,
         });
     }
 

@@ -14,6 +14,7 @@ packaging in [packaging/](../packaging) sets all of this up.
   Bluetooth input; Bluetooth with RFCOMM.
 - On the F1C200s: boot with `musb_hdrc.use_dma=0`. The USB controller's
   DMA loses bulk transfers and is slower than its PIO mode.
+- `CONFIG_EXFAT_FS`, for the map partition (below).
 
 ## Libraries and services
 
@@ -62,6 +63,42 @@ The user is in the groups `video`, `input`, `audio`, `i2c`, `plugdev` and `netde
 | `/var/lib/lehu/` | settings, known phones, pairings, the last update shown (or `~/.lehu` for a user without access to it) |
 | `/run/lehu/status.json` | the session's state, for other services to read |
 | `/var/cache/lehu-update/` | an update received from the phone |
+| `/maps/` | the map partition: regions, voice sets (below) |
+| `/usr/share/zoneinfo/` | time zones: at least `Europe/Budapest` |
+
+## Map data
+
+The map's data lives on a partition of its own, written on a PC
+(Windows, macOS or Linux), so it is **exFAT**. What goes on it, and how a
+region is built and copied, is in [map.md](map.md#data-on-the-card).
+
+- **Partition:** the SD card's 7th, `LEHU-MAPS`, exFAT (MBR type `0x07`),
+  filling the card's space after the system's. On the F1C200s's MBR card
+  it is a logical partition inside the extended p4. An image file can't
+  hold a partition that fills a card of unknown size, so the first boot
+  makes it: Buildroot's `S02maps` grows p4, adds p7 (4 MiB-aligned) with
+  `parted` and formats it with `mkfs.exfat`. A card already in use is not
+  repartitioned.
+- **Mount:** at `/maps`, always read only:
+  `LABEL=LEHU-MAPS /maps exfat ro,noatime,nofail,uid=1000,gid=1000,fmask=0133,dmask=0022 0 0`
+  with LEHU's user and group pinned to 1000 (`f1c` on the development
+  board, `lehu` on LEHU OS). Numbers, not names: BusyBox `mount` passes
+  the options to the kernel unchanged, and exFAT takes only numbers. exFAT has no owners and no journal: the mount
+  gives the files to LEHU's user, and being read only is what keeps it
+  whole through a power cut. LEHU never writes it: the partition is
+  written only on a PC, the card in its reader. `nofail`: the system starts without it, and
+  LEHU then falls back to `/var/lib/lehu/maps` and
+  `/var/lib/lehu/voice/en`.
+- **Tools:** `exfatprogs` (`fsck.exfat`, `mkfs.exfat`) in the image.
+- **Nothing in the image:** no regions and no voice set. The user puts
+  them on the partition from a PC (the PC tool `tools/lehu-maps`, or the
+  scripts by hand). OSTree system updates and LEHU's own updates
+  (`lehu-update`) never carry map data, and LEHU downloads none.
+
+## Time
+
+- `tzdata` with at least `Europe/Budapest` (and the zones of the regions
+  offered), so arrival times and the clock show local time.
 
 ## Updates
 

@@ -19,7 +19,11 @@ video-path = "auto"
 # first and H.265 after it when both decode. A forced codec the hardware
 # cannot decode is refused at start with a warning and auto used instead.
 codec = "auto"
-# day, night, or auto (the phone decides by the time of day).
+# day, night, or auto. Auto follows the sun where the head unit is (the
+# map's position: a drive, map.fake-position, else where the map was left)
+# once the clock is set: night from about ten minutes after sunset (the
+# sun 2 degrees down) to as long before sunrise, day while the position or
+# the clock is not known. CarPlay darkens by itself by the phone's clock.
 night-mode = "auto"
 left-hand-drive = true
 
@@ -30,6 +34,18 @@ device = ""
 swap-xy = false
 invert-x = false
 invert-y = false
+
+[mouse]
+# A mouse, or a Bluetooth keyboard's touchpad, as a pointer on the display's
+# hardware cursor (Settings > System > Mouse): the left button touches where
+# it points, on the screens and on the phone's picture; the right button is
+# Back; the wheel and the middle button stay the knob's. While the pointer
+# shows over the map, the position arrow leaves the cursor for a plane of
+# its own. Off: a mouse's wheel and middle button are still the knob.
+enabled = false
+# The pointer goes after 3 seconds without a move, and comes back with the
+# next (Settings > System > Hide pointer).
+autohide = true
 
 [carplay]
 # The MFi authentication coprocessor: its bus, or "auto" to look on every
@@ -157,6 +173,97 @@ fast-switch = false
 # standard = "pal"
 # brightness = 40
 # contrast = 140
+
+[map]
+# The region the map shows: a folder of map data, as scripts/map-region.py
+# builds it, on the card's map partition (LEHU-MAPS, mounted at /maps):
+# "/maps/<region>". Empty: the first region there, or /var/lib/lehu/maps on
+# a card without the partition. Settings > Map > Region chooses it.
+dir = ""
+# Where the map was left, written when it closes: the zoom (0 = the map's
+# own start) and the point at the centre, in world pixels at zoom 22.
+zoom = 0
+x = 0
+y = 0
+# A position to show until there is a real one, for testing: "latitude,
+# longitude" in degrees, e.g. "49.6116, 6.1300". The map opens on it and
+# draws it as a blue dot; the bar's Me key centres on it. Empty: none.
+fake-position = ""
+# A drive to replay as the position, for testing: a GPX track file, as
+# scripts/route-gpx.py writes one. LEHU follows it in real time, from the
+# start again at its end, and shows an arrow along the way; the map follows
+# it until it is dragged, and the Me key makes it follow again. It outranks
+# fake-position. Empty: none.
+fake-track = ""
+# Spoken turn prompts while the map guides along a drive ("In 500 metres,
+# turn left"), through LEHU's own audio at the navigation level, ducking the
+# music; held while the phone's voice plays (a call, its own prompts).
+voice = true
+# The prompts' clips: WAV files, one a phrase fragment, as
+# scripts/voice-clips.py makes them on a PC (see docs/map.md). Empty:
+# /maps/voice/en, or /var/lib/lehu/voice/en on a card without the map
+# partition. Missing clips: a line in the log, the prompts stay silent, and
+# Settings > Map says the voice is not installed.
+voice-dir = ""
+# Map > Go to finds destinations by name and routes to them on the head
+# unit, from the road network and the names scripts/map-graph.py writes
+# (roads.bin and places.bin), in the region's own folder (dir above).
+# Deprecated, still read: another directory to look in instead. Without
+# them the Go to key is not there.
+route-dir = ""
+# The routes Go to finds: "fastest" (at the roads' speeds) or "shortest"
+# (by distance).
+route-by = "fastest"
+# Keep off motorways (and their links) where another road goes: they cost
+# five times over, so a place only a motorway reaches is still reached.
+avoid-motorways = false
+# Say "Speed camera ahead" before a speed camera on the route (300 to 500 m
+# ahead, by the speed), from the cameras OpenStreetMap has, which
+# scripts/map-graph.py puts in roads.bin. Off unless asked for: warning of
+# speed cameras is against the law in some countries (France, Germany,
+# Switzerland among them); turn it on only where it is allowed.
+speed-cameras = false
+# The destinations last driven to, offered before anything is typed;
+# written by Map > Go to, the latest first. For example:
+# [[map.recent]]
+# name = "Boulevard Royal"
+# town = "Luxembourg"
+# at = "49.61190, 6.12842"
+# Home and Work, routed to from the map's menu with one choice; set there
+# (or from Go to's Change Home / Change Work). Not set by default; the same
+# shape as a recent destination:
+# [map.home]
+# name = "Rue de la Gare"
+# town = "Luxembourg"
+# at = "49.60010, 6.13310"
+# A short soft chime when the speed stays more than 5 km/h over the road's
+# limit for 2 seconds; once, until the speed is back under it.
+speed-warning = true
+# Following a drive: 0, the map moves with the arrow all the time; else
+# the map holds still while the arrow moves on it, until the arrow is this
+# many pixels from its place or the road has turned 6 degrees, then glides
+# after it (in 0.4 s).
+pointer-lead = 0
+# The position arrow on the display's hardware cursor, where it has one
+# (the F1C200s does): the display draws it above everything, and LEHU turns
+# it off where a screen's window covers it. false: on a display plane of its
+# own, in its colours at its own size.
+cursor = true
+# Its size on the cursor: "small" (three quarters of its own size, in its
+# colours with a white edge), "medium" (its own size) or "large" (a third
+# larger). The F1C200s's cursor shows medium and large in one colour: dark
+# blue by day, white at night.
+cursor-size = "medium"
+# How the map is made while it turns (Settings > Map > While turning). A
+# turned frame takes the F1C200s 18 to 27 ms, more than the panel shows one
+# for, so the frames of a bend come as fast as they are made:
+#   "sharp"        whole frames;
+#   "soft-colour"  the brightness whole, the colour a sample for four by
+#                  four pixels: about a fifth quicker;
+#   "half"         half the resolution, scaled up by the display, without
+#                  the names: several times as quick, and pixelated.
+# A whole frame follows as soon as the turning stops.
+turning = "sharp"
 
 [update]
 # Settings > Update installs LEHU OS updates (on LEHU OS only: its installer,

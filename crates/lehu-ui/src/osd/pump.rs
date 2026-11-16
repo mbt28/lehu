@@ -6,12 +6,12 @@
 
 use slint::{ComponentHandle, SharedString};
 
-use lehu_core::settings::{BUFFER_MAX_MS, NightMode};
+use lehu_core::settings::BUFFER_MAX_MS;
 
 use super::{
-    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEVICES,
-    HOME, Host, INFO, LINK, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO, VOLUME_BAR_MS,
-    clean, compose,
+    ACCESS_POINT, AUDIO, BLUETOOTH, BT_DEVICE, Bridge, CAMERA, CLOCK_UNSET_MS, CONNECTION, DEST,
+    DEVICES, HOME, Host, INFO, LINK, MAP, PICK_MS, Pick, SETTINGS, State, UPDATE_PHONE, VIDEO,
+    VOLUME_BAR_MS, clean, compose,
 };
 use crate::AppWindow;
 use crate::keys::key_name;
@@ -61,7 +61,12 @@ impl<H: Host> State<H> {
             self.p_night = Some(night);
             bridge.set_night_label(SharedString::from(super::pick::night_label(night)));
             bridge.set_night_choice(super::pick::night_index(night));
-            bridge.set_night(night_palette(night));
+        }
+        // The palette: Night, or Auto once the sun is down.
+        let dark = self.host.night_now();
+        if Some(dark) != self.p_palette {
+            self.p_palette = Some(dark);
+            bridge.set_night(dark);
         }
         let fps = self.host.settings().android_auto.fps;
         if Some(fps) != self.p_fps {
@@ -69,6 +74,31 @@ impl<H: Host> State<H> {
             let label = compose(&mut self.scratch, format_args!("{fps} fps"));
             bridge.set_fps_label(SharedString::from(label));
             bridge.set_fps_choice(i32::from(fps >= 60));
+        }
+        let map = &self.host.settings().map;
+        let cursor = (
+            self.host.map_cursor_available(),
+            map.cursor,
+            super::pick::cursor_size_index(map.cursor_size),
+        );
+        if Some(cursor) != self.p_cursor {
+            self.p_cursor = Some(cursor);
+            bridge.set_cursor_available(cursor.0);
+            bridge.set_map_cursor(cursor.1);
+            bridge.set_cursor_size_choice(cursor.2);
+        }
+        let turning = super::pick::turning_index(self.host.settings().map.turning);
+        if Some(turning) != self.p_turning {
+            self.p_turning = Some(turning);
+            bridge.set_turning_choice(turning);
+        }
+        let m = &self.host.settings().mouse;
+        let mouse = (self.host.mouse_available(), m.enabled, m.autohide);
+        if Some(mouse) != self.p_mouse {
+            self.p_mouse = Some(mouse);
+            bridge.set_mouse_available(mouse.0);
+            bridge.set_mouse_on(mouse.1);
+            bridge.set_mouse_autohide(mouse.2);
         }
 
         // Volume keys change it from another thread: one load per tick.
@@ -169,6 +199,7 @@ impl<H: Host> State<H> {
         }
         self.pump_audio(&bridge);
         self.pump_output(&bridge);
+        self.pump_regions(&bridge);
 
         // A row picking in place stops off its screen, under a dialog, or
         // left alone.
@@ -182,6 +213,8 @@ impl<H: Host> State<H> {
         }
 
         self.pump_update(&bridge);
+        // A route found goes back to the map, seen as a switch below.
+        self.pump_dest_route(&bridge);
         let screen = bridge.get_screen();
         if screen != self.p_screen {
             // The position is shown afresh, at the new screen's pace.
@@ -190,8 +223,14 @@ impl<H: Host> State<H> {
             if screen == DEVICES && (self.p_screen == HOME || self.p_screen == CONNECTION) {
                 self.devices_parent = self.p_screen;
             }
+            // Go to chose Home or Work only until it was left.
+            if self.p_screen == DEST && screen != DEST {
+                self.dest_choose = None;
+            }
             // The loop runs the camera while its view is up.
             self.host.set_camera_running(screen == CAMERA);
+            // And the map while its screen is.
+            self.host.set_map_running(screen == MAP);
             if screen == CAMERA {
                 // The column comes up on the menu, the ring on Back -- unless
                 // a request (the camera key) switched the camera on: then
@@ -227,12 +266,16 @@ impl<H: Host> State<H> {
                 self.open_link();
             } else if screen == INFO {
                 self.open_info(&bridge);
+            } else if screen == DEST {
+                self.open_dest(ui);
             } else if screen == UPDATE_PHONE {
                 // The page is served while the phone may come for it.
                 self.host.update_serve();
             }
         }
         self.pump_camera(&bridge, screen);
+        self.pump_slots(&bridge);
+        self.pump_map(&bridge, screen, now);
         self.pump_bluetooth(&bridge, screen);
         self.pump_devices(&bridge);
         self.pump_media(&bridge, screen, now);
@@ -283,13 +326,6 @@ impl<H: Host> State<H> {
         }
         self.pump_nav(&bridge, screen, modal, now);
     }
-}
-
-/// The night palette: with Night, and never with Day. Auto follows what the
-/// phone is told, and it is told day: CarPlay is left to darken by itself,
-/// Android Auto's night sensor says day.
-pub(super) fn night_palette(mode: NightMode) -> bool {
-    mode == NightMode::Night
 }
 
 impl<H: Host> State<H> {
